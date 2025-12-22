@@ -68,6 +68,7 @@ brews:
     repository:
       owner: promptconduit
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Formula
     homepage: "https://promptconduit.dev"
     description: "CLI for capturing events from AI coding assistants"
