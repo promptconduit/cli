@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ],
+    "afterMCPExecution": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\""
+      }
+    ]
+  }
+}
