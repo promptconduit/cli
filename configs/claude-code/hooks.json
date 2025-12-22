@@ -1,0 +1,61 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}

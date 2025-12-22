@@ -1,0 +1,71 @@
+{
+  "hooks": {
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "name": "promptconduit",
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "description": "Capture prompts for PromptConduit",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "promptconduit",
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "description": "Capture tool events for PromptConduit",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "promptconduit",
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "description": "Capture tool results for PromptConduit",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "name": "promptconduit",
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "description": "Track session start for PromptConduit",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "promptconduit",
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "description": "Track session end for PromptConduit",
+            "timeout": 5000
+          }
+        ]
+      }
+    ]
+  }
+}
