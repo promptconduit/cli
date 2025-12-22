@@ -1,39 +1,55 @@
-# PromptConduit Adapters
+# PromptConduit CLI
 
-Universal adapters for capturing prompts and events from AI coding assistants.
+Capture prompts and events from AI coding assistants.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Python](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Go](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/dl/)
 
 ## Overview
 
-PromptConduit Adapters provides a unified way to capture prompts, tool executions, and session events from various AI coding assistants. All events are normalized to a canonical schema, enabling consistent analysis regardless of the source tool.
+PromptConduit CLI captures prompts, tool executions, and session events from various AI coding assistants. All events are normalized to a canonical schema and sent to the PromptConduit API for analysis.
 
 ### Supported Tools
 
-| Tool | Status | Events Captured |
-|------|--------|-----------------|
-| [Claude Code](https://claude.ai/code) | ✅ Supported | Prompts, Tools, Sessions |
-| [Cursor](https://cursor.com) | ✅ Supported | Prompts, Shell, MCP, Files |
-| [Gemini CLI](https://geminicli.com) | ✅ Supported | Prompts, Tools, Sessions |
-| OpenAI Codex | 🚧 Planned | - |
-| GitHub Copilot | 🚧 Planned | - |
+| Tool | Events Captured |
+|------|-----------------|
+| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions |
+| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files |
+| [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
 
 ## Installation
 
-### Using pip
+### Quick Install (Recommended)
 
 ```bash
-pip install promptconduit
+curl -fsSL https://promptconduit.dev/install | bash
 ```
 
-### From source
+Or with your API key:
 
 ```bash
-git clone https://github.com/promptconduit/promptconduit-adapters.git
-cd promptconduit-adapters
-pip install -e .
+curl -fsSL https://promptconduit.dev/install | bash -s -- YOUR_API_KEY
 ```
+
+### Homebrew
+
+```bash
+brew tap promptconduit/tap
+brew install promptconduit
+```
+
+### From Source
+
+```bash
+git clone https://github.com/promptconduit/cli.git
+cd cli
+make build
+make install
+```
+
+### Download Binary
+
+Download the latest release for your platform from the [releases page](https://github.com/promptconduit/cli/releases).
 
 ## Quick Start
 
@@ -47,6 +63,8 @@ Sign up at [promptconduit.dev](https://promptconduit.dev) and create an API key.
 export PROMPTCONDUIT_API_KEY="your-api-key"
 ```
 
+Add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) for persistence.
+
 ### 3. Install hooks for your tool
 
 ```bash
@@ -57,12 +75,39 @@ promptconduit install claude-code
 promptconduit install cursor
 
 # For Gemini CLI
-promptconduit install gemini
+promptconduit install gemini-cli
 ```
 
-### 4. Start using your AI coding assistant
+### 4. Verify installation
 
-Events will be automatically captured and sent to PromptConduit.
+```bash
+promptconduit status
+```
+
+### 5. Test API connectivity
+
+```bash
+promptconduit test
+```
+
+## Commands
+
+```bash
+# Install hooks for a tool
+promptconduit install <tool>
+
+# Uninstall hooks from a tool
+promptconduit uninstall <tool>
+
+# Show installation status
+promptconduit status
+
+# Test API connectivity
+promptconduit test
+
+# Show version
+promptconduit version
+```
 
 ## Configuration
 
@@ -72,169 +117,166 @@ Events will be automatically captured and sent to PromptConduit.
 |----------|----------|---------|-------------|
 | `PROMPTCONDUIT_API_KEY` | Yes | - | Your API key |
 | `PROMPTCONDUIT_API_URL` | No | `https://api.promptconduit.dev` | API endpoint |
-| `PROMPTCONDUIT_DEBUG` | No | `0` | Set to `1` to include raw events |
+| `PROMPTCONDUIT_DEBUG` | No | `false` | Enable debug logging |
 | `PROMPTCONDUIT_TIMEOUT` | No | `30` | HTTP timeout in seconds |
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
 
-### Manual Hook Configuration
+### Debug Mode
 
-If you prefer manual setup, copy the appropriate config template:
-
-**Claude Code** (`~/.claude/settings.json`):
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [{
-      "hooks": [{
-        "type": "command",
-        "command": "python3 /path/to/promptconduit_hook.py",
-        "timeout": 5000
-      }]
-    }]
-  }
-}
-```
-
-See `configs/` directory for complete templates.
-
-## CLI Commands
+Enable debug mode to log hook activity and include raw events:
 
 ```bash
-# Install hooks for a tool
-promptconduit install <tool>
-
-# Uninstall hooks
-promptconduit uninstall <tool>
-
-# Check status
-promptconduit status
-
-# Test API connectivity
-promptconduit test
+export PROMPTCONDUIT_DEBUG=1
 ```
+
+Debug logs are written to stderr and won't interfere with tool operations.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         AI Coding Tools                              │
-├─────────────┬─────────────┬─────────────┬─────────────┬─────────────┤
-│ Claude Code │   Cursor    │ Gemini CLI  │   Codex     │  Future...  │
-└──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┘
-       │             │             │             │             │
-       ▼             ▼             ▼             ▼             ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Tool-Specific Adapters                            │
-│  Claude Code → ClaudeCodeAdapter                                     │
-│  Cursor      → CursorAdapter                                         │
-│  Gemini CLI  → GeminiAdapter                                         │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Canonical Event Schema                            │
-│  { tool, event_type, session_id, timestamp, workspace, git, ... }   │
-└──────────────────────────────────┬──────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    PromptConduit API                                 │
-│  POST /v1/events/ingest                                              │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                     AI Coding Tools                          │
+├─────────────┬─────────────────────┬─────────────────────────┤
+│ Claude Code │       Cursor        │      Gemini CLI         │
+└──────┬──────┴──────────┬──────────┴───────────┬─────────────┘
+       │                 │                      │
+       └─────────────────┼──────────────────────┘
+                         ▼
+              ┌─────────────────────┐
+              │   promptconduit     │  ← Hook receives JSON
+              │      hook           │    from stdin
+              └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │   Tool Adapter      │  ← Translates to
+              │ (Claude/Cursor/...) │    canonical format
+              └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │  Canonical Event    │  ← Normalized schema
+              │   + Git Context     │    with repo state
+              └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │    Async Send       │  ← Non-blocking
+              │  (subprocess)       │    to API
+              └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │  PromptConduit API  │
+              └─────────────────────┘
 ```
+
+### Key Design Principles
+
+- **Never blocks tools**: Hook always returns immediately with success
+- **Async sending**: Events are sent in a detached subprocess
+- **Rich context**: Captures git state (branch, commit, dirty files, etc.)
+- **Graceful degradation**: Unknown events are silently skipped
 
 ## Canonical Event Schema
 
 All events are normalized to this schema:
 
-```python
-CanonicalEvent:
-  tool: str              # "claude-code", "cursor", "gemini-cli"
-  event_type: str        # "prompt_submit", "tool_pre", "tool_post", etc.
-  event_id: str          # UUID
-  timestamp: str         # ISO 8601
-  adapter_version: str   # Adapter version that created this event
-  session_id: str?       # Tool-specific session identifier
-  workspace: {           # Project context
-    repo_name: str?
-    repo_path: str?
-    working_directory: str?
+```json
+{
+  "tool": "claude-code",
+  "event_type": "prompt_submit",
+  "event_id": "uuid",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "adapter_version": "1.0.0",
+  "session_id": "...",
+  "workspace": {
+    "repo_name": "my-project",
+    "repo_path": "/path/to/repo",
+    "working_directory": "/path/to/repo"
+  },
+  "git": {
+    "commit_hash": "abc123",
+    "branch": "main",
+    "is_dirty": true,
+    "staged_count": 2,
+    "unstaged_count": 1,
+    "remote_url": "git@github.com:user/repo.git"
+  },
+  "prompt": {
+    "prompt": "User's prompt text",
+    "attachments": []
   }
-  git: {                 # Repository state
-    commit_hash: str?
-    branch: str?
-    is_dirty: bool?
-    remote_url: str?
-  }
-  prompt: {              # For prompt_submit events
-    prompt: str
-    attachments: list?
-  }
-  tool_event: {          # For tool_pre/tool_post events
-    tool_name: str
-    input: dict?
-    output: dict?
-    success: bool?
-  }
-  session: {             # For session_start/session_end events
-    source: str?
-    reason: str?
-  }
+}
 ```
 
-## Adding a New Adapter
+### Event Types
 
-To add support for a new tool:
-
-1. Create a new adapter in `src/promptconduit/adapters/`:
-
-```python
-from promptconduit.adapters.base import BaseAdapter
-from promptconduit.schema.events import EventType, Tool
-
-class MyToolAdapter(BaseAdapter):
-    TOOL = Tool.MY_TOOL
-
-    EVENT_MAPPING = {
-        "NativeEventName": EventType.PROMPT_SUBMIT,
-        # ... more mappings
-    }
-
-    def translate_event(self, native_event: dict) -> CanonicalEvent | None:
-        # Translation logic here
-        pass
-```
-
-2. Add the adapter to `ADAPTERS` in `scripts/promptconduit_hook.py`
-
-3. Add a configuration template in `configs/`
-
-4. Submit a PR!
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-## Privacy & Security
-
-- **Transparent**: This is open source - you can see exactly what data is captured
-- **Minimal**: Only captures what's needed for analysis
-- **Secure**: Data is sent over HTTPS with API key authentication
-- **Your data**: Use the managed service or self-host
+| Type | Description |
+|------|-------------|
+| `prompt_submit` | User submitted a prompt |
+| `tool_pre` | Before tool execution |
+| `tool_post` | After tool execution |
+| `session_start` | Session started |
+| `session_end` | Session ended |
+| `shell_pre` | Before shell command (Cursor) |
+| `shell_post` | After shell command (Cursor) |
+| `file_read` | File read operation (Cursor) |
+| `file_edit` | File edit operation (Cursor) |
 
 ## Development
 
+### Prerequisites
+
+- Go 1.21+
+- Git
+
+### Building
+
 ```bash
-# Install dev dependencies
-pip install -e ".[dev]"
+# Build binary
+make build
 
 # Run tests
-pytest
+make test
 
-# Type checking
-mypy src/
+# Build for all platforms
+make build-all
 
-# Linting
-ruff check src/
+# Create snapshot release
+make snapshot
 ```
+
+### Project Structure
+
+```
+.
+├── cmd/                    # CLI commands
+│   ├── root.go            # Root command
+│   ├── install.go         # Install command
+│   ├── uninstall.go       # Uninstall command
+│   ├── status.go          # Status command
+│   ├── test.go            # Test command
+│   └── hook.go            # Hook entry point
+├── internal/
+│   ├── adapters/          # Tool-specific adapters
+│   │   ├── adapter.go     # Base adapter interface
+│   │   ├── claudecode.go  # Claude Code adapter
+│   │   ├── cursor.go      # Cursor adapter
+│   │   ├── gemini.go      # Gemini adapter
+│   │   └── registry.go    # Adapter registry
+│   ├── client/            # HTTP client
+│   ├── git/               # Git context extraction
+│   └── schema/            # Event schemas
+├── scripts/
+│   └── install.sh         # Curl installer
+├── .goreleaser.yaml       # Release configuration
+├── Makefile               # Build commands
+└── go.mod                 # Go module
+```
+
+## Privacy & Security
+
+- **Open Source**: Full transparency on what data is captured
+- **Minimal**: Only captures events needed for analysis
+- **Secure**: HTTPS with API key authentication
+- **Non-blocking**: Never interferes with your workflow
 
 ## License
 
@@ -244,4 +286,4 @@ Apache 2.0 - See [LICENSE](LICENSE) for details.
 
 - [PromptConduit Website](https://promptconduit.dev)
 - [Documentation](https://docs.promptconduit.dev)
-- [Issue Tracker](https://github.com/promptconduit/promptconduit-adapters/issues)
+- [Issue Tracker](https://github.com/promptconduit/cli/issues)
