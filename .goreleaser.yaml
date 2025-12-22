@@ -1,0 +1,78 @@
+version: 2
+
+project_name: promptconduit
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: promptconduit
+    main: .
+    binary: promptconduit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/promptconduit/cli/cmd.Version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: promptconduit
+    name: cli
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
+
+brews:
+  - name: promptconduit
+    repository:
+      owner: promptconduit
+      name: homebrew-tap
+    directory: Formula
+    homepage: "https://promptconduit.dev"
+    description: "CLI for capturing events from AI coding assistants"
+    license: "MIT"
+    install: |
+      bin.install "promptconduit"
+    test: |
+      system "#{bin}/promptconduit", "version"
