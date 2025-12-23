@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/schema"
@@ -29,7 +30,9 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	// Create a test event
 	event := schema.NewCanonicalEvent(schema.ToolClaudeCode, schema.EventSessionStart, Version)
-	source := "cli_test"
+	sessionID := fmt.Sprintf("test-%d", time.Now().UnixNano())
+	event.SessionID = &sessionID
+	source := "startup" // Must be a valid session source enum value
 	event.Session = &schema.SessionPayload{
 		Source: &source,
 	}
