@@ -42,6 +42,28 @@ type MessageWithContent struct {
 	Content []json.RawMessage `json:"content"`
 }
 
+// ContentTypeCheck is used to check the type field of content items
+type ContentTypeCheck struct {
+	Type string `json:"type"`
+}
+
+// isActualUserPrompt checks if the content contains actual user prompt items (text/image)
+// rather than tool_result items. Tool results are sent by Claude Code with type="user"
+// but they don't contain user prompts - they contain tool execution results.
+func isActualUserPrompt(content []json.RawMessage) bool {
+	for _, item := range content {
+		var check ContentTypeCheck
+		if err := json.Unmarshal(item, &check); err != nil {
+			continue
+		}
+		// If we find a text or image type, this is an actual user prompt
+		if check.Type == "text" || check.Type == "image" {
+			return true
+		}
+	}
+	return false
+}
+
 // ExtractLatestImages reads the transcript file and extracts images from the most recent user message
 func ExtractLatestImages(transcriptPath string) ([]Image, error) {
 	if transcriptPath == "" {
@@ -84,15 +106,21 @@ func ExtractLatestImages(transcriptPath string) ([]Image, error) {
 			var content MessageWithContent
 			if msg.Message != nil {
 				if err := json.Unmarshal(msg.Message, &content); err == nil && len(content.Content) > 0 {
-					lastUserMessage = &content
+					// Only consider this if it's an actual user prompt (not tool_result)
+					if isActualUserPrompt(content.Content) {
+						lastUserMessage = &content
+					}
 				}
 			} else if msg.Content != nil {
 				// Direct content array
 				content.Role = "user"
 				var contentArray []json.RawMessage
 				if err := json.Unmarshal(msg.Content, &contentArray); err == nil {
-					content.Content = contentArray
-					lastUserMessage = &content
+					// Only consider this if it's an actual user prompt (not tool_result)
+					if isActualUserPrompt(contentArray) {
+						content.Content = contentArray
+						lastUserMessage = &content
+					}
 				}
 			}
 		}
@@ -183,6 +211,11 @@ func ExtractPromptText(transcriptPath string) (string, error) {
 				}
 			} else if msg.Content != nil {
 				json.Unmarshal(msg.Content, &rawContent)
+			}
+
+			// Only process actual user prompts (skip tool_result messages)
+			if !isActualUserPrompt(rawContent) {
+				continue
 			}
 
 			// Extract text from content items
