@@ -31,3 +31,4 @@ dist/
 
 # Archived Python code
 _archive_python/
+/docs/events
