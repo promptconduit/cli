@@ -10,16 +10,21 @@ import (
 	"strings"
 )
 
-// Image represents an extracted image from the transcript
-type Image struct {
-	Data      []byte // Raw image bytes
-	MediaType string // e.g., "image/jpeg", "image/png"
+// Attachment represents an extracted file from the transcript (image, PDF, document, etc.)
+type Attachment struct {
+	Data      []byte // Raw file bytes
+	MediaType string // e.g., "image/jpeg", "application/pdf"
 	Filename  string // Generated filename
+	Type      string // Content type: "image", "document", "file"
 }
 
-// ImageContent represents the structure of an image in the transcript
-// Format: {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"..."}}
-type ImageContent struct {
+// Image is an alias for Attachment for backward compatibility
+type Image = Attachment
+
+// AttachmentContent represents the structure of an attachment in the transcript
+// Images: {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"..."}}
+// Documents: {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."}}
+type AttachmentContent struct {
 	Type   string `json:"type"`
 	Source struct {
 		Type      string `json:"type"`
@@ -27,6 +32,9 @@ type ImageContent struct {
 		Data      string `json:"data"`
 	} `json:"source"`
 }
+
+// ImageContent is an alias for AttachmentContent for backward compatibility
+type ImageContent = AttachmentContent
 
 // TranscriptMessage represents a message in the JSONL transcript
 type TranscriptMessage struct {
@@ -47,25 +55,41 @@ type ContentTypeCheck struct {
 	Type string `json:"type"`
 }
 
-// isActualUserPrompt checks if the content contains actual user prompt items (text/image)
-// rather than tool_result items. Tool results are sent by Claude Code with type="user"
+// isActualUserPrompt checks if the content contains actual user prompt items
+// rather than tool-related items. Tool results are sent by Claude Code with type="user"
 // but they don't contain user prompts - they contain tool execution results.
+// Uses blocklist approach: skip tool_result/tool_use, accept everything else.
 func isActualUserPrompt(content []json.RawMessage) bool {
 	for _, item := range content {
 		var check ContentTypeCheck
 		if err := json.Unmarshal(item, &check); err != nil {
 			continue
 		}
-		// If we find a text or image type, this is an actual user prompt
-		if check.Type == "text" || check.Type == "image" {
+		// Skip tool-related content types
+		if check.Type == "tool_result" || check.Type == "tool_use" {
+			continue
+		}
+		// Any other type (text, image, document, file, etc.) is actual user content
+		if check.Type != "" {
 			return true
 		}
 	}
 	return false
 }
 
-// ExtractLatestImages reads the transcript file and extracts images from the most recent user message
-func ExtractLatestImages(transcriptPath string) ([]Image, error) {
+// isAttachmentType returns true if the content type represents a file attachment
+func isAttachmentType(contentType string) bool {
+	switch contentType {
+	case "image", "document", "file", "pdf":
+		return true
+	default:
+		return false
+	}
+}
+
+// ExtractLatestAttachments reads the transcript file and extracts all attachments
+// (images, documents, PDFs, files) from the most recent user message
+func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	if transcriptPath == "" {
 		return nil, nil
 	}
@@ -81,10 +105,10 @@ func ExtractLatestImages(transcriptPath string) ([]Image, error) {
 	}
 	defer file.Close()
 
-	// Read all lines to find the last user message with images
+	// Read all lines to find the last user message with attachments
 	var lastUserMessage *MessageWithContent
 	scanner := bufio.NewScanner(file)
-	// Increase buffer size for large messages with images
+	// Increase buffer size for large messages with attachments
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 10*1024*1024) // 10MB max line size
 
@@ -134,39 +158,47 @@ func ExtractLatestImages(transcriptPath string) ([]Image, error) {
 		return nil, nil
 	}
 
-	// Extract images from the content array
-	var images []Image
-	imageCount := 0
+	// Extract all attachments from the content array
+	var attachments []Attachment
+	counts := make(map[string]int) // Track count per type for filenames
 
 	for _, contentItem := range lastUserMessage.Content {
-		var img ImageContent
-		if err := json.Unmarshal(contentItem, &img); err != nil {
+		var att AttachmentContent
+		if err := json.Unmarshal(contentItem, &att); err != nil {
 			continue
 		}
 
-		if img.Type != "image" || img.Source.Type != "base64" || img.Source.Data == "" {
+		// Check if this is an attachment type with base64 data
+		if !isAttachmentType(att.Type) || att.Source.Type != "base64" || att.Source.Data == "" {
 			continue
 		}
 
 		// Decode base64 data
-		imageData, err := base64.StdEncoding.DecodeString(img.Source.Data)
+		data, err := base64.StdEncoding.DecodeString(att.Source.Data)
 		if err != nil {
 			continue
 		}
 
-		// Generate filename based on media type
-		imageCount++
-		ext := getExtensionForMediaType(img.Source.MediaType)
-		filename := fmt.Sprintf("image_%d%s", imageCount, ext)
+		// Generate filename based on type and media type
+		counts[att.Type]++
+		ext := getExtensionForMediaType(att.Source.MediaType)
+		filename := fmt.Sprintf("%s_%d%s", att.Type, counts[att.Type], ext)
 
-		images = append(images, Image{
-			Data:      imageData,
-			MediaType: img.Source.MediaType,
+		attachments = append(attachments, Attachment{
+			Data:      data,
+			MediaType: att.Source.MediaType,
 			Filename:  filename,
+			Type:      att.Type,
 		})
 	}
 
-	return images, nil
+	return attachments, nil
+}
+
+// ExtractLatestImages reads the transcript file and extracts images from the most recent user message
+// Deprecated: Use ExtractLatestAttachments for all attachment types
+func ExtractLatestImages(transcriptPath string) ([]Image, error) {
+	return ExtractLatestAttachments(transcriptPath)
 }
 
 // ExtractPromptText extracts the text content from the latest user message
@@ -237,6 +269,7 @@ func ExtractPromptText(transcriptPath string) (string, error) {
 // getExtensionForMediaType returns the file extension for a given MIME type
 func getExtensionForMediaType(mediaType string) string {
 	switch strings.ToLower(mediaType) {
+	// Images
 	case "image/jpeg", "image/jpg":
 		return ".jpg"
 	case "image/png":
@@ -247,6 +280,49 @@ func getExtensionForMediaType(mediaType string) string {
 		return ".webp"
 	case "image/svg+xml":
 		return ".svg"
+	case "image/bmp":
+		return ".bmp"
+	case "image/tiff":
+		return ".tiff"
+	case "image/heic", "image/heif":
+		return ".heic"
+
+	// Documents
+	case "application/pdf":
+		return ".pdf"
+	case "application/msword":
+		return ".doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return ".docx"
+	case "application/vnd.ms-excel":
+		return ".xls"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return ".xlsx"
+	case "application/vnd.ms-powerpoint":
+		return ".ppt"
+	case "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+		return ".pptx"
+
+	// Text
+	case "text/plain":
+		return ".txt"
+	case "text/csv":
+		return ".csv"
+	case "text/html":
+		return ".html"
+	case "text/markdown":
+		return ".md"
+	case "application/json":
+		return ".json"
+	case "application/xml", "text/xml":
+		return ".xml"
+
+	// Archives
+	case "application/zip":
+		return ".zip"
+	case "application/gzip":
+		return ".gz"
+
 	default:
 		return ".bin"
 	}

@@ -1,21 +1,31 @@
 package transcript
 
-import "fmt"
+import (
+	"encoding/base64"
+	"fmt"
+)
 
-// ImageExtractor defines the interface for tool-specific image extraction
-type ImageExtractor interface {
-	// ExtractImages extracts images from the tool's storage format
-	// Returns extracted images and the text prompt (if available)
+// AttachmentExtractor defines the interface for tool-specific attachment extraction
+type AttachmentExtractor interface {
+	// ExtractAttachments extracts all attachments (images, documents, files) from the tool's storage format
+	// Returns extracted attachments and the text prompt (if available)
+	ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error)
+
+	// SupportsAttachments returns whether this tool supports attachment extraction
+	SupportsAttachments() bool
+
+	// Deprecated methods for backward compatibility
 	ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error)
-
-	// SupportsImages returns whether this tool supports image extraction
 	SupportsImages() bool
 }
 
-// GetExtractor returns the appropriate image extractor for the given tool
-func GetExtractor(tool string) ImageExtractor {
+// ImageExtractor is an alias for backward compatibility
+type ImageExtractor = AttachmentExtractor
+
+// GetExtractor returns the appropriate attachment extractor for the given tool
+func GetExtractor(tool string) AttachmentExtractor {
 	switch tool {
-	case "claude-code":
+	case "claude-code", "cline": // Cline uses Claude Code compatible hooks
 		return &ClaudeCodeExtractor{}
 	case "cursor":
 		return &CursorExtractor{}
@@ -26,20 +36,25 @@ func GetExtractor(tool string) ImageExtractor {
 	}
 }
 
-// ClaudeCodeExtractor extracts images from Claude Code transcripts
+// ClaudeCodeExtractor extracts attachments from Claude Code transcripts
 type ClaudeCodeExtractor struct{}
 
-func (e *ClaudeCodeExtractor) SupportsImages() bool {
+func (e *ClaudeCodeExtractor) SupportsAttachments() bool {
 	return true
 }
 
-func (e *ClaudeCodeExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+// SupportsImages is deprecated, use SupportsAttachments
+func (e *ClaudeCodeExtractor) SupportsImages() bool {
+	return e.SupportsAttachments()
+}
+
+func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
 	transcriptPath, ok := nativeEvent["transcript_path"].(string)
 	if !ok || transcriptPath == "" {
 		return nil, "", nil
 	}
 
-	images, err := ExtractLatestImages(transcriptPath)
+	attachments, err := ExtractLatestAttachments(transcriptPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -47,43 +62,63 @@ func (e *ClaudeCodeExtractor) ExtractImages(nativeEvent map[string]interface{}) 
 	// Also extract the text prompt
 	promptText, _ := ExtractPromptText(transcriptPath)
 
-	return images, promptText, nil
+	return attachments, promptText, nil
 }
 
-// CursorExtractor handles image extraction for Cursor
-// Currently Cursor may pass images differently or not at all via hooks
+// ExtractImages is deprecated, use ExtractAttachments
+func (e *ClaudeCodeExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+	return e.ExtractAttachments(nativeEvent)
+}
+
+// CursorExtractor handles attachment extraction for Cursor
+// Currently Cursor may pass attachments differently or not at all via hooks
 type CursorExtractor struct{}
 
-func (e *CursorExtractor) SupportsImages() bool {
-	// TODO: Update when we understand Cursor's image handling
+func (e *CursorExtractor) SupportsAttachments() bool {
+	// TODO: Update when we understand Cursor's attachment handling
 	return false
 }
 
-func (e *CursorExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	// Cursor hook format may include images differently
+// SupportsImages is deprecated, use SupportsAttachments
+func (e *CursorExtractor) SupportsImages() bool {
+	return e.SupportsAttachments()
+}
+
+func (e *CursorExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
+	// Cursor hook format may include attachments differently
 	// Check if there's an images field in the native event
 	if images, ok := nativeEvent["images"].([]interface{}); ok && len(images) > 0 {
-		return extractInlineImages(images)
+		return extractInlineAttachments(images, "image")
 	}
 
 	// Check for attachments field
 	if attachments, ok := nativeEvent["attachments"].([]interface{}); ok && len(attachments) > 0 {
-		return extractAttachments(attachments)
+		return extractInlineAttachments(attachments, "file")
 	}
 
 	return nil, "", nil
 }
 
-// GeminiExtractor handles image extraction for Gemini CLI
+// ExtractImages is deprecated, use ExtractAttachments
+func (e *CursorExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+	return e.ExtractAttachments(nativeEvent)
+}
+
+// GeminiExtractor handles attachment extraction for Gemini CLI
 type GeminiExtractor struct{}
 
-func (e *GeminiExtractor) SupportsImages() bool {
-	// TODO: Update when we understand Gemini CLI's image handling
+func (e *GeminiExtractor) SupportsAttachments() bool {
+	// TODO: Update when we understand Gemini CLI's attachment handling
 	return false
 }
 
-func (e *GeminiExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	// Gemini CLI may pass images in the model_request field
+// SupportsImages is deprecated, use SupportsAttachments
+func (e *GeminiExtractor) SupportsImages() bool {
+	return e.SupportsAttachments()
+}
+
+func (e *GeminiExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
+	// Gemini CLI may pass attachments in the model_request field
 	if modelRequest, ok := nativeEvent["model_request"].(map[string]interface{}); ok {
 		if contents, ok := modelRequest["contents"].([]interface{}); ok {
 			return extractGeminiContents(contents)
@@ -93,32 +128,65 @@ func (e *GeminiExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]I
 	return nil, "", nil
 }
 
-// NoOpExtractor for tools that don't support images
+// ExtractImages is deprecated, use ExtractAttachments
+func (e *GeminiExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+	return e.ExtractAttachments(nativeEvent)
+}
+
+// NoOpExtractor for tools that don't support attachments
 type NoOpExtractor struct{}
 
-func (e *NoOpExtractor) SupportsImages() bool {
+func (e *NoOpExtractor) SupportsAttachments() bool {
 	return false
 }
 
-func (e *NoOpExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+// SupportsImages is deprecated, use SupportsAttachments
+func (e *NoOpExtractor) SupportsImages() bool {
+	return e.SupportsAttachments()
+}
+
+func (e *NoOpExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
 	return nil, "", nil
 }
 
-// extractInlineImages handles inline base64 images from event payloads
-func extractInlineImages(images []interface{}) ([]Image, string, error) {
-	var result []Image
-	for i, img := range images {
-		if imgMap, ok := img.(map[string]interface{}); ok {
-			data, _ := imgMap["data"].(string)
-			mediaType, _ := imgMap["media_type"].(string)
+// ExtractImages is deprecated, use ExtractAttachments
+func (e *NoOpExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
+	return e.ExtractAttachments(nativeEvent)
+}
+
+// extractInlineAttachments handles inline base64 attachments from event payloads
+func extractInlineAttachments(items []interface{}, defaultType string) ([]Attachment, string, error) {
+	var result []Attachment
+	counts := make(map[string]int)
+
+	for _, item := range items {
+		if itemMap, ok := item.(map[string]interface{}); ok {
+			data, _ := itemMap["data"].(string)
+			mediaType, _ := itemMap["media_type"].(string)
 			if mediaType == "" {
-				mediaType, _ = imgMap["type"].(string)
+				mediaType, _ = itemMap["mime_type"].(string)
 			}
+			contentType, _ := itemMap["type"].(string)
+			if contentType == "" {
+				contentType = defaultType
+			}
+
 			if data != "" {
-				result = append(result, Image{
-					Data:      []byte(data), // Would need base64 decode
+				// Decode base64 data
+				decoded, err := base64.StdEncoding.DecodeString(data)
+				if err != nil {
+					continue
+				}
+
+				counts[contentType]++
+				ext := getExtensionForMediaType(mediaType)
+				filename := fmt.Sprintf("%s_%d%s", contentType, counts[contentType], ext)
+
+				result = append(result, Attachment{
+					Data:      decoded,
 					MediaType: mediaType,
-					Filename:  generateFilename(i, mediaType),
+					Filename:  filename,
+					Type:      contentType,
 				})
 			}
 		}
@@ -126,32 +194,44 @@ func extractInlineImages(images []interface{}) ([]Image, string, error) {
 	return result, "", nil
 }
 
-// extractAttachments handles attachment references
-func extractAttachments(attachments []interface{}) ([]Image, string, error) {
-	// Attachments might be file paths or URLs
-	// For now, just return empty - we'd need to fetch/read them
-	return nil, "", nil
-}
-
-// extractGeminiContents extracts images from Gemini's content format
-func extractGeminiContents(contents []interface{}) ([]Image, string, error) {
-	var images []Image
+// extractGeminiContents extracts attachments from Gemini's content format
+func extractGeminiContents(contents []interface{}) ([]Attachment, string, error) {
+	var attachments []Attachment
 	var textParts []string
+	counts := make(map[string]int)
 
 	for _, content := range contents {
 		if contentMap, ok := content.(map[string]interface{}); ok {
 			if parts, ok := contentMap["parts"].([]interface{}); ok {
-				for i, part := range parts {
+				for _, part := range parts {
 					if partMap, ok := part.(map[string]interface{}); ok {
-						// Check for inline_data (image)
+						// Check for inline_data (image/document)
 						if inlineData, ok := partMap["inline_data"].(map[string]interface{}); ok {
 							mimeType, _ := inlineData["mime_type"].(string)
 							data, _ := inlineData["data"].(string)
 							if data != "" {
-								images = append(images, Image{
-									Data:      []byte(data), // Would need base64 decode
+								decoded, err := base64.StdEncoding.DecodeString(data)
+								if err != nil {
+									continue
+								}
+
+								// Determine content type from mime type
+								contentType := "file"
+								if len(mimeType) > 6 && mimeType[:6] == "image/" {
+									contentType = "image"
+								} else if mimeType == "application/pdf" {
+									contentType = "document"
+								}
+
+								counts[contentType]++
+								ext := getExtensionForMediaType(mimeType)
+								filename := fmt.Sprintf("%s_%d%s", contentType, counts[contentType], ext)
+
+								attachments = append(attachments, Attachment{
+									Data:      decoded,
 									MediaType: mimeType,
-									Filename:  generateFilename(i, mimeType),
+									Filename:  filename,
+									Type:      contentType,
 								})
 							}
 						}
@@ -170,11 +250,11 @@ func extractGeminiContents(contents []interface{}) ([]Image, string, error) {
 		promptText = textParts[len(textParts)-1] // Use last text part
 	}
 
-	return images, promptText, nil
+	return attachments, promptText, nil
 }
 
-// generateFilename creates a filename for an extracted image
+// generateFilename creates a filename for an extracted attachment
 func generateFilename(index int, mediaType string) string {
 	ext := getExtensionForMediaType(mediaType)
-	return fmt.Sprintf("image_%d%s", index+1, ext)
+	return fmt.Sprintf("attachment_%d%s", index+1, ext)
 }

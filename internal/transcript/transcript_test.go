@@ -207,3 +207,82 @@ func TestExtractPromptText_SkipsToolResults(t *testing.T) {
 		t.Errorf("Expected 'My actual prompt', got '%s'", text)
 	}
 }
+
+func TestExtractLatestAttachments_Document(t *testing.T) {
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "test_transcript.jsonl")
+
+	// Create a fake PDF content (just for testing, not a real PDF)
+	testPDFBase64 := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fake pdf content"))
+
+	// Create transcript with a document attachment
+	transcriptContent := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Here is a PDF"},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + testPDFBase64 + `"}}]},"uuid":"msg-1","timestamp":"2025-01-01T00:00:00Z"}
+`
+
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0644); err != nil {
+		t.Fatalf("Failed to write test transcript: %v", err)
+	}
+
+	attachments, err := ExtractLatestAttachments(transcriptPath)
+	if err != nil {
+		t.Fatalf("ExtractLatestAttachments failed: %v", err)
+	}
+
+	if len(attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(attachments))
+	}
+
+	att := attachments[0]
+	if att.MediaType != "application/pdf" {
+		t.Errorf("Expected media_type 'application/pdf', got '%s'", att.MediaType)
+	}
+
+	if att.Type != "document" {
+		t.Errorf("Expected type 'document', got '%s'", att.Type)
+	}
+
+	if att.Filename != "document_1.pdf" {
+		t.Errorf("Expected filename 'document_1.pdf', got '%s'", att.Filename)
+	}
+}
+
+func TestExtractLatestAttachments_MultipleTypes(t *testing.T) {
+	tmpDir := t.TempDir()
+	transcriptPath := filepath.Join(tmpDir, "test_transcript.jsonl")
+
+	testImageBase64 := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+	testPDFBase64 := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 fake pdf"))
+
+	// Create transcript with both image and document
+	transcriptContent := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Here are files"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + testImageBase64 + `"}},{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"` + testPDFBase64 + `"}}]},"uuid":"msg-1","timestamp":"2025-01-01T00:00:00Z"}
+`
+
+	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0644); err != nil {
+		t.Fatalf("Failed to write test transcript: %v", err)
+	}
+
+	attachments, err := ExtractLatestAttachments(transcriptPath)
+	if err != nil {
+		t.Fatalf("ExtractLatestAttachments failed: %v", err)
+	}
+
+	if len(attachments) != 2 {
+		t.Fatalf("Expected 2 attachments, got %d", len(attachments))
+	}
+
+	// Check image
+	if attachments[0].Type != "image" {
+		t.Errorf("Expected first attachment to be image, got '%s'", attachments[0].Type)
+	}
+	if attachments[0].MediaType != "image/png" {
+		t.Errorf("Expected image/png, got '%s'", attachments[0].MediaType)
+	}
+
+	// Check document
+	if attachments[1].Type != "document" {
+		t.Errorf("Expected second attachment to be document, got '%s'", attachments[1].Type)
+	}
+	if attachments[1].MediaType != "application/pdf" {
+		t.Errorf("Expected application/pdf, got '%s'", attachments[1].MediaType)
+	}
+}

@@ -103,17 +103,17 @@ func processHookEvent() error {
 
 	apiClient := client.NewClient(cfg, Version)
 
-	// For UserPromptSubmit-type events, check for images using tool-specific extractor
+	// For UserPromptSubmit-type events, check for attachments using tool-specific extractor
 	if isPromptEvent(hookEvent) {
 		extractor := transcript.GetExtractor(tool)
-		if extractor.SupportsImages() {
-			fileLog("Checking for images using %s extractor", tool)
-			images, extractedPrompt, err := extractor.ExtractImages(nativeEvent)
+		if extractor.SupportsAttachments() {
+			fileLog("Checking for attachments using %s extractor", tool)
+			attachments, extractedPrompt, err := extractor.ExtractAttachments(nativeEvent)
 			if err != nil {
-				fileLog("Error extracting images: %v", err)
-			} else if len(images) > 0 {
-				fileLog("Found %d images", len(images))
-				// Send as multipart with images
+				fileLog("Error extracting attachments: %v", err)
+			} else if len(attachments) > 0 {
+				fileLog("Found %d attachments", len(attachments))
+				// Send as multipart with attachments
 				promptText := getPromptText(nativeEvent)
 				if promptText == "" && extractedPrompt != "" {
 					promptText = extractedPrompt
@@ -121,10 +121,10 @@ func processHookEvent() error {
 				sessionID := getSessionID(nativeEvent)
 
 				metadata := buildPromptMetadata(tool, promptText, sessionID, cwd, gitCtx)
-				if err := apiClient.SendPromptWithImagesAsync(metadata, images); err != nil {
-					fileLog("Failed to send prompt with images: %v", err)
+				if err := apiClient.SendPromptWithImagesAsync(metadata, attachments); err != nil {
+					fileLog("Failed to send prompt with attachments: %v", err)
 				} else {
-					fileLog("Prompt with images queued for async send")
+					fileLog("Prompt with attachments queued for async send")
 				}
 				return nil
 			}
