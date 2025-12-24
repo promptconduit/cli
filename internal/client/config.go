@@ -8,15 +8,16 @@ import (
 )
 
 const (
-	DefaultAPIURL        = "https://api.promptconduit.dev"
-	DefaultTimeoutSecs   = 30
-	EnvAPIKey            = "PROMPTCONDUIT_API_KEY"
-	EnvAPIURL            = "PROMPTCONDUIT_API_URL"
-	EnvDebug             = "PROMPTCONDUIT_DEBUG"
-	EnvTimeout           = "PROMPTCONDUIT_TIMEOUT"
-	EnvTool              = "PROMPTCONDUIT_TOOL"
-	ConfigDirName        = ".promptconduit"
-	ConfigFileName       = "config.json"
+	DefaultAPIURL      = "https://api.promptconduit.dev"
+	DefaultTimeoutSecs = 30
+	EnvAPIKey          = "PROMPTCONDUIT_API_KEY"
+	EnvAPIURL          = "PROMPTCONDUIT_API_URL"
+	EnvDebug           = "PROMPTCONDUIT_DEBUG"
+	EnvTimeout         = "PROMPTCONDUIT_TIMEOUT"
+	EnvTool            = "PROMPTCONDUIT_TOOL"
+	EnvXDGConfigHome   = "XDG_CONFIG_HOME"
+	ConfigDirName      = "promptconduit" // ~/.config/promptconduit/
+	ConfigFileName     = "config.json"
 )
 
 // Config holds the client configuration
@@ -47,22 +48,36 @@ func (c *Config) IsConfigured() bool {
 	return c.APIKey != ""
 }
 
-// ConfigPath returns the path to the config file
+// ConfigPath returns the path to the config file (XDG standard)
+// Uses $XDG_CONFIG_HOME/promptconduit/config.json if set, otherwise ~/.config/promptconduit/config.json
 func ConfigPath() string {
+	if xdgConfig := os.Getenv(EnvXDGConfigHome); xdgConfig != "" {
+		return filepath.Join(xdgConfig, ConfigDirName, ConfigFileName)
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ConfigDirName, ConfigFileName)
+	return filepath.Join(home, ".config", ConfigDirName, ConfigFileName)
 }
 
 // ConfigDir returns the path to the config directory
 func ConfigDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
+	path := ConfigPath()
+	if path == "" {
 		return ""
 	}
-	return filepath.Join(home, ConfigDirName)
+	return filepath.Dir(path)
+}
+
+// AllConfigPaths returns all possible config paths for display/debugging
+func AllConfigPaths() []string {
+	path := ConfigPath()
+	if path == "" {
+		return nil
+	}
+	return []string{path}
 }
 
 // LoadFileConfig loads the config file from disk
