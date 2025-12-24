@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/promptconduit/cli/internal/adapters"
+	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/spf13/cobra"
 )
 
@@ -33,8 +33,8 @@ Prerequisites:
 func runInstall(cmd *cobra.Command, args []string) error {
 	toolName := args[0]
 
-	if !adapters.IsValidTool(toolName) {
-		return fmt.Errorf("unknown tool: %s. Supported: %v", toolName, adapters.SupportedTools())
+	if !envelope.IsValidTool(toolName) {
+		return fmt.Errorf("unknown tool: %s. Supported: %v", toolName, envelope.SupportedTools())
 	}
 
 	// Get the executable path for hook commands

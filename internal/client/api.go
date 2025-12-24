@@ -12,7 +12,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/promptconduit/cli/internal/schema"
+	"github.com/promptconduit/cli/internal/envelope"
 )
 
 // APIResponse represents a response from the API
@@ -41,48 +41,41 @@ func NewClient(config *Config, version string) *Client {
 	}
 }
 
-// SendEvent sends a single event to the API (blocking)
-func (c *Client) SendEvent(event *schema.CanonicalEvent) *APIResponse {
-	return c.sendRequest("/v1/events/ingest", event)
+// SendEnvelope sends a raw event envelope to the API (blocking)
+func (c *Client) SendEnvelope(env *envelope.RawEventEnvelope) *APIResponse {
+	return c.sendRequest("/v1/events/raw", env)
 }
 
-// SendEventAsync sends an event asynchronously without blocking
-// On Unix systems, it forks a new process. On Windows, it spawns a subprocess.
-func (c *Client) SendEventAsync(event *schema.CanonicalEvent) error {
-	eventJSON, err := event.ToJSON()
+// SendEnvelopeAsync sends an envelope asynchronously without blocking
+func (c *Client) SendEnvelopeAsync(env *envelope.RawEventEnvelope) error {
+	envJSON, err := env.ToJSON()
 	if err != nil {
-		return fmt.Errorf("failed to serialize event: %w", err)
+		return fmt.Errorf("failed to serialize envelope: %w", err)
 	}
 
 	if runtime.GOOS == "windows" {
-		return c.sendAsyncWindows(eventJSON)
+		return c.sendAsyncWindows(envJSON)
 	}
 
-	return c.sendAsyncUnix(eventJSON)
+	return c.sendAsyncUnix(envJSON)
 }
 
-// sendAsyncUnix uses fork to send event without blocking
-func (c *Client) sendAsyncUnix(eventJSON []byte) error {
-	// Fork by executing ourselves with a special flag
+// sendAsyncUnix uses fork to send envelope without blocking
+func (c *Client) sendAsyncUnix(envJSON []byte) error {
 	exe, err := os.Executable()
 	if err != nil {
-		// Fall back to blocking send
-		return c.sendEventBlocking(eventJSON)
+		return c.sendEnvelopeBlocking(envJSON)
 	}
 
-	// Spawn a detached subprocess to send the event
 	cmd := exec.Command(exe, "hook", "--send-event")
-	cmd.Stdin = bytes.NewReader(eventJSON)
+	cmd.Stdin = bytes.NewReader(envJSON)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 
-	// Start the process but don't wait for it
 	if err := cmd.Start(); err != nil {
-		// Fall back to blocking send
-		return c.sendEventBlocking(eventJSON)
+		return c.sendEnvelopeBlocking(envJSON)
 	}
 
-	// Release the process so it runs independently
 	if err := cmd.Process.Release(); err != nil {
 		// Process already started, ignore error
 	}
@@ -91,21 +84,19 @@ func (c *Client) sendAsyncUnix(eventJSON []byte) error {
 }
 
 // sendAsyncWindows spawns a subprocess on Windows
-func (c *Client) sendAsyncWindows(eventJSON []byte) error {
-	// On Windows, we can't easily detach, so we just spawn and don't wait
+func (c *Client) sendAsyncWindows(envJSON []byte) error {
 	exe, err := os.Executable()
 	if err != nil {
-		return c.sendEventBlocking(eventJSON)
+		return c.sendEnvelopeBlocking(envJSON)
 	}
 
 	cmd := exec.Command(exe, "hook", "--send-event")
-	cmd.Stdin = bytes.NewReader(eventJSON)
+	cmd.Stdin = bytes.NewReader(envJSON)
 
 	if err := cmd.Start(); err != nil {
-		return c.sendEventBlocking(eventJSON)
+		return c.sendEnvelopeBlocking(envJSON)
 	}
 
-	// Don't wait for the process
 	go func() {
 		_ = cmd.Wait()
 	}()
@@ -113,12 +104,12 @@ func (c *Client) sendAsyncWindows(eventJSON []byte) error {
 	return nil
 }
 
-// sendEventBlocking sends the event synchronously (fallback)
-func (c *Client) sendEventBlocking(eventJSON []byte) error {
+// sendEnvelopeBlocking sends the envelope synchronously (fallback)
+func (c *Client) sendEnvelopeBlocking(envJSON []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/events/ingest", bytes.NewReader(eventJSON))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/events/raw", bytes.NewReader(envJSON))
 	if err != nil {
 		return err
 	}
@@ -137,14 +128,6 @@ func (c *Client) sendEventBlocking(eventJSON []byte) error {
 	}
 
 	return nil
-}
-
-// SendEventBatch sends multiple events in one request
-func (c *Client) SendEventBatch(events []*schema.CanonicalEvent) *APIResponse {
-	payload := map[string]interface{}{
-		"events": events,
-	}
-	return c.sendRequest("/v1/events/ingest-batch", payload)
 }
 
 // sendRequest performs an HTTP request to the API
@@ -207,7 +190,20 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", fmt.Sprintf("PromptConduit-CLI/%s", c.version))
 }
 
-// SendEventDirect sends an event directly (used by async subprocess)
-func (c *Client) SendEventDirect(eventJSON []byte) error {
-	return c.sendEventBlocking(eventJSON)
+// SendEnvelopeDirect sends an envelope directly (used by async subprocess)
+func (c *Client) SendEnvelopeDirect(envJSON []byte) error {
+	return c.sendEnvelopeBlocking(envJSON)
+}
+
+// TestConnection sends a test request to verify API connectivity
+func (c *Client) TestConnection() *APIResponse {
+	// Create a minimal test envelope
+	testEnv := envelope.New(
+		c.version,
+		"test",
+		"test",
+		[]byte(`{"test": true}`),
+		nil,
+	)
+	return c.SendEnvelope(testEnv)
 }

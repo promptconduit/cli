@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptconduit/cli/internal/schema"
+	"github.com/promptconduit/cli/internal/envelope"
 )
 
 const gitTimeout = 2 * time.Second
 
 // ExtractContext extracts git repository information from the given directory
-func ExtractContext(workingDir string) *schema.GitContext {
+func ExtractContext(workingDir string) *envelope.GitContext {
 	if workingDir == "" {
 		return nil
 	}
@@ -26,50 +26,50 @@ func ExtractContext(workingDir string) *schema.GitContext {
 		return nil
 	}
 
-	ctx := &schema.GitContext{}
+	ctx := &envelope.GitContext{
+		WorkingDirectory: workingDir,
+		RepoPath:         repoRoot,
+		RepoName:         GetRepoName(workingDir),
+	}
 
 	// Commit info
 	if hash := runGitCmd(workingDir, "rev-parse", "HEAD"); hash != "" {
-		ctx.CommitHash = &hash
+		ctx.CommitHash = hash
 	}
 	if msg := runGitCmd(workingDir, "log", "-1", "--format=%s"); msg != "" {
-		ctx.CommitMessage = &msg
+		ctx.CommitMessage = msg
 	}
 	if author := runGitCmd(workingDir, "log", "-1", "--format=%an"); author != "" {
-		ctx.CommitAuthor = &author
+		ctx.CommitAuthor = author
 	}
 
 	// Branch info
 	if branch := runGitCmd(workingDir, "branch", "--show-current"); branch != "" {
-		ctx.Branch = &branch
-		detached := false
-		ctx.IsDetachedHead = &detached
+		ctx.Branch = branch
+		ctx.IsDetachedHead = false
 	} else {
 		// Detached HEAD state
-		detached := true
-		ctx.IsDetachedHead = &detached
+		ctx.IsDetachedHead = true
 	}
 
 	// Working tree state
 	status := runGitCmd(workingDir, "status", "--porcelain")
 	staged, unstaged, untracked := parseStatusOutput(status)
-	ctx.StagedCount = &staged
-	ctx.UnstagedCount = &unstaged
-	ctx.UntrackedCount = &untracked
-
-	dirty := (staged + unstaged + untracked) > 0
-	ctx.IsDirty = &dirty
+	ctx.StagedCount = staged
+	ctx.UnstagedCount = unstaged
+	ctx.UntrackedCount = untracked
+	ctx.IsDirty = (staged + unstaged + untracked) > 0
 
 	// Remote info
 	if remote := runGitCmd(workingDir, "remote", "get-url", "origin"); remote != "" {
-		ctx.RemoteURL = &remote
+		ctx.RemoteURL = remote
 	}
 
 	// Ahead/behind counts
 	if counts := runGitCmd(workingDir, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); counts != "" {
 		ahead, behind := parseAheadBehind(counts)
-		ctx.AheadCount = &ahead
-		ctx.BehindCount = &behind
+		ctx.AheadCount = ahead
+		ctx.BehindCount = behind
 	}
 
 	return ctx

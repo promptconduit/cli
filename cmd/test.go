@@ -2,10 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/promptconduit/cli/internal/client"
-	"github.com/promptconduit/cli/internal/schema"
 	"github.com/spf13/cobra"
 )
 
@@ -28,18 +26,9 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Testing connection to %s...\n", cfg.APIURL)
 
-	// Create a test event
-	event := schema.NewCanonicalEvent(schema.ToolClaudeCode, schema.EventSessionStart, Version)
-	sessionID := fmt.Sprintf("test-%d", time.Now().UnixNano())
-	event.SessionID = &sessionID
-	source := "startup" // Must be a valid session source enum value
-	event.Session = &schema.SessionPayload{
-		Source: &source,
-	}
-
-	// Send the event
+	// Send a test request using the new envelope-based API
 	apiClient := client.NewClient(cfg, Version)
-	response := apiClient.SendEvent(event)
+	response := apiClient.TestConnection()
 
 	if response.Success {
 		fmt.Println("Success! API connection verified.")

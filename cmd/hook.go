@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/promptconduit/cli/internal/adapters"
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +22,7 @@ var hookCmd = &cobra.Command{
 	Use:    "hook",
 	Short:  "Process hook events from AI tools",
 	Long:   `Internal command called by AI tool hooks. Reads JSON events from stdin and sends to API.`,
-	Hidden: true, // Hide from help since it's internal
+	Hidden: true,
 	RunE:   runHook,
 }
 
@@ -30,45 +31,41 @@ func init() {
 }
 
 func runHook(cmd *cobra.Command, args []string) error {
-	// If --send-event flag is set, we're being called as a subprocess to send the event
 	if sendEvent {
-		return sendEventFromStdin()
+		return sendEnvelopeFromStdin()
 	}
-
-	// Normal hook processing
 	return processHookEvent()
 }
 
-// processHookEvent is the main hook entry point called by AI tools
+// processHookEvent is the main hook entry point - wraps native event in envelope
 func processHookEvent() error {
-	// Always output success response to never block the tool
 	defer outputContinueResponse()
 
 	fileLog("Hook started")
 
-	// Read JSON from stdin
-	inputData, err := io.ReadAll(os.Stdin)
+	// Read raw input from stdin
+	rawInput, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		debugLog("Failed to read stdin: %v", err)
 		fileLog("Failed to read stdin: %v", err)
-		return nil // Don't return error - always succeed
+		return nil
 	}
 
-	if len(inputData) == 0 {
+	if len(rawInput) == 0 {
 		debugLog("Empty input, skipping")
 		fileLog("Empty input, skipping")
 		return nil
 	}
 
-	previewLen := len(inputData)
+	previewLen := len(rawInput)
 	if previewLen > 200 {
 		previewLen = 200
 	}
-	fileLog("Received %d bytes: %s", len(inputData), string(inputData[:previewLen]))
+	fileLog("Received %d bytes: %s", len(rawInput), string(rawInput[:previewLen]))
 
-	// Parse native event
+	// Parse just enough to detect tool and event name
 	var nativeEvent map[string]interface{}
-	if err := json.Unmarshal(inputData, &nativeEvent); err != nil {
+	if err := json.Unmarshal(rawInput, &nativeEvent); err != nil {
 		debugLog("Failed to parse JSON: %v", err)
 		fileLog("Failed to parse JSON: %v", err)
 		return nil
@@ -82,48 +79,104 @@ func processHookEvent() error {
 		return nil
 	}
 
-	// Detect tool
-	tool := adapters.DetectTool(nativeEvent)
-	if tool == "" {
-		debugLog("Could not detect tool from event")
-		fileLog("Could not detect tool from event: %v", nativeEvent)
-		return nil
+	// Detect tool (simple heuristics)
+	tool := detectTool(nativeEvent)
+	hookEvent := getHookEventName(nativeEvent)
+
+	fileLog("Detected tool: %s, hook event: %s", tool, hookEvent)
+
+	// Extract git context from working directory
+	var gitCtx *envelope.GitContext
+	if cwd := getWorkingDirectory(nativeEvent); cwd != "" {
+		gitCtx = git.ExtractContext(cwd)
+		if gitCtx != nil {
+			fileLog("Extracted git context: repo=%s, branch=%s", gitCtx.RepoName, gitCtx.Branch)
+		}
 	}
 
-	fileLog("Detected tool: %s", tool)
+	// Create envelope with raw payload
+	env := envelope.New(Version, tool, hookEvent, rawInput, gitCtx)
 
-	// Get adapter for tool
-	adapter := adapters.GetAdapter(tool, cfg.Debug)
-	if adapter == nil {
-		debugLog("No adapter for tool: %s", tool)
-		fileLog("No adapter for tool: %s", tool)
-		return nil
-	}
+	fileLog("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
-	// Translate event to canonical format
-	canonicalEvent := adapter.TranslateEvent(nativeEvent)
-	if canonicalEvent == nil {
-		debugLog("Event translation returned nil (unsupported event)")
-		fileLog("Event translation returned nil for event: %v", nativeEvent)
-		return nil
-	}
-
-	fileLog("Translated event type: %s, session: %v", canonicalEvent.EventType, canonicalEvent.SessionID)
-
-	// Send event asynchronously (non-blocking)
+	// Send async
 	apiClient := client.NewClient(cfg, Version)
-	if err := apiClient.SendEventAsync(canonicalEvent); err != nil {
-		debugLog("Failed to send event async: %v", err)
-		fileLog("Failed to send event async: %v", err)
-		// Don't return error - always succeed
+	if err := apiClient.SendEnvelopeAsync(env); err != nil {
+		debugLog("Failed to send envelope async: %v", err)
+		fileLog("Failed to send envelope async: %v", err)
 	}
 
-	fileLog("Event queued for async send")
+	fileLog("Envelope queued for async send")
 	return nil
 }
 
-// sendEventFromStdin sends event data directly (called by async subprocess)
-func sendEventFromStdin() error {
+// detectTool identifies which AI tool generated the event
+func detectTool(event map[string]interface{}) string {
+	// Check environment variable override first
+	if tool := os.Getenv(client.EnvTool); tool != "" {
+		return tool
+	}
+
+	// Claude Code: has hook_event_name field
+	if _, ok := event["hook_event_name"]; ok {
+		return "claude-code"
+	}
+
+	// Cursor: has cursor_version field
+	if _, ok := event["cursor_version"]; ok {
+		return "cursor"
+	}
+
+	// Gemini: has gemini_session field
+	if _, ok := event["gemini_session"]; ok {
+		return "gemini-cli"
+	}
+
+	// Generic: has event field
+	if _, ok := event["event"]; ok {
+		return "unknown"
+	}
+
+	return "unknown"
+}
+
+// getHookEventName extracts the hook event name from native event
+func getHookEventName(event map[string]interface{}) string {
+	// Claude Code uses hook_event_name
+	if name, ok := event["hook_event_name"].(string); ok {
+		return name
+	}
+
+	// Generic event field
+	if name, ok := event["event"].(string); ok {
+		return name
+	}
+
+	return ""
+}
+
+// getWorkingDirectory extracts working directory from native event
+func getWorkingDirectory(event map[string]interface{}) string {
+	// Claude Code uses cwd
+	if cwd, ok := event["cwd"].(string); ok {
+		return cwd
+	}
+
+	// Cursor might use workspace_dir
+	if dir, ok := event["workspace_dir"].(string); ok {
+		return dir
+	}
+
+	// Fallback to current directory
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+
+	return ""
+}
+
+// sendEnvelopeFromStdin sends envelope data directly (called by async subprocess)
+func sendEnvelopeFromStdin() error {
 	fileLog("Async subprocess started")
 
 	inputData, err := io.ReadAll(os.Stdin)
@@ -142,12 +195,12 @@ func sendEventFromStdin() error {
 
 	fileLog("Async subprocess sending to API: %s", cfg.APIURL)
 	apiClient := client.NewClient(cfg, Version)
-	err = apiClient.SendEventDirect(inputData)
+	err = apiClient.SendEnvelopeDirect(inputData)
 	if err != nil {
 		fileLog("Async subprocess API error: %v", err)
 		return err
 	}
-	fileLog("Async subprocess: event sent successfully")
+	fileLog("Async subprocess: envelope sent successfully")
 	return nil
 }
 

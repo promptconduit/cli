@@ -37,6 +37,7 @@ func init() {
 	rootCmd.AddCommand(testCmd)
 	rootCmd.AddCommand(hookCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(configCmd)
 }
 
 var versionCmd = &cobra.Command{
