@@ -244,8 +244,8 @@ type GitMetadata struct {
 	IsDetachedHead bool   `json:"isDetachedHead,omitempty"`
 }
 
-// SendPromptWithImages sends a prompt with images using multipart/form-data
-func (c *Client) SendPromptWithImages(metadata *PromptMetadata, images []transcript.Image) *APIResponse {
+// SendPromptWithAttachments sends a prompt with attachments using multipart/form-data
+func (c *Client) SendPromptWithAttachments(metadata *PromptMetadata, attachments []transcript.Attachment) *APIResponse {
 	// Create multipart body
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -266,13 +266,13 @@ func (c *Client) SendPromptWithImages(metadata *PromptMetadata, images []transcr
 		}
 	}
 
-	// Add images as file attachments
-	for _, img := range images {
-		part, err := writer.CreateFormFile("attachments[]", img.Filename)
+	// Add attachments as file fields
+	for _, att := range attachments {
+		part, err := writer.CreateFormFile("attachments[]", att.Filename)
 		if err != nil {
 			continue
 		}
-		part.Write(img.Data)
+		part.Write(att.Data)
 	}
 
 	if err := writer.Close(); err != nil {
@@ -328,22 +328,23 @@ func (c *Client) SendPromptWithImages(metadata *PromptMetadata, images []transcr
 	return result
 }
 
-// SendPromptWithImagesAsync sends a prompt with images asynchronously
-func (c *Client) SendPromptWithImagesAsync(metadata *PromptMetadata, images []transcript.Image) error {
+// SendPromptWithAttachmentsAsync sends a prompt with attachments asynchronously
+func (c *Client) SendPromptWithAttachmentsAsync(metadata *PromptMetadata, attachments []transcript.Attachment) error {
 	// For multipart, we need to serialize everything
 	data := struct {
-		Metadata *PromptMetadata     `json:"metadata"`
-		Images   []SerializedImage   `json:"images"`
+		Metadata    *PromptMetadata          `json:"metadata"`
+		Attachments []SerializedAttachment   `json:"attachments"`
 	}{
-		Metadata: metadata,
-		Images:   make([]SerializedImage, len(images)),
+		Metadata:    metadata,
+		Attachments: make([]SerializedAttachment, len(attachments)),
 	}
 
-	for i, img := range images {
-		data.Images[i] = SerializedImage{
-			Data:      img.Data,
-			MediaType: img.MediaType,
-			Filename:  img.Filename,
+	for i, att := range attachments {
+		data.Attachments[i] = SerializedAttachment{
+			Data:      att.Data,
+			MediaType: att.MediaType,
+			Filename:  att.Filename,
+			Type:      att.Type,
 		}
 	}
 
@@ -359,11 +360,12 @@ func (c *Client) SendPromptWithImagesAsync(metadata *PromptMetadata, images []tr
 	return c.sendPromptAsyncUnix(jsonData)
 }
 
-// SerializedImage is used for JSON serialization of images
-type SerializedImage struct {
+// SerializedAttachment is used for JSON serialization of attachments
+type SerializedAttachment struct {
 	Data      []byte `json:"data"`
 	MediaType string `json:"media_type"`
 	Filename  string `json:"filename"`
+	Type      string `json:"type"`
 }
 
 // sendPromptAsyncUnix spawns a subprocess to send the prompt
@@ -413,23 +415,24 @@ func (c *Client) sendPromptAsyncWindows(jsonData []byte) error {
 // sendPromptBlocking sends the prompt synchronously (fallback)
 func (c *Client) sendPromptBlocking(jsonData []byte) error {
 	var data struct {
-		Metadata *PromptMetadata   `json:"metadata"`
-		Images   []SerializedImage `json:"images"`
+		Metadata    *PromptMetadata        `json:"metadata"`
+		Attachments []SerializedAttachment `json:"attachments"`
 	}
 	if err := json.Unmarshal(jsonData, &data); err != nil {
 		return err
 	}
 
-	images := make([]transcript.Image, len(data.Images))
-	for i, img := range data.Images {
-		images[i] = transcript.Image{
-			Data:      img.Data,
-			MediaType: img.MediaType,
-			Filename:  img.Filename,
+	attachments := make([]transcript.Attachment, len(data.Attachments))
+	for i, att := range data.Attachments {
+		attachments[i] = transcript.Attachment{
+			Data:      att.Data,
+			MediaType: att.MediaType,
+			Filename:  att.Filename,
+			Type:      att.Type,
 		}
 	}
 
-	result := c.SendPromptWithImages(data.Metadata, images)
+	result := c.SendPromptWithAttachments(data.Metadata, attachments)
 	if !result.Success {
 		return fmt.Errorf("API error: %s", result.Error)
 	}

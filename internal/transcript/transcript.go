@@ -18,9 +18,6 @@ type Attachment struct {
 	Type      string // Content type: "image", "document", "file"
 }
 
-// Image is an alias for Attachment for backward compatibility
-type Image = Attachment
-
 // AttachmentContent represents the structure of an attachment in the transcript
 // Images: {"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"..."}}
 // Documents: {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."}}
@@ -32,9 +29,6 @@ type AttachmentContent struct {
 		Data      string `json:"data"`
 	} `json:"source"`
 }
-
-// ImageContent is an alias for AttachmentContent for backward compatibility
-type ImageContent = AttachmentContent
 
 // TranscriptMessage represents a message in the JSONL transcript
 type TranscriptMessage struct {
@@ -193,12 +187,6 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	}
 
 	return attachments, nil
-}
-
-// ExtractLatestImages reads the transcript file and extracts images from the most recent user message
-// Deprecated: Use ExtractLatestAttachments for all attachment types
-func ExtractLatestImages(transcriptPath string) ([]Image, error) {
-	return ExtractLatestAttachments(transcriptPath)
 }
 
 // ExtractPromptText extracts the text content from the latest user message

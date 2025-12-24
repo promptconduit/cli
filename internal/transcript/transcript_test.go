@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestExtractLatestImages(t *testing.T) {
+func TestExtractLatestAttachments_Image(t *testing.T) {
 	// Create a temporary transcript file with test data
 	tmpDir := t.TempDir()
 	transcriptPath := filepath.Join(tmpDir, "test_transcript.jsonl")
@@ -25,70 +25,70 @@ func TestExtractLatestImages(t *testing.T) {
 	}
 
 	// Test extraction
-	images, err := ExtractLatestImages(transcriptPath)
+	attachments, err := ExtractLatestAttachments(transcriptPath)
 	if err != nil {
-		t.Fatalf("ExtractLatestImages failed: %v", err)
+		t.Fatalf("ExtractLatestAttachments failed: %v", err)
 	}
 
-	if len(images) != 1 {
-		t.Fatalf("Expected 1 image, got %d", len(images))
+	if len(attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(attachments))
 	}
 
-	img := images[0]
-	if img.MediaType != "image/png" {
-		t.Errorf("Expected media_type 'image/png', got '%s'", img.MediaType)
+	att := attachments[0]
+	if att.MediaType != "image/png" {
+		t.Errorf("Expected media_type 'image/png', got '%s'", att.MediaType)
 	}
 
-	if img.Filename != "image_1.png" {
-		t.Errorf("Expected filename 'image_1.png', got '%s'", img.Filename)
+	if att.Filename != "image_1.png" {
+		t.Errorf("Expected filename 'image_1.png', got '%s'", att.Filename)
 	}
 
-	// Verify the image data matches
+	// Verify the data matches
 	expectedData, _ := base64.StdEncoding.DecodeString(testImageBase64)
-	if len(img.Data) != len(expectedData) {
-		t.Errorf("Image data length mismatch: expected %d, got %d", len(expectedData), len(img.Data))
+	if len(att.Data) != len(expectedData) {
+		t.Errorf("Data length mismatch: expected %d, got %d", len(expectedData), len(att.Data))
 	}
 }
 
-func TestExtractLatestImages_NoImages(t *testing.T) {
+func TestExtractLatestAttachments_NoAttachments(t *testing.T) {
 	tmpDir := t.TempDir()
 	transcriptPath := filepath.Join(tmpDir, "test_transcript.jsonl")
 
 	// Create transcript with only text
-	transcriptContent := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Just text, no images"}]},"uuid":"msg-1","timestamp":"2025-01-01T00:00:00Z"}
+	transcriptContent := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Just text, no attachments"}]},"uuid":"msg-1","timestamp":"2025-01-01T00:00:00Z"}
 `
 
 	if err := os.WriteFile(transcriptPath, []byte(transcriptContent), 0644); err != nil {
 		t.Fatalf("Failed to write test transcript: %v", err)
 	}
 
-	images, err := ExtractLatestImages(transcriptPath)
+	attachments, err := ExtractLatestAttachments(transcriptPath)
 	if err != nil {
-		t.Fatalf("ExtractLatestImages failed: %v", err)
+		t.Fatalf("ExtractLatestAttachments failed: %v", err)
 	}
 
-	if len(images) != 0 {
-		t.Errorf("Expected 0 images, got %d", len(images))
+	if len(attachments) != 0 {
+		t.Errorf("Expected 0 attachments, got %d", len(attachments))
 	}
 }
 
-func TestExtractLatestImages_NonexistentFile(t *testing.T) {
-	images, err := ExtractLatestImages("/nonexistent/file.jsonl")
+func TestExtractLatestAttachments_NonexistentFile(t *testing.T) {
+	attachments, err := ExtractLatestAttachments("/nonexistent/file.jsonl")
 	if err != nil {
 		t.Errorf("Expected nil error for nonexistent file, got: %v", err)
 	}
-	if images != nil {
-		t.Errorf("Expected nil images for nonexistent file")
+	if attachments != nil {
+		t.Errorf("Expected nil attachments for nonexistent file")
 	}
 }
 
-func TestExtractLatestImages_EmptyPath(t *testing.T) {
-	images, err := ExtractLatestImages("")
+func TestExtractLatestAttachments_EmptyPath(t *testing.T) {
+	attachments, err := ExtractLatestAttachments("")
 	if err != nil {
 		t.Errorf("Expected nil error for empty path, got: %v", err)
 	}
-	if images != nil {
-		t.Errorf("Expected nil images for empty path")
+	if attachments != nil {
+		t.Errorf("Expected nil attachments for empty path")
 	}
 }
 
@@ -106,8 +106,8 @@ func TestClaudeCodeExtractor(t *testing.T) {
 	}
 
 	extractor := GetExtractor("claude-code")
-	if !extractor.SupportsImages() {
-		t.Error("ClaudeCodeExtractor should support images")
+	if !extractor.SupportsAttachments() {
+		t.Error("ClaudeCodeExtractor should support attachments")
 	}
 
 	nativeEvent := map[string]interface{}{
@@ -115,13 +115,13 @@ func TestClaudeCodeExtractor(t *testing.T) {
 		"prompt":          "Test prompt",
 	}
 
-	images, promptText, err := extractor.ExtractImages(nativeEvent)
+	attachments, promptText, err := extractor.ExtractAttachments(nativeEvent)
 	if err != nil {
-		t.Fatalf("ExtractImages failed: %v", err)
+		t.Fatalf("ExtractAttachments failed: %v", err)
 	}
 
-	if len(images) != 1 {
-		t.Fatalf("Expected 1 image, got %d", len(images))
+	if len(attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(attachments))
 	}
 
 	if promptText != "Test prompt" {
@@ -131,25 +131,25 @@ func TestClaudeCodeExtractor(t *testing.T) {
 
 func TestNoOpExtractor(t *testing.T) {
 	extractor := GetExtractor("unknown-tool")
-	if extractor.SupportsImages() {
-		t.Error("NoOpExtractor should not support images")
+	if extractor.SupportsAttachments() {
+		t.Error("NoOpExtractor should not support attachments")
 	}
 
-	images, text, err := extractor.ExtractImages(map[string]interface{}{})
+	attachments, text, err := extractor.ExtractAttachments(map[string]interface{}{})
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
-	if images != nil {
-		t.Error("Expected nil images from NoOpExtractor")
+	if attachments != nil {
+		t.Error("Expected nil attachments from NoOpExtractor")
 	}
 	if text != "" {
 		t.Error("Expected empty text from NoOpExtractor")
 	}
 }
 
-func TestExtractLatestImages_SkipsToolResults(t *testing.T) {
+func TestExtractLatestAttachments_SkipsToolResults(t *testing.T) {
 	// This test verifies that tool_result messages (which also have type="user")
-	// are correctly skipped when looking for the last user message with images
+	// are correctly skipped when looking for the last user message with attachments
 	tmpDir := t.TempDir()
 	transcriptPath := filepath.Join(tmpDir, "test_transcript.jsonl")
 
@@ -170,18 +170,18 @@ func TestExtractLatestImages_SkipsToolResults(t *testing.T) {
 	}
 
 	// Should still find the image from the first user message
-	images, err := ExtractLatestImages(transcriptPath)
+	attachments, err := ExtractLatestAttachments(transcriptPath)
 	if err != nil {
-		t.Fatalf("ExtractLatestImages failed: %v", err)
+		t.Fatalf("ExtractLatestAttachments failed: %v", err)
 	}
 
-	if len(images) != 1 {
-		t.Fatalf("Expected 1 image (tool_result should be skipped), got %d", len(images))
+	if len(attachments) != 1 {
+		t.Fatalf("Expected 1 attachment (tool_result should be skipped), got %d", len(attachments))
 	}
 
-	img := images[0]
-	if img.MediaType != "image/png" {
-		t.Errorf("Expected media_type 'image/png', got '%s'", img.MediaType)
+	att := attachments[0]
+	if att.MediaType != "image/png" {
+		t.Errorf("Expected media_type 'image/png', got '%s'", att.MediaType)
 	}
 }
 

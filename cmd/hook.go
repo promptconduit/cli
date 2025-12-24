@@ -121,7 +121,7 @@ func processHookEvent() error {
 				sessionID := getSessionID(nativeEvent)
 
 				metadata := buildPromptMetadata(tool, promptText, sessionID, cwd, gitCtx)
-				if err := apiClient.SendPromptWithImagesAsync(metadata, attachments); err != nil {
+				if err := apiClient.SendPromptWithAttachmentsAsync(metadata, attachments); err != nil {
 					fileLog("Failed to send prompt with attachments: %v", err)
 				} else {
 					fileLog("Prompt with attachments queued for async send")

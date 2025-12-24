@@ -13,14 +13,7 @@ type AttachmentExtractor interface {
 
 	// SupportsAttachments returns whether this tool supports attachment extraction
 	SupportsAttachments() bool
-
-	// Deprecated methods for backward compatibility
-	ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error)
-	SupportsImages() bool
 }
-
-// ImageExtractor is an alias for backward compatibility
-type ImageExtractor = AttachmentExtractor
 
 // GetExtractor returns the appropriate attachment extractor for the given tool
 func GetExtractor(tool string) AttachmentExtractor {
@@ -43,11 +36,6 @@ func (e *ClaudeCodeExtractor) SupportsAttachments() bool {
 	return true
 }
 
-// SupportsImages is deprecated, use SupportsAttachments
-func (e *ClaudeCodeExtractor) SupportsImages() bool {
-	return e.SupportsAttachments()
-}
-
 func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
 	transcriptPath, ok := nativeEvent["transcript_path"].(string)
 	if !ok || transcriptPath == "" {
@@ -65,23 +53,12 @@ func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interfac
 	return attachments, promptText, nil
 }
 
-// ExtractImages is deprecated, use ExtractAttachments
-func (e *ClaudeCodeExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	return e.ExtractAttachments(nativeEvent)
-}
-
 // CursorExtractor handles attachment extraction for Cursor
-// Currently Cursor may pass attachments differently or not at all via hooks
 type CursorExtractor struct{}
 
 func (e *CursorExtractor) SupportsAttachments() bool {
 	// TODO: Update when we understand Cursor's attachment handling
 	return false
-}
-
-// SupportsImages is deprecated, use SupportsAttachments
-func (e *CursorExtractor) SupportsImages() bool {
-	return e.SupportsAttachments()
 }
 
 func (e *CursorExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
@@ -99,22 +76,12 @@ func (e *CursorExtractor) ExtractAttachments(nativeEvent map[string]interface{})
 	return nil, "", nil
 }
 
-// ExtractImages is deprecated, use ExtractAttachments
-func (e *CursorExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	return e.ExtractAttachments(nativeEvent)
-}
-
 // GeminiExtractor handles attachment extraction for Gemini CLI
 type GeminiExtractor struct{}
 
 func (e *GeminiExtractor) SupportsAttachments() bool {
 	// TODO: Update when we understand Gemini CLI's attachment handling
 	return false
-}
-
-// SupportsImages is deprecated, use SupportsAttachments
-func (e *GeminiExtractor) SupportsImages() bool {
-	return e.SupportsAttachments()
 }
 
 func (e *GeminiExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
@@ -128,11 +95,6 @@ func (e *GeminiExtractor) ExtractAttachments(nativeEvent map[string]interface{})
 	return nil, "", nil
 }
 
-// ExtractImages is deprecated, use ExtractAttachments
-func (e *GeminiExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	return e.ExtractAttachments(nativeEvent)
-}
-
 // NoOpExtractor for tools that don't support attachments
 type NoOpExtractor struct{}
 
@@ -140,18 +102,8 @@ func (e *NoOpExtractor) SupportsAttachments() bool {
 	return false
 }
 
-// SupportsImages is deprecated, use SupportsAttachments
-func (e *NoOpExtractor) SupportsImages() bool {
-	return e.SupportsAttachments()
-}
-
 func (e *NoOpExtractor) ExtractAttachments(nativeEvent map[string]interface{}) ([]Attachment, string, error) {
 	return nil, "", nil
-}
-
-// ExtractImages is deprecated, use ExtractAttachments
-func (e *NoOpExtractor) ExtractImages(nativeEvent map[string]interface{}) ([]Image, string, error) {
-	return e.ExtractAttachments(nativeEvent)
 }
 
 // extractInlineAttachments handles inline base64 attachments from event payloads
@@ -251,10 +203,4 @@ func extractGeminiContents(contents []interface{}) ([]Attachment, string, error)
 	}
 
 	return attachments, promptText, nil
-}
-
-// generateFilename creates a filename for an extracted attachment
-func generateFilename(index int, mediaType string) string {
-	ext := getExtensionForMediaType(mediaType)
-	return fmt.Sprintf("attachment_%d%s", index+1, ext)
 }
