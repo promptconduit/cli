@@ -370,6 +370,14 @@ type SerializedAttachment struct {
 
 // sendPromptAsyncUnix spawns a subprocess to send the prompt
 func (c *Client) sendPromptAsyncUnix(jsonData []byte) error {
+	// For large payloads (e.g., with images), use blocking mode to ensure
+	// all data is written to stdin before the process is released.
+	// The async subprocess stdin pipe gets truncated at ~64KB otherwise.
+	const maxAsyncSize = 32 * 1024 // 32KB threshold
+	if len(jsonData) > maxAsyncSize {
+		return c.sendPromptBlocking(jsonData)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return c.sendPromptBlocking(jsonData)
@@ -393,6 +401,13 @@ func (c *Client) sendPromptAsyncUnix(jsonData []byte) error {
 
 // sendPromptAsyncWindows spawns a subprocess on Windows
 func (c *Client) sendPromptAsyncWindows(jsonData []byte) error {
+	// For large payloads (e.g., with images), use blocking mode to ensure
+	// all data is written to stdin before the process completes.
+	const maxAsyncSize = 32 * 1024 // 32KB threshold
+	if len(jsonData) > maxAsyncSize {
+		return c.sendPromptBlocking(jsonData)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return c.sendPromptBlocking(jsonData)
