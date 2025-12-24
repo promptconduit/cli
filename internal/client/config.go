@@ -133,7 +133,8 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	return nil
 }
 
-// LoadConfig loads configuration from environment variables, falling back to config file
+// LoadConfig loads configuration from environment variables and config file
+// Environment variables take precedence over file config
 func LoadConfig() *Config {
 	cfg := &Config{
 		APIKey:         os.Getenv(EnvAPIKey),
@@ -142,22 +143,20 @@ func LoadConfig() *Config {
 		TimeoutSeconds: DefaultTimeoutSecs,
 	}
 
-	// If API key not set via env, try config file
-	if cfg.APIKey == "" {
-		if fc, err := LoadFileConfig(); err == nil && fc != nil {
-			if fileCfg := fc.GetCurrentConfig(); fileCfg != nil {
-				if cfg.APIKey == "" {
-					cfg.APIKey = fileCfg.APIKey
-				}
-				if cfg.APIURL == "" && fileCfg.APIURL != "" {
-					cfg.APIURL = fileCfg.APIURL
-				}
-				if !cfg.Debug && fileCfg.Debug {
-					cfg.Debug = true
-				}
-				if fileCfg.TimeoutSeconds > 0 {
-					cfg.TimeoutSeconds = fileCfg.TimeoutSeconds
-				}
+	// Always load file config and merge (env vars take precedence)
+	if fc, err := LoadFileConfig(); err == nil && fc != nil {
+		if fileCfg := fc.GetCurrentConfig(); fileCfg != nil {
+			if cfg.APIKey == "" {
+				cfg.APIKey = fileCfg.APIKey
+			}
+			if cfg.APIURL == "" && fileCfg.APIURL != "" {
+				cfg.APIURL = fileCfg.APIURL
+			}
+			if !cfg.Debug && fileCfg.Debug {
+				cfg.Debug = true
+			}
+			if fileCfg.TimeoutSeconds > 0 {
+				cfg.TimeoutSeconds = fileCfg.TimeoutSeconds
 			}
 		}
 	}
