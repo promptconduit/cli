@@ -13,9 +13,19 @@ PromptConduit CLI captures prompts, tool executions, and session events from var
 
 | Tool | Events Captured |
 |------|-----------------|
-| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions |
-| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files |
+| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments |
+| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
+
+### Attachment Support
+
+The CLI automatically extracts and uploads attachments from prompts:
+
+- **Images**: JPEG, PNG, GIF, WebP, SVG, BMP, TIFF, HEIC
+- **Documents**: PDF, Word (.doc/.docx), Excel (.xls/.xlsx), PowerPoint (.ppt/.pptx)
+- **Text**: Plain text, CSV, HTML, Markdown, JSON, XML
+
+Attachments are uploaded via multipart form data alongside the event metadata.
 
 ## Installation
 
@@ -245,6 +255,8 @@ Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typ
 - **Never blocks tools**: Hook always returns immediately with success
 - **Async sending**: Events are sent in a detached subprocess
 - **Rich context**: Captures git state (branch, commit, dirty files, etc.)
+- **Attachment extraction**: Parses transcripts to extract images and documents
+- **Multipart uploads**: Attachments sent efficiently via multipart form data
 - **Graceful degradation**: Unknown events are silently skipped
 
 ## Canonical Event Schema
@@ -274,7 +286,13 @@ All events are normalized to this schema:
   },
   "prompt": {
     "prompt": "User's prompt text",
-    "attachments": []
+    "attachments": [
+      {
+        "filename": "image_1.png",
+        "media_type": "image/png",
+        "type": "image"
+      }
+    ]
   }
 }
 ```
@@ -334,8 +352,9 @@ make snapshot
 │   │   ├── cursor.go      # Cursor adapter
 │   │   ├── gemini.go      # Gemini adapter
 │   │   └── registry.go    # Adapter registry
-│   ├── client/            # HTTP client
+│   ├── client/            # HTTP client with multipart upload
 │   ├── git/               # Git context extraction
+│   ├── transcript/        # Transcript parsing & attachment extraction
 │   └── schema/            # Event schemas
 ├── scripts/
 │   └── install.sh         # Curl installer
