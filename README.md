@@ -111,7 +111,76 @@ promptconduit version
 
 ## Configuration
 
+The CLI supports multiple configuration methods with the following priority:
+
+1. **Environment variables** (highest priority)
+2. **Config file** (`~/.config/promptconduit/config.json`)
+3. **Defaults** (lowest priority)
+
+### Config File (Recommended)
+
+The config file supports multiple environments, making it easy to switch between local development, staging, and production:
+
+```bash
+# Show current configuration
+promptconduit config show
+
+# Set API key for current environment
+promptconduit config set --api-key=sk_your_key_here
+
+# Set API URL (for local development)
+promptconduit config set --api-url=http://localhost:8787
+
+# Enable debug mode
+promptconduit config set --debug=true
+
+# Show config file path
+promptconduit config path
+```
+
+### Multi-Environment Setup
+
+Create environments for local, dev, and prod:
+
+```bash
+# Create local environment
+promptconduit config env add local \
+  --api-key=sk_local_key \
+  --api-url=http://localhost:8787 \
+  --debug
+
+# Create dev environment
+promptconduit config env add dev \
+  --api-key=sk_dev_key \
+  --api-url=https://dev-api.promptconduit.dev
+
+# Create prod environment
+promptconduit config env add prod \
+  --api-key=sk_prod_key \
+  --api-url=https://api.promptconduit.dev
+```
+
+### Switching Environments
+
+```bash
+# Switch to local development
+promptconduit config env use local
+
+# Switch to production
+promptconduit config env use prod
+
+# List all environments
+promptconduit config env list
+
+# Show current environment
+promptconduit config show
+```
+
+**Important**: After switching environments, start a **new Claude Code session** for the hooks to pick up the new configuration. The `--continue` flag preserves the old environment.
+
 ### Environment Variables
+
+Environment variables override config file settings:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -123,13 +192,17 @@ promptconduit version
 
 ### Debug Mode
 
-Enable debug mode to log hook activity and include raw events:
+Enable debug mode to log hook activity:
 
 ```bash
+# Via config
+promptconduit config set --debug=true
+
+# Via environment variable
 export PROMPTCONDUIT_DEBUG=1
 ```
 
-Debug logs are written to stderr and won't interfere with tool operations.
+Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typically `/var/folders/.../promptconduit-hook.log`).
 
 ## Architecture
 
