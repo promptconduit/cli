@@ -21,7 +21,7 @@ Supported tools:
   - Gemini CLI
 
 Get started:
-  1. Set your API key: export PROMPTCONDUIT_API_KEY="your-key"
+  1. Set your API key: promptconduit config set --api-key="your-key"
   2. Install hooks: promptconduit install claude-code
   3. Use your AI assistant as normal - events are captured automatically`,
 }

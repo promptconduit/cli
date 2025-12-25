@@ -27,7 +27,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("API Key: %s (configured)\n", client.MaskAPIKey(cfg.APIKey))
 	} else {
 		fmt.Println("API Key: Not configured")
-		fmt.Println("  Set with: export PROMPTCONDUIT_API_KEY=\"your-api-key\"")
+		fmt.Println("  Set with: promptconduit config set --api-key=\"your-api-key\"")
 	}
 
 	fmt.Printf("API URL: %s\n", cfg.APIURL)

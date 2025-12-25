@@ -132,32 +132,20 @@ configure_api_key() {
         return
     fi
 
-    info "API key provided. Add this to your shell profile:"
-    echo ""
-    echo "  export PROMPTCONDUIT_API_KEY=\"${api_key}\""
-    echo ""
+    info "Configuring API key..."
 
-    # Try to detect shell and config file
-    local shell_config=""
-    if [ -n "$ZSH_VERSION" ] || [ "$SHELL" = "/bin/zsh" ]; then
-        shell_config="$HOME/.zshrc"
-    elif [ -n "$BASH_VERSION" ] || [ "$SHELL" = "/bin/bash" ]; then
-        if [ -f "$HOME/.bash_profile" ]; then
-            shell_config="$HOME/.bash_profile"
-        else
-            shell_config="$HOME/.bashrc"
-        fi
-    fi
+    # Use the CLI to set the API key in the config file
+    if command -v promptconduit &> /dev/null; then
+        promptconduit config set --api-key="$api_key"
+        info "API key configured successfully!"
+    else
+        # Fallback: manually create config file if CLI not in PATH yet
+        local config_dir="$HOME/.config/promptconduit"
+        local config_file="$config_dir/config.json"
 
-    if [ -n "$shell_config" ]; then
-        read -p "Add to ${shell_config}? [y/N] " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            echo "" >> "$shell_config"
-            echo "# PromptConduit API Key" >> "$shell_config"
-            echo "export PROMPTCONDUIT_API_KEY=\"${api_key}\"" >> "$shell_config"
-            info "Added to ${shell_config}. Run 'source ${shell_config}' or restart your terminal."
-        fi
+        mkdir -p "$config_dir"
+        echo "{\"api_key\": \"$api_key\"}" > "$config_file"
+        info "API key saved to $config_file"
     fi
 }
 
@@ -199,7 +187,7 @@ main() {
     info "Installation complete!"
     echo ""
     echo "  Next steps:"
-    echo "    1. Set your API key: export PROMPTCONDUIT_API_KEY=\"your-key\""
+    echo "    1. Set your API key: promptconduit config set --api-key=\"your-key\""
     echo "    2. Install hooks:    promptconduit install claude-code"
     echo "    3. Check status:     promptconduit status"
     echo ""

@@ -67,13 +67,13 @@ Download the latest release for your platform from the [releases page](https://g
 
 Sign up at [promptconduit.dev](https://promptconduit.dev) and create an API key.
 
-### 2. Set your API key
+### 2. Configure your API key
 
 ```bash
-export PROMPTCONDUIT_API_KEY="your-api-key"
+promptconduit config set --api-key="your-api-key"
 ```
 
-Add this to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.) for persistence.
+This saves your key to `~/.config/promptconduit/config.json`.
 
 ### 3. Install hooks for your tool
 

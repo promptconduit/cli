@@ -24,7 +24,7 @@ Supported tools:
 The hooks will capture events from the tool and send them to the PromptConduit API.
 
 Prerequisites:
-  1. Set your API key: export PROMPTCONDUIT_API_KEY="your-key"
+  1. Set your API key: promptconduit config set --api-key="your-key"
   2. Have the target tool installed`,
 	Args: cobra.ExactArgs(1),
 	RunE: runInstall,
@@ -106,8 +106,8 @@ func installClaudeCode(exePath string) error {
 
 	fmt.Println("Successfully installed PromptConduit hooks for Claude Code")
 	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have set your API key:")
-	fmt.Println("  export PROMPTCONDUIT_API_KEY=\"your-api-key\"")
+	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
 }
@@ -188,8 +188,8 @@ func installCursor(exePath string) error {
 
 	fmt.Println("Successfully installed PromptConduit hooks for Cursor")
 	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have set your API key:")
-	fmt.Println("  export PROMPTCONDUIT_API_KEY=\"your-api-key\"")
+	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
 }
@@ -254,8 +254,8 @@ func installGemini(exePath string) error {
 
 	fmt.Println("Successfully installed PromptConduit hooks for Gemini CLI")
 	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have set your API key:")
-	fmt.Println("  export PROMPTCONDUIT_API_KEY=\"your-api-key\"")
+	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
 }
