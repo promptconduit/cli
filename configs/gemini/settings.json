@@ -6,7 +6,7 @@
           {
             "name": "promptconduit",
             "type": "command",
-            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "command": "promptconduit hook",
             "description": "Capture prompts for PromptConduit",
             "timeout": 5000
           }
@@ -20,7 +20,7 @@
           {
             "name": "promptconduit",
             "type": "command",
-            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "command": "promptconduit hook",
             "description": "Capture tool events for PromptConduit",
             "timeout": 5000
           }
@@ -34,7 +34,7 @@
           {
             "name": "promptconduit",
             "type": "command",
-            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "command": "promptconduit hook",
             "description": "Capture tool results for PromptConduit",
             "timeout": 5000
           }
@@ -47,7 +47,7 @@
           {
             "name": "promptconduit",
             "type": "command",
-            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "command": "promptconduit hook",
             "description": "Track session start for PromptConduit",
             "timeout": 5000
           }
@@ -60,7 +60,7 @@
           {
             "name": "promptconduit",
             "type": "command",
-            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "command": "promptconduit hook",
             "description": "Track session end for PromptConduit",
             "timeout": 5000
           }
