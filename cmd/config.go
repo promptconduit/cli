@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/spf13/cobra"
@@ -28,6 +29,11 @@ var configShowCmd = &cobra.Command{
 		cfg := client.LoadConfig()
 		fc, _ := client.LoadFileConfig()
 
+		// Check for partial env var override (common source of confusion)
+		envKey := os.Getenv(client.EnvAPIKey)
+		envURL := os.Getenv(client.EnvAPIURL)
+		hasPartialEnvOverride := envKey != "" && envURL == ""
+
 		cmd.Printf("API URL: %s\n", cfg.APIURL)
 		cmd.Printf("API Key: %s\n", client.MaskAPIKey(cfg.APIKey))
 		if cfg.Debug {
@@ -39,6 +45,14 @@ var configShowCmd = &cobra.Command{
 		// Show environment info if using environments
 		if fc != nil && fc.CurrentEnv != "" && len(fc.Environments) > 0 {
 			cmd.Printf("Env:     %s\n", fc.CurrentEnv)
+		}
+
+		// Warn about partial env var override
+		if hasPartialEnvOverride {
+			cmd.Println()
+			cmd.Println("⚠️  Warning: PROMPTCONDUIT_API_KEY is set but PROMPTCONDUIT_API_URL is not.")
+			cmd.Println("   This may cause a mismatch between API key and URL.")
+			cmd.Println("   Consider unsetting PROMPTCONDUIT_API_KEY or setting PROMPTCONDUIT_API_URL too.")
 		}
 
 		return nil
@@ -298,12 +312,30 @@ var configEnvRemoveCmd = &cobra.Command{
 	},
 }
 
+// configSetEnvCmd is a shortcut for switching environments
+var configSetEnvCmd = &cobra.Command{
+	Use:   "set-env <name>",
+	Short: "Switch to an environment (shortcut for 'config env use')",
+	Long: `Switch to a named environment configuration.
+
+Examples:
+  promptconduit config set-env local
+  promptconduit config set-env prod
+  promptconduit config set-env dev`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Delegate to the env use command
+		return configEnvUseCmd.RunE(cmd, args)
+	},
+}
+
 func init() {
 	// Main config commands
 	configCmd.AddCommand(configShowCmd)
 	configCmd.AddCommand(configSetCmd)
 	configCmd.AddCommand(configPathCmd)
 	configCmd.AddCommand(configEnvCmd)
+	configCmd.AddCommand(configSetEnvCmd) // Shortcut for env use
 
 	// config set flags
 	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "API key")

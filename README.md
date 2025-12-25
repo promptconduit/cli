@@ -173,11 +173,14 @@ promptconduit config env add prod \
 ### Switching Environments
 
 ```bash
-# Switch to local development
-promptconduit config env use local
+# Switch to local development (shortcut)
+promptconduit config set-env local
 
 # Switch to production
-promptconduit config env use prod
+promptconduit config set-env prod
+
+# Or use the full command
+promptconduit config env use local
 
 # List all environments
 promptconduit config env list
@@ -199,6 +202,8 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_DEBUG` | No | `false` | Enable debug logging |
 | `PROMPTCONDUIT_TIMEOUT` | No | `30` | HTTP timeout in seconds |
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
+
+> **Warning**: If using multi-environment config, avoid setting `PROMPTCONDUIT_API_KEY` in your shell profile. The env var will override the config file's environment-specific key, which can cause mismatches (e.g., prod API key with local URL). Use the config file exclusively or env vars exclusively, but not both.
 
 ### Debug Mode
 
