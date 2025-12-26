@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // Attachment represents an extracted file from the transcript (image, PDF, document, etc.)
@@ -108,22 +107,9 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 		return nil, nil
 	}
 
-	// Try extraction with retries - the hook may fire before the transcript is fully written
-	// Claude Code may take up to 500ms+ to write large images to the transcript
-	var attachments []Attachment
-	var err error
-	retryDelays := []int{100, 200, 300, 400} // Total wait: up to 1 second
-	for attempt := 0; attempt <= len(retryDelays); attempt++ {
-		attachments, err = extractAttachmentsFromFile(transcriptPath)
-		if err != nil || len(attachments) > 0 {
-			return attachments, err
-		}
-		// Wait before next attempt
-		if attempt < len(retryDelays) {
-			time.Sleep(time.Duration(retryDelays[attempt]) * time.Millisecond)
-		}
-	}
-	return attachments, err
+	// Extract attachments from file
+	// Note: Called from Stop hook when transcript is guaranteed to be fully written
+	return extractAttachmentsFromFile(transcriptPath)
 }
 
 // extractAttachmentsFromFile does the actual extraction work

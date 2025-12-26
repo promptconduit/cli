@@ -104,11 +104,12 @@ func processHookEvent() error {
 
 	apiClient := client.NewClient(cfg, Version)
 
-	// For UserPromptSubmit-type events, check for attachments using tool-specific extractor
-	if isPromptEvent(hookEvent) {
+	// For Stop events, extract and send any user attachments from the transcript
+	// The transcript is guaranteed to be fully written by the time Stop fires
+	if hookEvent == "Stop" {
 		extractor := transcript.GetExtractor(tool)
 		if extractor.SupportsAttachments() {
-			fileLog("Checking for attachments using %s extractor", tool)
+			fileLog("Stop hook: checking for attachments in transcript")
 			attachments, _, err := extractor.ExtractAttachments(nativeEvent)
 			if err != nil {
 				fileLog("Error extracting attachments: %v", err)
@@ -137,8 +138,8 @@ func processHookEvent() error {
 					fileLog("Attachment %d: %s (%s, %d bytes)", i+1, att.Filename, att.MediaType, len(att.Data))
 				}
 
-				// Create envelope with attachment metadata
-				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, gitCtx, envAttachments)
+				// Create envelope with attachment metadata (use UserPromptSubmit as event type for consistency)
+				env := envelope.NewWithAttachments(Version, tool, "UserPromptSubmit", rawInput, gitCtx, envAttachments)
 
 				// Send via multipart with binary attachments
 				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
@@ -146,7 +147,7 @@ func processHookEvent() error {
 				} else {
 					fileLog("Envelope with %d attachments sent successfully", len(attachments))
 				}
-				return nil
+				// Don't return - still send the Stop event below
 			}
 		}
 	}

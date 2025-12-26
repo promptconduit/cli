@@ -138,6 +138,7 @@ func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 		},
 		"PreToolUse":   makeMatcherHook(5000),
 		"PostToolUse":  makeMatcherHook(5000),
+		"Stop":         []map[string]interface{}{{"hooks": makeHook(5000)}}, // For attachment extraction
 		"SessionStart": []map[string]interface{}{{"hooks": makeHook(5000)}},
 		"SessionEnd":   []map[string]interface{}{{"hooks": makeHook(5000)}},
 	}
