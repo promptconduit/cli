@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Attachment represents an extracted file from the transcript (image, PDF, document, etc.)
@@ -107,6 +108,25 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 		return nil, nil
 	}
 
+	// Try extraction with retries - the hook may fire before the transcript is fully written
+	var attachments []Attachment
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		attachments, err = extractAttachmentsFromFile(transcriptPath)
+		if err != nil || len(attachments) > 0 {
+			return attachments, err
+		}
+		// Wait a bit for transcript to be written (50ms, 100ms)
+		if attempt < 2 {
+			sleepMs := (attempt + 1) * 50
+			time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+		}
+	}
+	return attachments, err
+}
+
+// extractAttachmentsFromFile does the actual extraction work
+func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 	file, err := os.Open(transcriptPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open transcript: %w", err)
