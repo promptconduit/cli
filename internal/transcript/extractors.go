@@ -3,6 +3,7 @@ package transcript
 import (
 	"encoding/base64"
 	"fmt"
+	"time"
 )
 
 // AttachmentExtractor defines the interface for tool-specific attachment extraction
@@ -42,13 +43,16 @@ func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interfac
 		return nil, "", nil
 	}
 
-	attachments, err := ExtractLatestAttachments(transcriptPath)
+	// Get the prompt text from the native event to match against transcript
+	// This is needed because the transcript may not be written yet when UserPromptSubmit fires
+	promptText, _ := nativeEvent["prompt"].(string)
+
+	// Use polling to wait for the transcript to contain the current message
+	// This handles the timing issue where the hook fires before transcript is updated
+	attachments, _, err := ExtractLatestAttachmentsWithWait(transcriptPath, promptText, 500*time.Millisecond)
 	if err != nil {
 		return nil, "", err
 	}
-
-	// Also extract the text prompt
-	promptText, _ := ExtractPromptText(transcriptPath)
 
 	return attachments, promptText, nil
 }

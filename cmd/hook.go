@@ -104,17 +104,17 @@ func processHookEvent() error {
 
 	apiClient := client.NewClient(cfg, Version)
 
-	// For Stop events, extract and send any user attachments from the transcript
-	// The transcript is guaranteed to be fully written by the time Stop fires
-	if hookEvent == "Stop" {
+	// For UserPromptSubmit events, check if the user's message includes attachments
+	// We extract from the transcript which should have the message by now
+	if hookEvent == "UserPromptSubmit" {
 		extractor := transcript.GetExtractor(tool)
 		if extractor.SupportsAttachments() {
-			fileLog("Stop hook: checking for attachments in transcript")
+			fileLog("UserPromptSubmit: checking for attachments in current message")
 			attachments, _, err := extractor.ExtractAttachments(nativeEvent)
 			if err != nil {
 				fileLog("Error extracting attachments: %v", err)
 			} else if len(attachments) > 0 {
-				fileLog("Found %d attachments, sending via unified envelope format", len(attachments))
+				fileLog("Found %d attachments in current message, sending with event", len(attachments))
 
 				// Build attachment metadata for envelope and binary data for multipart
 				envAttachments := make([]envelope.AttachmentMetadata, len(attachments))
@@ -138,21 +138,22 @@ func processHookEvent() error {
 					fileLog("Attachment %d: %s (%s, %d bytes)", i+1, att.Filename, att.MediaType, len(att.Data))
 				}
 
-				// Create envelope with attachment metadata (use UserPromptSubmit as event type for consistency)
-				env := envelope.NewWithAttachments(Version, tool, "UserPromptSubmit", rawInput, gitCtx, envAttachments)
+				// Create envelope with attachment metadata
+				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, gitCtx, envAttachments)
 
 				// Send via multipart with binary attachments
 				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
 					fileLog("Failed to send envelope with attachments: %v", err)
 				} else {
-					fileLog("Envelope with %d attachments sent successfully", len(attachments))
+					fileLog("UserPromptSubmit with %d attachments sent successfully", len(attachments))
 				}
-				// Don't return - still send the Stop event below
+				// Return here - we've sent the event with attachments, don't send again below
+				return nil
 			}
 		}
 	}
 
-	// Create envelope with raw payload (no images case)
+	// Create envelope with raw payload (no attachments case, or non-UserPromptSubmit events)
 	env := envelope.New(Version, tool, hookEvent, rawInput, gitCtx)
 
 	fileLog("Created envelope: tool=%s, event=%s", tool, hookEvent)
