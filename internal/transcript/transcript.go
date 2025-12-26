@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Attachment represents an extracted file from the transcript (image, PDF, document, etc.)
@@ -112,7 +113,165 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	return extractAttachmentsFromFile(transcriptPath)
 }
 
+// ExtractLatestAttachmentsWithWait polls the transcript file until it contains a message
+// with the expected prompt text, then extracts attachments from that message.
+// This handles the timing issue where UserPromptSubmit fires before the transcript is updated.
+// Returns attachments and whether the expected prompt was found.
+func ExtractLatestAttachmentsWithWait(transcriptPath, expectedPrompt string, timeout time.Duration) ([]Attachment, bool, error) {
+	if transcriptPath == "" {
+		return nil, false, nil
+	}
+
+	// If no expected prompt provided, fall back to immediate extraction
+	if expectedPrompt == "" {
+		attachments, err := ExtractLatestAttachments(transcriptPath)
+		return attachments, true, err
+	}
+
+	pollInterval := 50 * time.Millisecond
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		// Check if transcript exists
+		if _, err := os.Stat(transcriptPath); os.IsNotExist(err) {
+			time.Sleep(pollInterval)
+			continue
+		}
+
+		// Try to find the expected prompt in the transcript
+		found, attachments, err := extractAttachmentsForPrompt(transcriptPath, expectedPrompt)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
+			return attachments, true, nil
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	// Timeout reached - try one final extraction anyway
+	attachments, err := ExtractLatestAttachments(transcriptPath)
+	return attachments, false, err
+}
+
+// extractAttachmentsForPrompt reads the transcript and looks for a user message
+// containing the expected prompt text. If found, extracts attachments from that message.
+// Returns (found, attachments, error)
+func extractAttachmentsForPrompt(transcriptPath, expectedPrompt string) (bool, []Attachment, error) {
+	file, err := os.Open(transcriptPath)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to open transcript: %w", err)
+	}
+	defer file.Close()
+
+	var matchingMessage *MessageWithContent
+	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024) // 10MB max line size
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var msg TranscriptMessage
+		if err := json.Unmarshal(line, &msg); err != nil {
+			continue
+		}
+
+		// Look for user messages
+		if msg.Type == "user" || msg.Type == "human" || msg.Role == "user" {
+			var content MessageWithContent
+			var rawContent []json.RawMessage
+
+			if msg.Message != nil {
+				if err := json.Unmarshal(msg.Message, &content); err == nil && len(content.Content) > 0 {
+					rawContent = content.Content
+				}
+			} else if msg.Content != nil {
+				content.Role = "user"
+				if err := json.Unmarshal(msg.Content, &rawContent); err == nil {
+					content.Content = rawContent
+				}
+			}
+
+			// Only consider actual user prompts (not tool_result messages)
+			if !isActualUserPrompt(rawContent) {
+				continue
+			}
+
+			// Check if this message contains the expected prompt text
+			for _, item := range rawContent {
+				var textContent struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if err := json.Unmarshal(item, &textContent); err == nil && textContent.Type == "text" {
+					// Check if this text matches (or contains) the expected prompt
+					// Use contains to handle cases where the prompt might be slightly different
+					if strings.Contains(textContent.Text, expectedPrompt) || strings.Contains(expectedPrompt, textContent.Text) {
+						matchingMessage = &content
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return false, nil, fmt.Errorf("error reading transcript: %w", err)
+	}
+
+	// Message with expected prompt not found yet
+	if matchingMessage == nil {
+		return false, nil, nil
+	}
+
+	// Found the message - check if it has attachments
+	if !hasAttachmentContent(matchingMessage.Content) {
+		return true, nil, nil // Found prompt but no attachments
+	}
+
+	// Extract attachments from the matching message
+	var attachments []Attachment
+	counts := make(map[string]int)
+
+	for _, contentItem := range matchingMessage.Content {
+		var att AttachmentContent
+		if err := json.Unmarshal(contentItem, &att); err != nil {
+			continue
+		}
+
+		if !isAttachmentType(att.Type) || att.Source.Type != "base64" || att.Source.Data == "" {
+			continue
+		}
+
+		data, err := base64.StdEncoding.DecodeString(att.Source.Data)
+		if err != nil {
+			continue
+		}
+
+		counts[att.Type]++
+		ext := getExtensionForMediaType(att.Source.MediaType)
+		filename := fmt.Sprintf("%s_%d%s", att.Type, counts[att.Type], ext)
+
+		attachments = append(attachments, Attachment{
+			Data:      data,
+			MediaType: att.Source.MediaType,
+			Filename:  filename,
+			Type:      att.Type,
+		})
+	}
+
+	return true, attachments, nil
+}
+
 // extractAttachmentsFromFile does the actual extraction work
+// IMPORTANT: This extracts attachments ONLY from the LAST user message in the transcript.
+// If the last message doesn't have attachments, returns empty (doesn't search for older messages).
+// This ensures we only capture attachments from the current prompt, not re-capture old ones.
 func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 	file, err := os.Open(transcriptPath)
 	if err != nil {
@@ -120,10 +279,10 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 	}
 	defer file.Close()
 
-	// Read all lines to find the last user message WITH ATTACHMENTS
-	// Claude Code writes image metadata as a separate text-only message after the actual image,
-	// so we need to specifically look for messages that contain attachment content types
-	var lastUserMessageWithAttachments *MessageWithContent
+	// Read all lines to find the LAST user message (regardless of whether it has attachments)
+	// We only extract attachments if the LAST message contains them - this prevents
+	// re-extracting old attachments on every hook event
+	var lastUserMessage *MessageWithContent
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large messages with attachments
 	buf := make([]byte, 0, 64*1024)
@@ -147,10 +306,9 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 			var content MessageWithContent
 			if msg.Message != nil {
 				if err := json.Unmarshal(msg.Message, &content); err == nil && len(content.Content) > 0 {
-					// Only consider this if it's an actual user prompt (not tool_result)
-					// AND it contains attachment content (image, document, file)
-					if isActualUserPrompt(content.Content) && hasAttachmentContent(content.Content) {
-						lastUserMessageWithAttachments = &content
+					// Only consider actual user prompts (not tool_result messages)
+					if isActualUserPrompt(content.Content) {
+						lastUserMessage = &content
 					}
 				}
 			} else if msg.Content != nil {
@@ -158,11 +316,10 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 				content.Role = "user"
 				var contentArray []json.RawMessage
 				if err := json.Unmarshal(msg.Content, &contentArray); err == nil {
-					// Only consider this if it's an actual user prompt (not tool_result)
-					// AND it contains attachment content
-					if isActualUserPrompt(contentArray) && hasAttachmentContent(contentArray) {
+					// Only consider actual user prompts (not tool_result messages)
+					if isActualUserPrompt(contentArray) {
 						content.Content = contentArray
-						lastUserMessageWithAttachments = &content
+						lastUserMessage = &content
 					}
 				}
 			}
@@ -173,12 +330,16 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 		return nil, fmt.Errorf("error reading transcript: %w", err)
 	}
 
-	if lastUserMessageWithAttachments == nil || len(lastUserMessageWithAttachments.Content) == 0 {
+	// No user messages found
+	if lastUserMessage == nil || len(lastUserMessage.Content) == 0 {
 		return nil, nil
 	}
 
-	// Use the message with attachments
-	lastUserMessage := lastUserMessageWithAttachments
+	// Check if the LAST message has attachments - if not, return empty
+	// This is the key change: we don't search backward for older messages with attachments
+	if !hasAttachmentContent(lastUserMessage.Content) {
+		return nil, nil
+	}
 
 	// Extract all attachments from the content array
 	var attachments []Attachment
