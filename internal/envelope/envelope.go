@@ -24,6 +24,19 @@ type RawEventEnvelope struct {
 
 	// Raw native payload (passed through untouched)
 	NativePayload json.RawMessage `json:"native_payload"`
+
+	// Attachment metadata (binary data sent separately in multipart)
+	Attachments []AttachmentMetadata `json:"attachments,omitempty"`
+}
+
+// AttachmentMetadata describes an attachment sent with the envelope.
+// The actual binary data is sent as a separate multipart field.
+type AttachmentMetadata struct {
+	AttachmentID string `json:"attachment_id"` // UUID for correlation
+	Filename     string `json:"filename"`
+	ContentType  string `json:"content_type"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Type         string `json:"type"` // "image", "document", "file"
 }
 
 // GitContext contains git repository state at event time.
@@ -56,6 +69,20 @@ func New(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitConte
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
 		Git:             git,
 		NativePayload:   nativePayload,
+	}
+}
+
+// NewWithAttachments creates a new RawEventEnvelope with attachment metadata
+func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext, attachments []AttachmentMetadata) *RawEventEnvelope {
+	return &RawEventEnvelope{
+		EnvelopeVersion: "1.0",
+		CliVersion:      cliVersion,
+		Tool:            tool,
+		HookEvent:       hookEvent,
+		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
+		Git:             git,
+		NativePayload:   nativePayload,
+		Attachments:     attachments,
 	}
 }
 

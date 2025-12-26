@@ -48,6 +48,142 @@ func (c *Client) SendEnvelope(env *envelope.RawEventEnvelope) *APIResponse {
 	return c.sendRequest("/v1/events/raw", env)
 }
 
+// AttachmentData holds attachment binary data with its metadata
+type AttachmentData struct {
+	AttachmentID string
+	Filename     string
+	ContentType  string
+	Data         []byte
+}
+
+// SendEnvelopeWithAttachments sends an envelope with binary attachments via multipart
+func (c *Client) SendEnvelopeWithAttachments(env *envelope.RawEventEnvelope, attachments []AttachmentData) *APIResponse {
+	// Create multipart body
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	// Add envelope as JSON field
+	envJSON, err := env.ToJSON()
+	if err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to serialize envelope: %v", err),
+		}
+	}
+
+	if err := writer.WriteField("envelope", string(envJSON)); err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to write envelope field: %v", err),
+		}
+	}
+
+	// Add attachments with format: attachment[uuid]
+	for _, att := range attachments {
+		fieldName := fmt.Sprintf("attachment[%s]", att.AttachmentID)
+		part, err := writer.CreateFormFile(fieldName, att.Filename)
+		if err != nil {
+			continue
+		}
+		part.Write(att.Data)
+	}
+
+	if err := writer.Close(); err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to close multipart writer: %v", err),
+		}
+	}
+
+	// Create request to same endpoint but with multipart content type
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/events/raw", body)
+	if err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to create request: %v", err),
+		}
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+c.config.APIKey)
+	req.Header.Set("User-Agent", fmt.Sprintf("PromptConduit-CLI/%s", c.version))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("request failed: %v", err),
+		}
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	result := &APIResponse{
+		StatusCode: resp.StatusCode,
+		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,
+	}
+
+	if len(respBody) > 0 {
+		var data map[string]interface{}
+		if err := json.Unmarshal(respBody, &data); err == nil {
+			result.Data = data
+		}
+	}
+
+	if !result.Success {
+		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	return result
+}
+
+// SerializedEnvelopeWithAttachments is used for JSON serialization of envelope + attachments
+type SerializedEnvelopeWithAttachments struct {
+	Envelope    *envelope.RawEventEnvelope `json:"envelope"`
+	Attachments []AttachmentData           `json:"attachments"`
+}
+
+// SendEnvelopeWithAttachmentsAsync sends an envelope with attachments asynchronously
+func (c *Client) SendEnvelopeWithAttachmentsAsync(env *envelope.RawEventEnvelope, attachments []AttachmentData) error {
+	data := SerializedEnvelopeWithAttachments{
+		Envelope:    env,
+		Attachments: attachments,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to serialize envelope with attachments: %w", err)
+	}
+
+	// For payloads with attachments (typically images), always use blocking mode
+	// since subprocess stdin has ~64KB limit and images are often larger
+	return c.sendEnvelopeWithAttachmentsBlocking(jsonData)
+}
+
+// sendEnvelopeWithAttachmentsBlocking deserializes and sends via multipart
+func (c *Client) sendEnvelopeWithAttachmentsBlocking(jsonData []byte) error {
+	var data SerializedEnvelopeWithAttachments
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return err
+	}
+
+	result := c.SendEnvelopeWithAttachments(data.Envelope, data.Attachments)
+	if !result.Success {
+		return fmt.Errorf("API error: %s", result.Error)
+	}
+	return nil
+}
+
+// SendEnvelopeWithAttachmentsDirect sends serialized envelope with attachments directly
+// (used by async subprocess)
+func (c *Client) SendEnvelopeWithAttachmentsDirect(jsonData []byte) error {
+	return c.sendEnvelopeWithAttachmentsBlocking(jsonData)
+}
+
 // SendEnvelopeAsync sends an envelope asynchronously without blocking
 func (c *Client) SendEnvelopeAsync(env *envelope.RawEventEnvelope) error {
 	envJSON, err := env.ToJSON()

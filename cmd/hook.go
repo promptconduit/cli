@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/git"
@@ -108,23 +109,42 @@ func processHookEvent() error {
 		extractor := transcript.GetExtractor(tool)
 		if extractor.SupportsAttachments() {
 			fileLog("Checking for attachments using %s extractor", tool)
-			attachments, extractedPrompt, err := extractor.ExtractAttachments(nativeEvent)
+			attachments, _, err := extractor.ExtractAttachments(nativeEvent)
 			if err != nil {
 				fileLog("Error extracting attachments: %v", err)
 			} else if len(attachments) > 0 {
-				fileLog("Found %d attachments", len(attachments))
-				// Send as multipart with attachments
-				promptText := getPromptText(nativeEvent)
-				if promptText == "" && extractedPrompt != "" {
-					promptText = extractedPrompt
-				}
-				sessionID := getSessionID(nativeEvent)
+				fileLog("Found %d attachments, sending via unified envelope format", len(attachments))
 
-				metadata := buildPromptMetadata(tool, promptText, sessionID, cwd, gitCtx)
-				if err := apiClient.SendPromptWithAttachmentsAsync(metadata, attachments); err != nil {
-					fileLog("Failed to send prompt with attachments: %v", err)
+				// Build attachment metadata for envelope and binary data for multipart
+				envAttachments := make([]envelope.AttachmentMetadata, len(attachments))
+				attachmentData := make([]client.AttachmentData, len(attachments))
+
+				for i, att := range attachments {
+					attachmentID := uuid.New().String()
+					envAttachments[i] = envelope.AttachmentMetadata{
+						AttachmentID: attachmentID,
+						Filename:     att.Filename,
+						ContentType:  att.MediaType,
+						SizeBytes:    int64(len(att.Data)),
+						Type:         att.Type,
+					}
+					attachmentData[i] = client.AttachmentData{
+						AttachmentID: attachmentID,
+						Filename:     att.Filename,
+						ContentType:  att.MediaType,
+						Data:         att.Data,
+					}
+					fileLog("Attachment %d: %s (%s, %d bytes)", i+1, att.Filename, att.MediaType, len(att.Data))
+				}
+
+				// Create envelope with attachment metadata
+				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, gitCtx, envAttachments)
+
+				// Send via multipart with binary attachments
+				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
+					fileLog("Failed to send envelope with attachments: %v", err)
 				} else {
-					fileLog("Prompt with attachments queued for async send")
+					fileLog("Envelope with %d attachments sent successfully", len(attachments))
 				}
 				return nil
 			}
