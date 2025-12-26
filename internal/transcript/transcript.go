@@ -81,8 +81,22 @@ func isAttachmentType(contentType string) bool {
 	}
 }
 
+// hasAttachmentContent checks if the content array contains any attachment types
+func hasAttachmentContent(content []json.RawMessage) bool {
+	for _, item := range content {
+		var check ContentTypeCheck
+		if err := json.Unmarshal(item, &check); err != nil {
+			continue
+		}
+		if isAttachmentType(check.Type) {
+			return true
+		}
+	}
+	return false
+}
+
 // ExtractLatestAttachments reads the transcript file and extracts all attachments
-// (images, documents, PDFs, files) from the most recent user message
+// (images, documents, PDFs, files) from the most recent user message that contains attachments
 func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	if transcriptPath == "" {
 		return nil, nil
@@ -99,8 +113,10 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	}
 	defer file.Close()
 
-	// Read all lines to find the last user message with attachments
-	var lastUserMessage *MessageWithContent
+	// Read all lines to find the last user message WITH ATTACHMENTS
+	// Claude Code writes image metadata as a separate text-only message after the actual image,
+	// so we need to specifically look for messages that contain attachment content types
+	var lastUserMessageWithAttachments *MessageWithContent
 	scanner := bufio.NewScanner(file)
 	// Increase buffer size for large messages with attachments
 	buf := make([]byte, 0, 64*1024)
@@ -125,8 +141,9 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 			if msg.Message != nil {
 				if err := json.Unmarshal(msg.Message, &content); err == nil && len(content.Content) > 0 {
 					// Only consider this if it's an actual user prompt (not tool_result)
-					if isActualUserPrompt(content.Content) {
-						lastUserMessage = &content
+					// AND it contains attachment content (image, document, file)
+					if isActualUserPrompt(content.Content) && hasAttachmentContent(content.Content) {
+						lastUserMessageWithAttachments = &content
 					}
 				}
 			} else if msg.Content != nil {
@@ -135,9 +152,10 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 				var contentArray []json.RawMessage
 				if err := json.Unmarshal(msg.Content, &contentArray); err == nil {
 					// Only consider this if it's an actual user prompt (not tool_result)
-					if isActualUserPrompt(contentArray) {
+					// AND it contains attachment content
+					if isActualUserPrompt(contentArray) && hasAttachmentContent(contentArray) {
 						content.Content = contentArray
-						lastUserMessage = &content
+						lastUserMessageWithAttachments = &content
 					}
 				}
 			}
@@ -148,9 +166,12 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 		return nil, fmt.Errorf("error reading transcript: %w", err)
 	}
 
-	if lastUserMessage == nil || len(lastUserMessage.Content) == 0 {
+	if lastUserMessageWithAttachments == nil || len(lastUserMessageWithAttachments.Content) == 0 {
 		return nil, nil
 	}
+
+	// Use the message with attachments
+	lastUserMessage := lastUserMessageWithAttachments
 
 	// Extract all attachments from the content array
 	var attachments []Attachment
