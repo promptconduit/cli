@@ -109,17 +109,18 @@ func ExtractLatestAttachments(transcriptPath string) ([]Attachment, error) {
 	}
 
 	// Try extraction with retries - the hook may fire before the transcript is fully written
+	// Claude Code may take up to 500ms+ to write large images to the transcript
 	var attachments []Attachment
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	retryDelays := []int{100, 200, 300, 400} // Total wait: up to 1 second
+	for attempt := 0; attempt <= len(retryDelays); attempt++ {
 		attachments, err = extractAttachmentsFromFile(transcriptPath)
 		if err != nil || len(attachments) > 0 {
 			return attachments, err
 		}
-		// Wait a bit for transcript to be written (50ms, 100ms)
-		if attempt < 2 {
-			sleepMs := (attempt + 1) * 50
-			time.Sleep(time.Duration(sleepMs) * time.Millisecond)
+		// Wait before next attempt
+		if attempt < len(retryDelays) {
+			time.Sleep(time.Duration(retryDelays[attempt]) * time.Millisecond)
 		}
 	}
 	return attachments, err
