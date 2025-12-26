@@ -175,8 +175,11 @@ func detectTool(event map[string]interface{}) string {
 		return tool
 	}
 
-	// Claude Code: has hook_event_name field
+	// Claude Code: has hook_event_name or hook_event field
 	if _, ok := event["hook_event_name"]; ok {
+		return "claude-code"
+	}
+	if _, ok := event["hook_event"]; ok {
 		return "claude-code"
 	}
 
@@ -200,8 +203,11 @@ func detectTool(event map[string]interface{}) string {
 
 // getHookEventName extracts the hook event name from native event
 func getHookEventName(event map[string]interface{}) string {
-	// Claude Code uses hook_event_name
+	// Claude Code uses hook_event_name or hook_event
 	if name, ok := event["hook_event_name"].(string); ok {
+		return name
+	}
+	if name, ok := event["hook_event"].(string); ok {
 		return name
 	}
 
