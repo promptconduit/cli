@@ -49,7 +49,7 @@ func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interfac
 
 	// Use polling to wait for the transcript to contain the current message
 	// This handles the timing issue where the hook fires before transcript is updated
-	attachments, _, err := ExtractLatestAttachmentsWithWait(transcriptPath, promptText, 500*time.Millisecond)
+	attachments, _, err := ExtractLatestAttachmentsWithWait(transcriptPath, promptText, 1500*time.Millisecond)
 	if err != nil {
 		return nil, "", err
 	}
