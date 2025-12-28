@@ -115,9 +115,46 @@ promptconduit status
 # Test API connectivity
 promptconduit test
 
+# Sync transcripts (manual)
+promptconduit sync [tool] [flags]
+
 # Show version
 promptconduit version
 ```
+
+### Sync Command
+
+The `sync` command uploads historical conversation transcripts to the platform. **This is a manual process** - there is no automatic syncing of transcripts.
+
+```bash
+# Sync all supported tools
+promptconduit sync
+
+# Sync only Claude Code transcripts
+promptconduit sync claude-code
+
+# Preview what would be synced (no uploads)
+promptconduit sync --dry-run
+
+# Force re-sync already synced files
+promptconduit sync --force
+
+# Only sync transcripts newer than a date
+promptconduit sync --since 2025-01-01
+
+# Limit to N most recent transcripts
+promptconduit sync --limit 10
+```
+
+**How it works:**
+- Discovers JSONL transcript files from `~/.claude/projects/`
+- Extracts conversation metadata, messages, and git context
+- Tracks synced files in `~/.config/promptconduit/sync_state.json` to avoid duplicates
+- Use `--dry-run` first to preview, then run without flags to sync
+
+**Hooks vs Sync:**
+- **Hooks** capture events in real-time during AI tool usage (automatic after installation)
+- **Sync** uploads historical transcripts (must be run manually when needed)
 
 ## Configuration
 
@@ -349,7 +386,9 @@ make snapshot
 │   ├── uninstall.go       # Uninstall command
 │   ├── status.go          # Status command
 │   ├── test.go            # Test command
-│   └── hook.go            # Hook entry point
+│   ├── hook.go            # Hook entry point
+│   ├── config.go          # Config management
+│   └── sync.go            # Transcript sync command
 ├── internal/
 │   ├── adapters/          # Tool-specific adapters
 │   │   ├── adapter.go     # Base adapter interface
@@ -359,6 +398,10 @@ make snapshot
 │   │   └── registry.go    # Adapter registry
 │   ├── client/            # HTTP client with multipart upload
 │   ├── git/               # Git context extraction
+│   ├── sync/              # Transcript sync and parsing
+│   │   ├── claudecode.go  # Claude Code transcript parser
+│   │   ├── state.go       # Sync state management
+│   │   └── types.go       # Parser interface and types
 │   ├── transcript/        # Transcript parsing & attachment extraction
 │   └── schema/            # Event schemas
 ├── scripts/
