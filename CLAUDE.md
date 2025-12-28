@@ -35,9 +35,9 @@ cli/
 └── main.go           # Entry point
 ```
 
-## Sync Command
+## Sync Command (Manual Only)
 
-The `sync` command uploads AI assistant conversation transcripts to the platform:
+The `sync` command manually uploads AI assistant conversation transcripts to the platform. **There is no automatic sync** - you must run this command when you want to upload transcripts.
 
 ```bash
 promptconduit sync              # Sync all supported tools
@@ -48,7 +48,18 @@ promptconduit sync --since 2025-01-01  # Filter by date
 promptconduit sync --limit 10   # Sync only N most recent
 ```
 
-Sync state is tracked in `~/.config/promptconduit/sync_state.json` to avoid duplicate uploads.
+### How Sync Works
+
+1. Discovers transcript files from `~/.claude/projects/**/*.jsonl`
+2. Parses each file to extract conversation metadata and messages
+3. Calculates SHA256 hash to detect changes
+4. Uploads to platform via `POST /v1/transcripts/sync`
+5. Tracks synced files in `~/.config/promptconduit/sync_state.json`
+
+### Hooks vs Sync
+
+- **Hooks** capture events in **real-time** during AI tool usage (no manual action needed)
+- **Sync** uploads **historical transcripts** (must be run manually)
 
 ## Key Design Decisions
 

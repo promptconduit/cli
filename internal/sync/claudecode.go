@@ -253,20 +253,30 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 		json.Unmarshal(cwdRaw, &cwd)
 	}
 
-	// Try to extract content from message.content array
+	// Try to extract content from message.content
 	if msgRaw, ok := raw["message"]; ok {
 		var msg struct {
-			Content []json.RawMessage `json:"content"`
+			Content json.RawMessage `json:"content"`
 		}
-		if err := json.Unmarshal(msgRaw, &msg); err == nil {
-			for _, c := range msg.Content {
-				var textContent struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				}
-				if err := json.Unmarshal(c, &textContent); err == nil && textContent.Type == "text" {
-					content = textContent.Text
-					break
+		if err := json.Unmarshal(msgRaw, &msg); err == nil && msg.Content != nil {
+			// First, try parsing content as a string (user prompts)
+			var contentStr string
+			if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
+				content = contentStr
+			} else {
+				// If not a string, try parsing as an array (tool results)
+				var contentArray []json.RawMessage
+				if err := json.Unmarshal(msg.Content, &contentArray); err == nil {
+					for _, c := range contentArray {
+						var textContent struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						}
+						if err := json.Unmarshal(c, &textContent); err == nil && textContent.Type == "text" {
+							content = textContent.Text
+							break
+						}
+					}
 				}
 			}
 		}
@@ -275,16 +285,23 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 	// Fallback: try direct content field
 	if content == "" {
 		if contentRaw, ok := raw["content"]; ok {
-			var contentArray []json.RawMessage
-			if err := json.Unmarshal(contentRaw, &contentArray); err == nil {
-				for _, c := range contentArray {
-					var textContent struct {
-						Type string `json:"type"`
-						Text string `json:"text"`
-					}
-					if err := json.Unmarshal(c, &textContent); err == nil && textContent.Type == "text" {
-						content = textContent.Text
-						break
+			// Try as string first
+			var contentStr string
+			if err := json.Unmarshal(contentRaw, &contentStr); err == nil {
+				content = contentStr
+			} else {
+				// Try as array
+				var contentArray []json.RawMessage
+				if err := json.Unmarshal(contentRaw, &contentArray); err == nil {
+					for _, c := range contentArray {
+						var textContent struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						}
+						if err := json.Unmarshal(c, &textContent); err == nil && textContent.Type == "text" {
+							content = textContent.Text
+							break
+						}
 					}
 				}
 			}
