@@ -242,6 +242,8 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 	var uuid string
 	var parentUUID string
 	var cwd string
+	var toolUseID string
+	isToolResult := false
 
 	if uuidRaw, ok := raw["uuid"]; ok {
 		json.Unmarshal(uuidRaw, &uuid)
@@ -264,17 +266,46 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 			if err := json.Unmarshal(msg.Content, &contentStr); err == nil {
 				content = contentStr
 			} else {
-				// If not a string, try parsing as an array (tool results)
+				// If not a string, try parsing as an array (tool results, text blocks)
 				var contentArray []json.RawMessage
 				if err := json.Unmarshal(msg.Content, &contentArray); err == nil {
 					for _, c := range contentArray {
-						var textContent struct {
-							Type string `json:"type"`
-							Text string `json:"text"`
+						var item struct {
+							Type      string          `json:"type"`
+							Text      string          `json:"text"`
+							Content   json.RawMessage `json:"content"`
+							ToolUseID string          `json:"tool_use_id"`
 						}
-						if err := json.Unmarshal(c, &textContent); err == nil && textContent.Type == "text" {
-							content = textContent.Text
-							break
+						if err := json.Unmarshal(c, &item); err == nil {
+							switch item.Type {
+							case "text":
+								content = item.Text
+							case "tool_result":
+								isToolResult = true
+								toolUseID = item.ToolUseID
+								// tool_result content can be string or array
+								var toolContent string
+								if err := json.Unmarshal(item.Content, &toolContent); err == nil {
+									content = toolContent
+								} else {
+									// Try as array of text objects
+									var textArray []struct {
+										Type string `json:"type"`
+										Text string `json:"text"`
+									}
+									if err := json.Unmarshal(item.Content, &textArray); err == nil {
+										for _, t := range textArray {
+											if t.Type == "text" {
+												content = t.Text
+												break
+											}
+										}
+									}
+								}
+							}
+							if content != "" {
+								break
+							}
 						}
 					}
 				}
@@ -308,16 +339,25 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 		}
 	}
 
+	// Determine message type: "user" for human prompts, "tool_result" for tool responses
+	msgType := "user"
+	role := "user"
+	if isToolResult {
+		msgType = "tool_result"
+		role = "tool"
+	}
+
 	if uuid == "" {
-		uuid = fmt.Sprintf("user-%d", sequence)
+		uuid = fmt.Sprintf("%s-%d", msgType, sequence)
 	}
 
 	return &ParsedMessage{
 		UUID:           uuid,
 		ParentUUID:     parentUUID,
-		Type:           "user",
-		Role:           "user",
+		Type:           msgType,
+		Role:           role,
 		Content:        content,
+		ToolUseID:      toolUseID,
 		Timestamp:      timestamp,
 		SequenceNumber: sequence,
 		Cwd:            cwd,
