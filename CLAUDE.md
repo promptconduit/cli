@@ -24,15 +24,31 @@ make release          # Create release (requires GITHUB_TOKEN)
 
 ```
 cli/
-├── cmd/              # CLI commands (install, uninstall, status, test, hook, config)
+├── cmd/              # CLI commands (install, uninstall, status, test, hook, config, sync)
 ├── internal/
 │   ├── client/       # HTTP client, config loading
 │   ├── envelope/     # Raw event envelope types
 │   ├── git/          # Git context extraction
+│   ├── sync/         # Transcript sync and parsing (Claude Code parser, state management)
 │   └── transcript/   # Transcript parsing and attachment extraction
 ├── scripts/          # Install scripts
 └── main.go           # Entry point
 ```
+
+## Sync Command
+
+The `sync` command uploads AI assistant conversation transcripts to the platform:
+
+```bash
+promptconduit sync              # Sync all supported tools
+promptconduit sync claude-code  # Sync only Claude Code
+promptconduit sync --dry-run    # Preview what would be synced
+promptconduit sync --force      # Re-sync already synced files
+promptconduit sync --since 2025-01-01  # Filter by date
+promptconduit sync --limit 10   # Sync only N most recent
+```
+
+Sync state is tracked in `~/.config/promptconduit/sync_state.json` to avoid duplicate uploads.
 
 ## Key Design Decisions
 

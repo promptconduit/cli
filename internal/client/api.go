@@ -594,3 +594,96 @@ func (c *Client) sendPromptBlocking(jsonData []byte) error {
 func (c *Client) SendPromptDirect(jsonData []byte) error {
 	return c.sendPromptBlocking(jsonData)
 }
+
+// TranscriptSyncRequest represents the request body for syncing a transcript
+type TranscriptSyncRequest struct {
+	Conversation TranscriptConversation `json:"conversation"`
+	Messages     []TranscriptMessage    `json:"messages"`
+}
+
+// TranscriptConversation represents conversation metadata for sync
+type TranscriptConversation struct {
+	SessionID        string `json:"session_id"`
+	Tool             string `json:"tool"`
+	Title            string `json:"title,omitempty"`
+	Summary          string `json:"summary,omitempty"`
+	StartedAt        string `json:"started_at"`
+	EndedAt          string `json:"ended_at,omitempty"`
+	RepoName         string `json:"repo_name,omitempty"`
+	Branch           string `json:"branch,omitempty"`
+	WorkingDirectory string `json:"working_directory,omitempty"`
+	PrimaryModel     string `json:"primary_model,omitempty"`
+	CLIVersion       string `json:"cli_version,omitempty"`
+	SourceFilePath   string `json:"source_file_path,omitempty"`
+	SourceFileHash   string `json:"source_file_hash"`
+}
+
+// TranscriptMessage represents a message for sync
+type TranscriptMessage struct {
+	UUID              string `json:"uuid"`
+	ParentUUID        string `json:"parent_uuid,omitempty"`
+	Type              string `json:"type"`
+	Role              string `json:"role,omitempty"`
+	Content           string `json:"content,omitempty"`
+	Model             string `json:"model,omitempty"`
+	Thinking          string `json:"thinking,omitempty"`
+	ToolName          string `json:"tool_name,omitempty"`
+	ToolUseID         string `json:"tool_use_id,omitempty"`
+	ToolInput         string `json:"tool_input,omitempty"`
+	ToolResult        string `json:"tool_result,omitempty"`
+	ToolResultSuccess *bool  `json:"tool_result_success,omitempty"`
+	Timestamp         string `json:"timestamp"`
+	SequenceNumber    int    `json:"sequence_number"`
+	GitBranch         string `json:"git_branch,omitempty"`
+	GitCommit         string `json:"git_commit,omitempty"`
+	Cwd               string `json:"cwd,omitempty"`
+	AttachmentCount   int    `json:"attachment_count,omitempty"`
+}
+
+// TranscriptSyncResponse represents the API response for sync
+type TranscriptSyncResponse struct {
+	ConversationID string `json:"conversation_id"`
+	MessageCount   int    `json:"message_count"`
+	Status         string `json:"status"` // created, updated, skipped
+	Message        string `json:"message,omitempty"`
+}
+
+// SyncTranscript sends a transcript to the API
+func (c *Client) SyncTranscript(req *TranscriptSyncRequest) (*TranscriptSyncResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Longer timeout for large transcripts
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var syncResp TranscriptSyncResponse
+	if err := json.Unmarshal(body, &syncResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &syncResp, nil
+}
