@@ -687,3 +687,60 @@ func (c *Client) SyncTranscript(req *TranscriptSyncRequest) (*TranscriptSyncResp
 
 	return &syncResp, nil
 }
+
+// RawTranscriptSyncRequest represents the request body for raw transcript sync
+// Platform performs message categorization server-side
+type RawTranscriptSyncRequest struct {
+	SessionID      string              `json:"session_id"`
+	Tool           string              `json:"tool"`
+	SourceFileHash string              `json:"source_file_hash"`
+	SourceFilePath string              `json:"source_file_path,omitempty"`
+	RawMessages    []RawTranscriptMessage `json:"raw_messages"`
+}
+
+// RawTranscriptMessage represents a raw JSONL message for server-side categorization
+type RawTranscriptMessage struct {
+	RawJSON   string `json:"raw_json"`
+	Sequence  int    `json:"sequence"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+// SyncTranscriptRaw sends a transcript with raw JSONL for server-side categorization
+func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSyncResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/raw", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var syncResp TranscriptSyncResponse
+	if err := json.Unmarshal(body, &syncResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &syncResp, nil
+}
