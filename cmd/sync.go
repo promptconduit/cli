@@ -159,11 +159,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			// Build sync request
-			req := buildSyncRequest(conversation)
+			// Build raw sync request (server-side categorization)
+			req := buildRawSyncRequest(conversation)
 
 			// Send to API
-			resp, err := apiClient.SyncTranscript(req)
+			resp, err := apiClient.SyncTranscriptRaw(req)
 			if err != nil {
 				fmt.Printf("  ❌ %s: %v\n", displayName, err)
 				results = append(results, sync.SyncResult{
@@ -268,5 +268,25 @@ func buildSyncRequest(conv *sync.ParsedConversation) *client.TranscriptSyncReque
 			SourceFileHash:   conv.SourceFileHash,
 		},
 		Messages: messages,
+	}
+}
+
+// buildRawSyncRequest creates a request with raw JSONL for server-side categorization
+func buildRawSyncRequest(conv *sync.ParsedConversation) *client.RawTranscriptSyncRequest {
+	rawMessages := make([]client.RawTranscriptMessage, len(conv.Messages))
+	for i, m := range conv.Messages {
+		rawMessages[i] = client.RawTranscriptMessage{
+			RawJSON:   m.RawJSON,
+			Sequence:  m.SequenceNumber,
+			Timestamp: m.Timestamp,
+		}
+	}
+
+	return &client.RawTranscriptSyncRequest{
+		SessionID:      conv.SessionID,
+		Tool:           conv.Tool,
+		SourceFileHash: conv.SourceFileHash,
+		SourceFilePath: conv.SourceFilePath,
+		RawMessages:    rawMessages,
 	}
 }

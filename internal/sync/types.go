@@ -38,6 +38,7 @@ type ParsedMessage struct {
 	GitCommit         string
 	Cwd               string
 	AttachmentCount   int
+	RawJSON           string // Original JSONL line for server-side categorization
 }
 
 // SyncState tracks which files have been synced

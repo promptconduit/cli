@@ -106,6 +106,9 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 			continue
 		}
 
+		// Preserve raw JSON for server-side categorization
+		rawJSON := string(line)
+
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(line, &raw); err != nil {
 			continue
@@ -144,21 +147,21 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 			continue // Don't add summary as a message
 
 		case "user":
-			msg := parseUserMessage(raw, sequence, timestamp)
+			msg := parseUserMessage(raw, sequence, timestamp, rawJSON)
 			if msg != nil {
 				messages = append(messages, *msg)
 				sequence++
 			}
 
 		case "assistant":
-			msg := parseAssistantMessage(raw, sequence, timestamp, primaryModelCounts)
+			msg := parseAssistantMessage(raw, sequence, timestamp, primaryModelCounts, rawJSON)
 			if msg != nil {
 				messages = append(messages, *msg)
 				sequence++
 			}
 
 		case "file-history-snapshot":
-			msg := parseFileSnapshot(raw, sequence, timestamp)
+			msg := parseFileSnapshot(raw, sequence, timestamp, rawJSON)
 			if msg != nil {
 				messages = append(messages, *msg)
 				sequence++
@@ -170,7 +173,7 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 
 		default:
 			// Handle other types generically
-			msg := parseGenericMessage(raw, msgType, sequence, timestamp)
+			msg := parseGenericMessage(raw, msgType, sequence, timestamp, rawJSON)
 			if msg != nil {
 				messages = append(messages, *msg)
 				sequence++
@@ -237,7 +240,7 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 	}, nil
 }
 
-func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp string) *ParsedMessage {
+func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp string, rawJSON string) *ParsedMessage {
 	var content string
 	var uuid string
 	var parentUUID string
@@ -361,10 +364,11 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 		Timestamp:      timestamp,
 		SequenceNumber: sequence,
 		Cwd:            cwd,
+		RawJSON:        rawJSON,
 	}
 }
 
-func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timestamp string, modelCounts map[string]int) *ParsedMessage {
+func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timestamp string, modelCounts map[string]int, rawJSON string) *ParsedMessage {
 	var content string
 	var thinking string
 	var model string
@@ -436,10 +440,11 @@ func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timesta
 		ToolInput:      toolInput,
 		Timestamp:      timestamp,
 		SequenceNumber: sequence,
+		RawJSON:        rawJSON,
 	}
 }
 
-func parseFileSnapshot(raw map[string]json.RawMessage, sequence int, timestamp string) *ParsedMessage {
+func parseFileSnapshot(raw map[string]json.RawMessage, sequence int, timestamp string, rawJSON string) *ParsedMessage {
 	var uuid string
 	if uuidRaw, ok := raw["uuid"]; ok {
 		json.Unmarshal(uuidRaw, &uuid)
@@ -453,10 +458,11 @@ func parseFileSnapshot(raw map[string]json.RawMessage, sequence int, timestamp s
 		Type:           "file_snapshot",
 		Timestamp:      timestamp,
 		SequenceNumber: sequence,
+		RawJSON:        rawJSON,
 	}
 }
 
-func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequence int, timestamp string) *ParsedMessage {
+func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequence int, timestamp string, rawJSON string) *ParsedMessage {
 	var uuid string
 	var content string
 
@@ -478,6 +484,7 @@ func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequenc
 		Content:        content,
 		Timestamp:      timestamp,
 		SequenceNumber: sequence,
+		RawJSON:        rawJSON,
 	}
 }
 
