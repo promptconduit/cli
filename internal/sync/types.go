@@ -43,7 +43,17 @@ type ParsedMessage struct {
 
 // SyncState tracks which files have been synced
 type SyncState struct {
-	SyncedFiles map[string]SyncedFileInfo `json:"synced_files"`
+	SyncedFiles    map[string]SyncedFileInfo    `json:"synced_files"`
+	PendingUploads map[string]PendingUploadInfo `json:"pending_uploads,omitempty"`
+}
+
+// PendingUploadInfo tracks an in-progress chunked upload for resume support
+type PendingUploadInfo struct {
+	UploadID       string `json:"upload_id"`
+	SourceFileHash string `json:"source_file_hash"`
+	TotalChunks    int    `json:"total_chunks"`
+	ChunksUploaded int    `json:"chunks_uploaded"` // Last successfully uploaded chunk index + 1
+	StartedAt      string `json:"started_at"`
 }
 
 // SyncedFileInfo stores information about a synced file
