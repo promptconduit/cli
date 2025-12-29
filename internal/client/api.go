@@ -27,9 +27,10 @@ type APIResponse struct {
 
 // Client is the HTTP client for the PromptConduit API
 type Client struct {
-	config     *Config
-	httpClient *http.Client
-	version    string
+	config         *Config
+	httpClient     *http.Client
+	longHttpClient *http.Client // For large operations like transcript sync
+	version        string
 }
 
 // NewClient creates a new API client
@@ -38,6 +39,9 @@ func NewClient(config *Config, version string) *Client {
 		config: config,
 		httpClient: &http.Client{
 			Timeout: time.Duration(config.TimeoutSeconds) * time.Second,
+		},
+		longHttpClient: &http.Client{
+			Timeout: 180 * time.Second, // 3 min for large transcript sync
 		},
 		version: version,
 	}
@@ -655,7 +659,7 @@ func (c *Client) SyncTranscript(req *TranscriptSyncRequest) (*TranscriptSyncResp
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Longer timeout for large transcripts
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second) // 3 min for large transcripts
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync", bytes.NewReader(jsonData))
@@ -665,7 +669,7 @@ func (c *Client) SyncTranscript(req *TranscriptSyncRequest) (*TranscriptSyncResp
 
 	c.setHeaders(httpReq)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.longHttpClient.Do(httpReq) // Use long timeout client for sync
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -712,7 +716,7 @@ func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSy
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second) // 3 min for large transcripts
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/raw", bytes.NewReader(jsonData))
@@ -722,7 +726,7 @@ func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSy
 
 	c.setHeaders(httpReq)
 
-	resp, err := c.httpClient.Do(httpReq)
+	resp, err := c.longHttpClient.Do(httpReq) // Use long timeout client for sync
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
