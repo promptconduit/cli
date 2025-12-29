@@ -156,6 +156,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 				displayName = "..." + displayName[len(displayName)-57:]
 			}
 
+			// Skip empty transcripts (no valid messages) - warn instead of error
+			if len(conversation.Messages) == 0 {
+				fmt.Printf("  ⚠️  Skipping empty transcript: %s\n", displayName)
+				totalSkipped++
+				continue
+			}
+
 			if syncDryRun {
 				chunkInfo := ""
 				if len(conversation.Messages) > CHUNKED_THRESHOLD {
