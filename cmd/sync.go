@@ -126,6 +126,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 			// Parse file first to get hash
 			conversation, err := parser.ParseFile(filePath)
 			if err != nil {
+				// Show truncated path for parse errors
+				displayName := filepath.Base(filepath.Dir(filePath)) + "/" + filepath.Base(filePath)
+				if len(displayName) > 60 {
+					displayName = "..." + displayName[len(displayName)-57:]
+				}
+				fmt.Printf("  ❌ Parse error: %s: %v\n", displayName, err)
 				results = append(results, sync.SyncResult{
 					FilePath: filePath,
 					Status:   "error",
