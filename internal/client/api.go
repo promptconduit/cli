@@ -748,3 +748,160 @@ func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSy
 
 	return &syncResp, nil
 }
+
+// ============================================================================
+// Chunked Upload for Large Transcripts
+// ============================================================================
+
+// ChunkedInitRequest represents the request to initialize a chunked upload
+type ChunkedInitRequest struct {
+	SessionID      string `json:"session_id"`
+	Tool           string `json:"tool"`
+	SourceFileHash string `json:"source_file_hash"`
+	SourceFilePath string `json:"source_file_path,omitempty"`
+	TotalChunks    int    `json:"total_chunks"`
+	TotalMessages  int    `json:"total_messages"`
+}
+
+// ChunkedInitResponse represents the response from initializing a chunked upload
+type ChunkedInitResponse struct {
+	UploadID string `json:"upload_id"`
+}
+
+// ChunkedUploadRequest represents a single chunk upload
+type ChunkedUploadRequest struct {
+	UploadID    string                 `json:"upload_id"`
+	ChunkIndex  int                    `json:"chunk_index"`
+	RawMessages []RawTranscriptMessage `json:"raw_messages"`
+}
+
+// ChunkedUploadResponse represents the response from uploading a chunk
+type ChunkedUploadResponse struct {
+	Received   bool `json:"received"`
+	ChunkIndex int  `json:"chunk_index"`
+}
+
+// ChunkedCompleteRequest represents the request to complete a chunked upload
+type ChunkedCompleteRequest struct {
+	UploadID string `json:"upload_id"`
+}
+
+// InitChunkedUpload initializes a chunked upload session
+func (c *Client) InitChunkedUpload(req *ChunkedInitRequest) (*ChunkedInitResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/chunked/init", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var initResp ChunkedInitResponse
+	if err := json.Unmarshal(body, &initResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &initResp, nil
+}
+
+// UploadChunk uploads a single chunk of messages
+func (c *Client) UploadChunk(req *ChunkedUploadRequest) (*ChunkedUploadResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // 60s per chunk
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/chunked/upload", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var uploadResp ChunkedUploadResponse
+	if err := json.Unmarshal(body, &uploadResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &uploadResp, nil
+}
+
+// CompleteChunkedUpload completes a chunked upload and triggers processing
+func (c *Client) CompleteChunkedUpload(req *ChunkedCompleteRequest) (*TranscriptSyncResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second) // 5 min for assembly
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/chunked/complete", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.longHttpClient.Do(httpReq) // Use long timeout client for completion
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var syncResp TranscriptSyncResponse
+	if err := json.Unmarshal(body, &syncResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &syncResp, nil
+}

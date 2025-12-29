@@ -18,6 +18,14 @@ var (
 	syncLimit  int
 )
 
+// Chunking configuration
+const (
+	// CHUNK_SIZE is the number of messages per chunk (roughly 5-10MB per chunk)
+	CHUNK_SIZE = 500
+	// CHUNKED_THRESHOLD is the minimum number of messages to trigger chunked upload
+	CHUNKED_THRESHOLD = 1000
+)
+
 var syncCmd = &cobra.Command{
 	Use:   "sync [tool]",
 	Short: "Sync AI assistant transcripts to PromptConduit",
@@ -149,7 +157,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 
 			if syncDryRun {
-				fmt.Printf("  [dry-run] Would sync: %s (%d messages)\n", displayName, len(conversation.Messages))
+				chunkInfo := ""
+				if len(conversation.Messages) > CHUNKED_THRESHOLD {
+					numChunks := (len(conversation.Messages) + CHUNK_SIZE - 1) / CHUNK_SIZE
+					chunkInfo = fmt.Sprintf(" [chunked: %d chunks]", numChunks)
+				}
+				fmt.Printf("  [dry-run] Would sync: %s (%d messages)%s\n", displayName, len(conversation.Messages), chunkInfo)
 				results = append(results, sync.SyncResult{
 					FilePath:     filePath,
 					MessageCount: len(conversation.Messages),
@@ -159,11 +172,19 @@ func runSync(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
-			// Build raw sync request (server-side categorization)
-			req := buildRawSyncRequest(conversation)
+			// Decide whether to use chunked or regular upload
+			var resp *client.TranscriptSyncResponse
+			if len(conversation.Messages) > CHUNKED_THRESHOLD {
+				// Use chunked upload for large files
+				numChunks := (len(conversation.Messages) + CHUNK_SIZE - 1) / CHUNK_SIZE
+				fmt.Printf("  📤 Uploading %s in %d chunks...\n", displayName, numChunks)
+				resp, err = syncChunked(apiClient, conversation)
+			} else {
+				// Use regular upload for smaller files
+				req := buildRawSyncRequest(conversation)
+				resp, err = apiClient.SyncTranscriptRaw(req)
+			}
 
-			// Send to API
-			resp, err := apiClient.SyncTranscriptRaw(req)
 			if err != nil {
 				fmt.Printf("  ❌ %s: %v\n", displayName, err)
 				results = append(results, sync.SyncResult{
@@ -289,4 +310,74 @@ func buildRawSyncRequest(conv *sync.ParsedConversation) *client.RawTranscriptSyn
 		SourceFilePath: conv.SourceFilePath,
 		RawMessages:    rawMessages,
 	}
+}
+
+// syncChunked uploads a large transcript using chunked upload
+func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation) (*client.TranscriptSyncResponse, error) {
+	// Calculate number of chunks
+	totalMessages := len(conv.Messages)
+	numChunks := (totalMessages + CHUNK_SIZE - 1) / CHUNK_SIZE
+
+	// Step 1: Initialize upload session
+	initReq := &client.ChunkedInitRequest{
+		SessionID:      conv.SessionID,
+		Tool:           conv.Tool,
+		SourceFileHash: conv.SourceFileHash,
+		SourceFilePath: conv.SourceFilePath,
+		TotalChunks:    numChunks,
+		TotalMessages:  totalMessages,
+	}
+
+	initResp, err := apiClient.InitChunkedUpload(initReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize upload: %w", err)
+	}
+
+	uploadID := initResp.UploadID
+
+	// Step 2: Upload chunks
+	for chunkIndex := 0; chunkIndex < numChunks; chunkIndex++ {
+		start := chunkIndex * CHUNK_SIZE
+		end := start + CHUNK_SIZE
+		if end > totalMessages {
+			end = totalMessages
+		}
+
+		// Build chunk messages
+		chunkMessages := make([]client.RawTranscriptMessage, end-start)
+		for i, m := range conv.Messages[start:end] {
+			chunkMessages[i] = client.RawTranscriptMessage{
+				RawJSON:   m.RawJSON,
+				Sequence:  m.SequenceNumber,
+				Timestamp: m.Timestamp,
+			}
+		}
+
+		chunkReq := &client.ChunkedUploadRequest{
+			UploadID:    uploadID,
+			ChunkIndex:  chunkIndex,
+			RawMessages: chunkMessages,
+		}
+
+		_, err := apiClient.UploadChunk(chunkReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upload chunk %d/%d: %w", chunkIndex+1, numChunks, err)
+		}
+
+		// Progress indicator
+		fmt.Printf("    chunk %d/%d ✓\n", chunkIndex+1, numChunks)
+	}
+
+	// Step 3: Complete upload
+	completeReq := &client.ChunkedCompleteRequest{
+		UploadID: uploadID,
+	}
+
+	fmt.Printf("    assembling and processing...\n")
+	resp, err := apiClient.CompleteChunkedUpload(completeReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to complete upload: %w", err)
+	}
+
+	return resp, nil
 }
