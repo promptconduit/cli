@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,9 @@ const (
 	CHUNK_SIZE = 500
 	// CHUNKED_THRESHOLD is the minimum number of messages to trigger chunked upload
 	CHUNKED_THRESHOLD = 1000
+	// CHUNKED_SIZE_THRESHOLD is the minimum file size in bytes to trigger chunked upload
+	// This catches large files with few but huge messages (e.g., 71MB file with 832 messages)
+	CHUNKED_SIZE_THRESHOLD = 5 * 1024 * 1024 // 5MB
 )
 
 var syncCmd = &cobra.Command{
@@ -169,11 +173,24 @@ func runSync(cmd *cobra.Command, args []string) error {
 				continue
 			}
 
+			// Check file size for chunking decision
+			var fileSize int64
+			if fileInfo, statErr := os.Stat(filePath); statErr == nil {
+				fileSize = fileInfo.Size()
+			}
+
+			// Determine if we should use chunked upload (message count OR file size)
+			useChunked := len(conversation.Messages) > CHUNKED_THRESHOLD || fileSize > CHUNKED_SIZE_THRESHOLD
+			numChunks := (len(conversation.Messages) + CHUNK_SIZE - 1) / CHUNK_SIZE
+
 			if syncDryRun {
 				chunkInfo := ""
-				if len(conversation.Messages) > CHUNKED_THRESHOLD {
-					numChunks := (len(conversation.Messages) + CHUNK_SIZE - 1) / CHUNK_SIZE
-					chunkInfo = fmt.Sprintf(" [chunked: %d chunks]", numChunks)
+				if useChunked {
+					reason := "messages"
+					if len(conversation.Messages) <= CHUNKED_THRESHOLD {
+						reason = fmt.Sprintf("%.1fMB", float64(fileSize)/(1024*1024))
+					}
+					chunkInfo = fmt.Sprintf(" [chunked: %d chunks, %s]", numChunks, reason)
 				}
 				fmt.Printf("  [dry-run] Would sync: %s (%d messages)%s\n", displayName, len(conversation.Messages), chunkInfo)
 				results = append(results, sync.SyncResult{
@@ -187,11 +204,14 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 			// Decide whether to use chunked or regular upload
 			var resp *client.TranscriptSyncResponse
-			if len(conversation.Messages) > CHUNKED_THRESHOLD {
-				// Use chunked upload for large files
-				numChunks := (len(conversation.Messages) + CHUNK_SIZE - 1) / CHUNK_SIZE
-				fmt.Printf("  📤 Uploading %s in %d chunks...\n", displayName, numChunks)
-				resp, err = syncChunked(apiClient, conversation)
+			if useChunked {
+				// Use chunked upload for large files (by message count or file size)
+				reason := "messages"
+				if len(conversation.Messages) <= CHUNKED_THRESHOLD {
+					reason = fmt.Sprintf("%.1fMB", float64(fileSize)/(1024*1024))
+				}
+				fmt.Printf("  📤 Uploading %s in %d chunks (%s)...\n", displayName, numChunks, reason)
+				resp, err = syncChunked(apiClient, conversation, stateManager, filePath)
 			} else {
 				// Use regular upload for smaller files
 				req := buildRawSyncRequest(conversation)
@@ -325,31 +345,59 @@ func buildRawSyncRequest(conv *sync.ParsedConversation) *client.RawTranscriptSyn
 	}
 }
 
-// syncChunked uploads a large transcript using chunked upload
-func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation) (*client.TranscriptSyncResponse, error) {
+// syncChunked uploads a large transcript using chunked upload with resume support
+func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateManager *sync.StateManager, filePath string) (*client.TranscriptSyncResponse, error) {
 	// Calculate number of chunks
 	totalMessages := len(conv.Messages)
 	numChunks := (totalMessages + CHUNK_SIZE - 1) / CHUNK_SIZE
 
-	// Step 1: Initialize upload session
-	initReq := &client.ChunkedInitRequest{
-		SessionID:      conv.SessionID,
-		Tool:           conv.Tool,
-		SourceFileHash: conv.SourceFileHash,
-		SourceFilePath: conv.SourceFilePath,
-		TotalChunks:    numChunks,
-		TotalMessages:  totalMessages,
+	var uploadID string
+	startChunk := 0
+
+	// Check for pending upload to resume
+	if pending, found := stateManager.GetPendingUpload(filePath, conv.SourceFileHash); found {
+		// Verify the upload is still valid (same chunk count)
+		if pending.TotalChunks == numChunks && pending.ChunksUploaded < numChunks {
+			uploadID = pending.UploadID
+			startChunk = pending.ChunksUploaded
+			fmt.Printf("    resuming from chunk %d/%d...\n", startChunk+1, numChunks)
+		} else {
+			// Upload params changed or completed, start fresh
+			stateManager.ClearPendingUpload(filePath)
+		}
 	}
 
-	initResp, err := apiClient.InitChunkedUpload(initReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize upload: %w", err)
+	// Step 1: Initialize upload session if not resuming
+	if uploadID == "" {
+		initReq := &client.ChunkedInitRequest{
+			SessionID:      conv.SessionID,
+			Tool:           conv.Tool,
+			SourceFileHash: conv.SourceFileHash,
+			SourceFilePath: conv.SourceFilePath,
+			TotalChunks:    numChunks,
+			TotalMessages:  totalMessages,
+		}
+
+		initResp, err := apiClient.InitChunkedUpload(initReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize upload: %w", err)
+		}
+
+		uploadID = initResp.UploadID
+
+		// Track this pending upload
+		stateManager.SetPendingUpload(filePath, sync.PendingUploadInfo{
+			UploadID:       uploadID,
+			SourceFileHash: conv.SourceFileHash,
+			TotalChunks:    numChunks,
+			ChunksUploaded: 0,
+		})
+		// Save state immediately so we can resume if interrupted
+		stateManager.Save()
 	}
 
-	uploadID := initResp.UploadID
-
-	// Step 2: Upload chunks
-	for chunkIndex := 0; chunkIndex < numChunks; chunkIndex++ {
+	// Step 2: Upload chunks (starting from where we left off)
+	for chunkIndex := startChunk; chunkIndex < numChunks; chunkIndex++ {
 		start := chunkIndex * CHUNK_SIZE
 		end := start + CHUNK_SIZE
 		if end > totalMessages {
@@ -374,12 +422,21 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation) (*clie
 
 		_, err := apiClient.UploadChunk(chunkReq)
 		if err != nil {
+			// Save progress before returning error so we can resume later
+			stateManager.UpdatePendingUploadProgress(filePath, chunkIndex)
+			stateManager.Save()
 			return nil, fmt.Errorf("failed to upload chunk %d/%d: %w", chunkIndex+1, numChunks, err)
 		}
+
+		// Update progress
+		stateManager.UpdatePendingUploadProgress(filePath, chunkIndex+1)
 
 		// Progress indicator
 		fmt.Printf("    chunk %d/%d ✓\n", chunkIndex+1, numChunks)
 	}
+
+	// Save final chunk progress before completing
+	stateManager.Save()
 
 	// Step 3: Complete upload
 	completeReq := &client.ChunkedCompleteRequest{
@@ -391,6 +448,9 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation) (*clie
 	if err != nil {
 		return nil, fmt.Errorf("failed to complete upload: %w", err)
 	}
+
+	// Success - clear the pending upload
+	stateManager.ClearPendingUpload(filePath)
 
 	return resp, nil
 }

@@ -25,12 +25,22 @@ func NewStateManager() (*StateManager, error) {
 
 	sm := &StateManager{
 		statePath: statePath,
-		state:     &SyncState{SyncedFiles: make(map[string]SyncedFileInfo)},
+		state: &SyncState{
+			SyncedFiles:    make(map[string]SyncedFileInfo),
+			PendingUploads: make(map[string]PendingUploadInfo),
+		},
 	}
 
 	// Load existing state if available
 	if data, err := os.ReadFile(statePath); err == nil {
 		json.Unmarshal(data, sm.state)
+		// Ensure maps are initialized even after loading
+		if sm.state.SyncedFiles == nil {
+			sm.state.SyncedFiles = make(map[string]SyncedFileInfo)
+		}
+		if sm.state.PendingUploads == nil {
+			sm.state.PendingUploads = make(map[string]PendingUploadInfo)
+		}
 	}
 
 	return sm, nil
@@ -76,4 +86,39 @@ func (sm *StateManager) GetSyncedInfo(path string) (SyncedFileInfo, bool) {
 // ClearState clears all sync state
 func (sm *StateManager) ClearState() {
 	sm.state.SyncedFiles = make(map[string]SyncedFileInfo)
+	sm.state.PendingUploads = make(map[string]PendingUploadInfo)
+}
+
+// GetPendingUpload returns pending upload info if one exists for the file with matching hash
+func (sm *StateManager) GetPendingUpload(path, hash string) (PendingUploadInfo, bool) {
+	if info, ok := sm.state.PendingUploads[path]; ok {
+		// Only return if hash matches (file hasn't changed)
+		if info.SourceFileHash == hash {
+			return info, true
+		}
+		// Hash changed, remove stale pending upload
+		delete(sm.state.PendingUploads, path)
+	}
+	return PendingUploadInfo{}, false
+}
+
+// SetPendingUpload tracks a pending chunked upload
+func (sm *StateManager) SetPendingUpload(path string, info PendingUploadInfo) {
+	if info.StartedAt == "" {
+		info.StartedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	sm.state.PendingUploads[path] = info
+}
+
+// UpdatePendingUploadProgress updates the chunks uploaded count
+func (sm *StateManager) UpdatePendingUploadProgress(path string, chunksUploaded int) {
+	if info, ok := sm.state.PendingUploads[path]; ok {
+		info.ChunksUploaded = chunksUploaded
+		sm.state.PendingUploads[path] = info
+	}
+}
+
+// ClearPendingUpload removes a pending upload (after success or failure)
+func (sm *StateManager) ClearPendingUpload(path string) {
+	delete(sm.state.PendingUploads, path)
 }
