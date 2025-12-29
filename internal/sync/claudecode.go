@@ -88,7 +88,7 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 	// Parse messages
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 10*1024*1024) // 10MB max line
+	scanner.Buffer(buf, 100*1024*1024) // 100MB max line - some tool outputs are very large
 
 	var messages []ParsedMessage
 	var summary string
