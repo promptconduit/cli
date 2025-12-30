@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/promptconduit/cli/internal/envelope"
@@ -904,4 +905,113 @@ func (c *Client) CompleteChunkedUpload(req *ChunkedCompleteRequest) (*Transcript
 	}
 
 	return &syncResp, nil
+}
+
+// ============================================================================
+// GET Request Methods for Insights API
+// ============================================================================
+
+// Get performs a GET request to the API and returns the response
+func (c *Client) Get(path string, query map[string]string) *APIResponse {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	url := c.config.APIURL + path
+	if len(query) > 0 {
+		params := make([]string, 0, len(query))
+		for k, v := range query {
+			params = append(params, k+"="+v)
+		}
+		url += "?" + strings.Join(params, "&")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("failed to create request: %v", err),
+		}
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("request failed: %v", err),
+		}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	result := &APIResponse{
+		StatusCode: resp.StatusCode,
+		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,
+	}
+
+	if len(body) > 0 {
+		var data map[string]interface{}
+		if err := json.Unmarshal(body, &data); err == nil {
+			result.Data = data
+		}
+	}
+
+	if !result.Success {
+		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return result
+}
+
+// GetInsights retrieves the user's insights summary
+func (c *Client) GetInsights(period string, repo string) *APIResponse {
+	query := make(map[string]string)
+	if period != "" {
+		query["period"] = period
+	}
+	if repo != "" {
+		query["repo"] = repo
+	}
+	return c.Get("/v1/me/insights", query)
+}
+
+// GetInsightsTools retrieves tool usage breakdown
+func (c *Client) GetInsightsTools(period string, repo string) *APIResponse {
+	query := make(map[string]string)
+	if period != "" {
+		query["period"] = period
+	}
+	if repo != "" {
+		query["repo"] = repo
+	}
+	return c.Get("/v1/me/insights/tools", query)
+}
+
+// GetInsightsErrors retrieves error patterns
+func (c *Client) GetInsightsErrors(period string, repo string) *APIResponse {
+	query := make(map[string]string)
+	if period != "" {
+		query["period"] = period
+	}
+	if repo != "" {
+		query["repo"] = repo
+	}
+	return c.Get("/v1/me/insights/errors", query)
+}
+
+// GetSessions retrieves recent sessions list
+func (c *Client) GetSessions(limit int, offset int, repo string) *APIResponse {
+	query := make(map[string]string)
+	if limit > 0 {
+		query["limit"] = fmt.Sprintf("%d", limit)
+	}
+	if offset > 0 {
+		query["offset"] = fmt.Sprintf("%d", offset)
+	}
+	if repo != "" {
+		query["repo"] = repo
+	}
+	return c.Get("/v1/me/sessions", query)
 }

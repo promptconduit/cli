@@ -38,6 +38,7 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(insightsCmd)
 }
 
 var versionCmd = &cobra.Command{
