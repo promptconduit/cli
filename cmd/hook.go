@@ -95,6 +95,9 @@ func processHookEvent() error {
 	// Extract git context from working directory
 	var gitCtx *envelope.GitContext
 	cwd := getWorkingDirectory(nativeEvent)
+
+	// Write to local events file for macOS app
+	writeLocalEvent(hookEvent, cwd, getSessionID(nativeEvent))
 	if cwd != "" {
 		gitCtx = git.ExtractContext(cwd)
 		if gitCtx != nil {
@@ -394,4 +397,40 @@ func fileLog(format string, args ...interface{}) {
 	defer f.Close()
 	msg := fmt.Sprintf(format, args...)
 	f.WriteString(fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), msg))
+}
+
+// writeLocalEvent writes hook events to local file for macOS app status tracking
+func writeLocalEvent(hookEvent, cwd, sessionID string) {
+	// Only write status-relevant events
+	switch hookEvent {
+	case "SessionStart", "UserPromptSubmit", "Stop":
+		// Continue
+	default:
+		return
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	eventsPath := filepath.Join(home, ".promptconduit", "hook-events")
+
+	// Ensure directory exists
+	dir := filepath.Dir(eventsPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+
+	// Build event JSON
+	event := fmt.Sprintf(`{"event":"%s","cwd":"%s","session_id":"%s","timestamp":"%s"}`,
+		hookEvent, cwd, sessionID, time.Now().Format(time.RFC3339))
+
+	// Append to file
+	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(event + "\n")
 }
