@@ -41,6 +41,9 @@ func NewStateManager() (*StateManager, error) {
 		if sm.state.PendingUploads == nil {
 			sm.state.PendingUploads = make(map[string]PendingUploadInfo)
 		}
+		if sm.state.FailedSyncs == nil {
+			sm.state.FailedSyncs = make(map[string]FailedSyncInfo)
+		}
 	}
 
 	return sm, nil
@@ -121,4 +124,42 @@ func (sm *StateManager) UpdatePendingUploadProgress(path string, chunksUploaded 
 // ClearPendingUpload removes a pending upload (after success or failure)
 func (sm *StateManager) ClearPendingUpload(path string) {
 	delete(sm.state.PendingUploads, path)
+}
+
+// AddFailedSync tracks a failed sync for retry
+func (sm *StateManager) AddFailedSync(sessionID, filePath, errorMsg string) {
+	if sm.state.FailedSyncs == nil {
+		sm.state.FailedSyncs = make(map[string]FailedSyncInfo)
+	}
+	// Check if already exists to preserve retry count
+	if existing, ok := sm.state.FailedSyncs[sessionID]; ok {
+		existing.RetryCount++
+		existing.LastError = errorMsg
+		existing.FailedAt = time.Now().UTC().Format(time.RFC3339)
+		sm.state.FailedSyncs[sessionID] = existing
+	} else {
+		sm.state.FailedSyncs[sessionID] = FailedSyncInfo{
+			SessionID:  sessionID,
+			FilePath:   filePath,
+			FailedAt:   time.Now().UTC().Format(time.RFC3339),
+			RetryCount: 0,
+			LastError:  errorMsg,
+		}
+	}
+}
+
+// GetFailedSyncs returns all pending failed syncs
+func (sm *StateManager) GetFailedSyncs() []FailedSyncInfo {
+	result := make([]FailedSyncInfo, 0, len(sm.state.FailedSyncs))
+	for _, info := range sm.state.FailedSyncs {
+		result = append(result, info)
+	}
+	return result
+}
+
+// ClearFailedSync removes a failed sync after successful retry
+func (sm *StateManager) ClearFailedSync(sessionID string) {
+	if sm.state.FailedSyncs != nil {
+		delete(sm.state.FailedSyncs, sessionID)
+	}
 }

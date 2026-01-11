@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/git"
+	"github.com/promptconduit/cli/internal/sync"
 	"github.com/promptconduit/cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -98,6 +100,15 @@ func processHookEvent() error {
 
 	// Write to local events file for macOS app
 	writeLocalEvent(hookEvent, cwd, getSessionID(nativeEvent))
+
+	// Trigger auto-sync on SessionEnd
+	if hookEvent == "SessionEnd" {
+		sessionID := getSessionID(nativeEvent)
+		if sessionID != "" {
+			go triggerAutoSync(sessionID)
+		}
+	}
+
 	if cwd != "" {
 		gitCtx = git.ExtractContext(cwd)
 		if gitCtx != nil {
@@ -397,6 +408,83 @@ func fileLog(format string, args ...interface{}) {
 	defer f.Close()
 	msg := fmt.Sprintf(format, args...)
 	f.WriteString(fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), msg))
+}
+
+// triggerAutoSync triggers automatic transcript sync after SessionEnd
+// Runs in a goroutine to avoid blocking the hook response
+func triggerAutoSync(sessionID string) {
+	fileLog("Auto-sync: SessionEnd detected for session %s", sessionID)
+
+	// Wait 1 second to ensure transcript file is fully flushed
+	time.Sleep(1 * time.Second)
+
+	// Find transcript file for this session
+	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
+	if err != nil {
+		fileLog("Auto-sync: could not find transcript for session %s: %v", sessionID, err)
+		return
+	}
+
+	fileLog("Auto-sync: found transcript at %s", transcriptPath)
+
+	// Spawn async subprocess to sync this file
+	exe, err := os.Executable()
+	if err != nil {
+		fileLog("Auto-sync: failed to get executable path: %v", err)
+		return
+	}
+
+	cmd := exec.Command(exe, "sync", "--file", transcriptPath)
+	if err := cmd.Start(); err != nil {
+		fileLog("Auto-sync: failed to start sync subprocess: %v", err)
+		return
+	}
+
+	// Release the process so it runs independently
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+
+	fileLog("Auto-sync: sync subprocess started for session %s", sessionID)
+
+	// Also retry any previously failed syncs
+	retryFailedSyncs(exe)
+}
+
+// retryFailedSyncs attempts to sync any previously failed transcripts
+func retryFailedSyncs(exe string) {
+	stateManager, err := sync.NewStateManager()
+	if err != nil {
+		fileLog("Auto-sync retry: failed to load state: %v", err)
+		return
+	}
+
+	failedSyncs := stateManager.GetFailedSyncs()
+	if len(failedSyncs) == 0 {
+		return
+	}
+
+	fileLog("Auto-sync retry: found %d failed syncs to retry", len(failedSyncs))
+
+	for _, failed := range failedSyncs {
+		// Max 3 retries per file
+		if failed.RetryCount >= 3 {
+			fileLog("Auto-sync retry: skipping %s (exceeded max retries)", failed.SessionID)
+			continue
+		}
+
+		cmd := exec.Command(exe, "sync", "--file", failed.FilePath)
+		if err := cmd.Start(); err != nil {
+			fileLog("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
+			continue
+		}
+
+		if cmd.Process != nil {
+			_ = cmd.Process.Release()
+		}
+
+		fileLog("Auto-sync retry: started retry for session %s", failed.SessionID)
+	}
 }
 
 // writeLocalEvent writes hook events to local file for macOS app status tracking

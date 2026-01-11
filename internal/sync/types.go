@@ -45,6 +45,16 @@ type ParsedMessage struct {
 type SyncState struct {
 	SyncedFiles    map[string]SyncedFileInfo    `json:"synced_files"`
 	PendingUploads map[string]PendingUploadInfo `json:"pending_uploads,omitempty"`
+	FailedSyncs    map[string]FailedSyncInfo    `json:"failed_syncs,omitempty"`
+}
+
+// FailedSyncInfo tracks a sync that failed and should be retried
+type FailedSyncInfo struct {
+	SessionID  string `json:"session_id"`
+	FilePath   string `json:"file_path"`
+	FailedAt   string `json:"failed_at"`
+	RetryCount int    `json:"retry_count"`
+	LastError  string `json:"last_error"`
 }
 
 // PendingUploadInfo tracks an in-progress chunked upload for resume support

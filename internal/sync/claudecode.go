@@ -488,6 +488,50 @@ func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequenc
 	}
 }
 
+// FindTranscriptBySessionID locates the transcript file for a given session ID
+// Claude Code transcript files are named with the session ID (e.g., ~/.claude/projects/foo/sessionid.jsonl)
+func FindTranscriptBySessionID(sessionID string) (string, error) {
+	if sessionID == "" {
+		return "", fmt.Errorf("session ID is empty")
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	projectsDir := filepath.Join(homeDir, ".claude", "projects")
+
+	// Check if projects directory exists
+	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("projects directory does not exist: %s", projectsDir)
+	}
+
+	expectedFilename := sessionID + ".jsonl"
+	var foundPath string
+
+	err = filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files with errors
+		}
+		if !info.IsDir() && filepath.Base(path) == expectedFilename {
+			foundPath = path
+			return filepath.SkipAll // Found it, stop walking
+		}
+		return nil
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("error searching for transcript: %w", err)
+	}
+
+	if foundPath == "" {
+		return "", fmt.Errorf("transcript file not found for session ID: %s", sessionID)
+	}
+
+	return foundPath, nil
+}
+
 func calculateFileHash(path string) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
