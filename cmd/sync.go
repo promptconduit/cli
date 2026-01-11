@@ -17,6 +17,7 @@ var (
 	syncForce  bool
 	syncSince  string
 	syncLimit  int
+	syncFile   string
 )
 
 // Chunking configuration
@@ -59,6 +60,7 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncForce, "force", false, "Re-sync already synced files")
 	syncCmd.Flags().StringVar(&syncSince, "since", "", "Only sync transcripts modified after this date (YYYY-MM-DD)")
 	syncCmd.Flags().IntVar(&syncLimit, "limit", 0, "Maximum number of transcripts to sync (0 = unlimited)")
+	syncCmd.Flags().StringVar(&syncFile, "file", "", "Sync a specific transcript file (for auto-sync)")
 	rootCmd.AddCommand(syncCmd)
 }
 
@@ -73,6 +75,11 @@ func runSync(cmd *cobra.Command, args []string) error {
 	stateManager, err := sync.NewStateManager()
 	if err != nil {
 		return fmt.Errorf("failed to initialize state manager: %w", err)
+	}
+
+	// Handle single-file sync (used by auto-sync from SessionEnd hook)
+	if syncFile != "" {
+		return runSingleFileSync(config, stateManager, syncFile)
 	}
 
 	// Determine which tools to sync
@@ -453,4 +460,76 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 	stateManager.ClearPendingUpload(filePath)
 
 	return resp, nil
+}
+
+// runSingleFileSync syncs a single transcript file (used by auto-sync)
+func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string) error {
+	// Verify file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return fmt.Errorf("transcript file not found: %s", filePath)
+	}
+
+	// Determine tool from path (claude-code for now)
+	parser, err := sync.NewClaudeCodeParser()
+	if err != nil {
+		return fmt.Errorf("failed to create parser: %w", err)
+	}
+
+	// Parse file
+	conversation, err := parser.ParseFile(filePath)
+	if err != nil {
+		stateManager.AddFailedSync(filepath.Base(filePath), filePath, err.Error())
+		stateManager.Save()
+		return fmt.Errorf("failed to parse transcript: %w", err)
+	}
+
+	// Check if already synced (unless force)
+	if !syncForce && stateManager.IsSynced(filePath, conversation.SourceFileHash) {
+		// Already synced, nothing to do
+		return nil
+	}
+
+	// Skip empty transcripts
+	if len(conversation.Messages) == 0 {
+		return nil
+	}
+
+	// Create API client
+	apiClient := client.NewClient(config, Version)
+
+	// Check file size for chunking decision
+	var fileSize int64
+	if fileInfo, statErr := os.Stat(filePath); statErr == nil {
+		fileSize = fileInfo.Size()
+	}
+
+	// Determine if we should use chunked upload
+	useChunked := len(conversation.Messages) > CHUNKED_THRESHOLD || fileSize > CHUNKED_SIZE_THRESHOLD
+
+	// Upload
+	var resp *client.TranscriptSyncResponse
+	if useChunked {
+		resp, err = syncChunked(apiClient, conversation, stateManager, filePath)
+	} else {
+		req := buildRawSyncRequest(conversation)
+		resp, err = apiClient.SyncTranscriptRaw(req)
+	}
+
+	if err != nil {
+		// Track failure for retry
+		stateManager.AddFailedSync(conversation.SessionID, filePath, err.Error())
+		stateManager.Save()
+		return fmt.Errorf("failed to sync: %w", err)
+	}
+
+	// Success - mark as synced and clear any previous failure
+	stateManager.MarkSynced(filePath, sync.SyncedFileInfo{
+		Hash:           conversation.SourceFileHash,
+		ConversationID: resp.ConversationID,
+		MessageCount:   resp.MessageCount,
+	})
+	stateManager.ClearFailedSync(conversation.SessionID)
+	stateManager.Save()
+
+	return nil
 }
