@@ -42,7 +42,7 @@ func NewClient(config *Config, version string) *Client {
 			Timeout: time.Duration(config.TimeoutSeconds) * time.Second,
 		},
 		longHttpClient: &http.Client{
-			Timeout: 180 * time.Second, // 3 min for large transcript sync
+			Timeout: 600 * time.Second, // 10 min for large transcript sync (chunked complete can be slow)
 		},
 		version: version,
 	}
@@ -874,7 +874,7 @@ func (c *Client) CompleteChunkedUpload(req *ChunkedCompleteRequest) (*Transcript
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second) // 5 min for assembly
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second) // 10 min for assembly
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/transcripts/sync/chunked/complete", bytes.NewReader(jsonData))
