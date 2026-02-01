@@ -133,14 +133,21 @@ func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"UserPromptSubmit": []map[string]interface{}{
-			{"hooks": makeHook(5000)},
-		},
-		"PreToolUse":   makeMatcherHook(5000),
-		"PostToolUse":  makeMatcherHook(5000),
-		"Stop":         []map[string]interface{}{{"hooks": makeHook(5000)}}, // For attachment extraction
-		"SessionStart": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"SessionEnd":   []map[string]interface{}{{"hooks": makeHook(5000)}},
+		// Core events
+		"UserPromptSubmit": []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"PreToolUse":       makeMatcherHook(5000),
+		"PostToolUse":      makeMatcherHook(5000),
+		"PostToolUseFailure": makeMatcherHook(5000), // Tool execution failures
+		"SessionStart":     []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"SessionEnd":       []map[string]interface{}{{"hooks": makeHook(5000)}},
+		// Agent events
+		"Stop":          []map[string]interface{}{{"hooks": makeHook(5000)}}, // Agent completes response
+		"SubagentStart": makeMatcherHook(5000),                               // Subagent spawned
+		"SubagentStop":  makeMatcherHook(5000),                               // Subagent completes
+		// Context and permission events
+		"PreCompact":        makeMatcherHook(5000), // Context compaction
+		"PermissionRequest": makeMatcherHook(5000), // Permission dialogs
+		"Notification":      makeMatcherHook(5000), // System notifications
 	}
 }
 
