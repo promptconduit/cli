@@ -35,6 +35,18 @@
         ]
       }
     ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
@@ -48,6 +60,77 @@
     ],
     "SessionEnd": [
       {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PROMPTCONDUIT_HOOK_PATH:-~/.local/share/promptconduit/promptconduit_hook.py}\"",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "*",
         "hooks": [
           {
             "type": "command",
