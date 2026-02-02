@@ -469,24 +469,28 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 		return fmt.Errorf("transcript file not found: %s", filePath)
 	}
 
+	// Fast-path: Check file hash before expensive parsing
+	// This is critical for Stop events which fire frequently
+	if !syncForce {
+		currentHash, err := sync.CalculateFileHash(filePath)
+		if err == nil && stateManager.IsSynced(filePath, currentHash) {
+			// File hasn't changed since last sync, nothing to do
+			return nil
+		}
+	}
+
 	// Determine tool from path (claude-code for now)
 	parser, err := sync.NewClaudeCodeParser()
 	if err != nil {
 		return fmt.Errorf("failed to create parser: %w", err)
 	}
 
-	// Parse file
+	// Parse file (only if hash changed or force sync)
 	conversation, err := parser.ParseFile(filePath)
 	if err != nil {
 		stateManager.AddFailedSync(filepath.Base(filePath), filePath, err.Error())
 		stateManager.Save()
 		return fmt.Errorf("failed to parse transcript: %w", err)
-	}
-
-	// Check if already synced (unless force)
-	if !syncForce && stateManager.IsSynced(filePath, conversation.SourceFileHash) {
-		// Already synced, nothing to do
-		return nil
 	}
 
 	// Skip empty transcripts

@@ -101,8 +101,11 @@ func processHookEvent() error {
 	// Write to local events file for macOS app
 	writeLocalEvent(hookEvent, cwd, getSessionID(nativeEvent))
 
-	// Trigger auto-sync on SessionEnd
-	if hookEvent == "SessionEnd" {
+	// Trigger auto-sync on SessionEnd or Stop events
+	// SessionEnd: Fires when user explicitly ends session (rare - users often just close terminal)
+	// Stop: Fires after each Claude response - gives us incremental sync opportunities
+	// The sync logic deduplicates via hash checking, so frequent triggers are safe
+	if hookEvent == "SessionEnd" || hookEvent == "Stop" {
 		sessionID := getSessionID(nativeEvent)
 		if sessionID != "" {
 			go triggerAutoSync(sessionID)
@@ -410,10 +413,11 @@ func fileLog(format string, args ...interface{}) {
 	f.WriteString(fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), msg))
 }
 
-// triggerAutoSync triggers automatic transcript sync after SessionEnd
+// triggerAutoSync triggers automatic transcript sync after SessionEnd or Stop events
 // Runs in a goroutine to avoid blocking the hook response
+// Uses hash-based deduplication so frequent triggers are efficient (only syncs if file changed)
 func triggerAutoSync(sessionID string) {
-	fileLog("Auto-sync: SessionEnd detected for session %s", sessionID)
+	fileLog("Auto-sync: triggered for session %s", sessionID)
 
 	// Wait 1 second to ensure transcript file is fully flushed
 	time.Sleep(1 * time.Second)

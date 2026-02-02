@@ -546,3 +546,8 @@ func calculateFileHash(path string) (string, error) {
 
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
+
+// CalculateFileHash calculates the SHA256 hash of a file (exported for fast-path sync checks)
+func CalculateFileHash(path string) (string, error) {
+	return calculateFileHash(path)
+}
