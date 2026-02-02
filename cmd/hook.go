@@ -105,10 +105,11 @@ func processHookEvent() error {
 	// SessionEnd: Fires when user explicitly ends session (rare - users often just close terminal)
 	// Stop: Fires after each Claude response - gives us incremental sync opportunities
 	// The sync logic deduplicates via hash checking, so frequent triggers are safe
+	// NOTE: Called directly (not in goroutine) since it spawns a subprocess and returns quickly
 	if hookEvent == "SessionEnd" || hookEvent == "Stop" {
 		sessionID := getSessionID(nativeEvent)
 		if sessionID != "" {
-			go triggerAutoSync(sessionID)
+			triggerAutoSync(sessionID)
 		}
 	}
 
@@ -414,15 +415,12 @@ func fileLog(format string, args ...interface{}) {
 }
 
 // triggerAutoSync triggers automatic transcript sync after SessionEnd or Stop events
-// Runs in a goroutine to avoid blocking the hook response
+// Spawns a subprocess immediately to avoid being killed when the main process exits
 // Uses hash-based deduplication so frequent triggers are efficient (only syncs if file changed)
 func triggerAutoSync(sessionID string) {
 	fileLog("Auto-sync: triggered for session %s", sessionID)
 
-	// Wait 1 second to ensure transcript file is fully flushed
-	time.Sleep(1 * time.Second)
-
-	// Find transcript file for this session
+	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
 		fileLog("Auto-sync: could not find transcript for session %s: %v", sessionID, err)
@@ -432,13 +430,14 @@ func triggerAutoSync(sessionID string) {
 	fileLog("Auto-sync: found transcript at %s", transcriptPath)
 
 	// Spawn async subprocess to sync this file
+	// Use --delay flag so the subprocess waits for transcript to be fully flushed
 	exe, err := os.Executable()
 	if err != nil {
 		fileLog("Auto-sync: failed to get executable path: %v", err)
 		return
 	}
 
-	cmd := exec.Command(exe, "sync", "--file", transcriptPath)
+	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", "1")
 	if err := cmd.Start(); err != nil {
 		fileLog("Auto-sync: failed to start sync subprocess: %v", err)
 		return
@@ -451,8 +450,8 @@ func triggerAutoSync(sessionID string) {
 
 	fileLog("Auto-sync: sync subprocess started for session %s", sessionID)
 
-	// Also retry any previously failed syncs
-	retryFailedSyncs(exe)
+	// Also retry any previously failed syncs (spawn as separate subprocess)
+	go retryFailedSyncs(exe)
 }
 
 // retryFailedSyncs attempts to sync any previously failed transcripts

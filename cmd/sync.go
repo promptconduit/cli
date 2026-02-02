@@ -18,6 +18,7 @@ var (
 	syncSince  string
 	syncLimit  int
 	syncFile   string
+	syncDelay  int
 )
 
 // Chunking configuration
@@ -61,10 +62,16 @@ func init() {
 	syncCmd.Flags().StringVar(&syncSince, "since", "", "Only sync transcripts modified after this date (YYYY-MM-DD)")
 	syncCmd.Flags().IntVar(&syncLimit, "limit", 0, "Maximum number of transcripts to sync (0 = unlimited)")
 	syncCmd.Flags().StringVar(&syncFile, "file", "", "Sync a specific transcript file (for auto-sync)")
+	syncCmd.Flags().IntVar(&syncDelay, "delay", 0, "Delay in seconds before syncing (for auto-sync to wait for file flush)")
 	rootCmd.AddCommand(syncCmd)
 }
 
 func runSync(cmd *cobra.Command, args []string) error {
+	// Handle delay (used by auto-sync to wait for transcript file flush)
+	if syncDelay > 0 {
+		time.Sleep(time.Duration(syncDelay) * time.Second)
+	}
+
 	// Load config
 	config := client.LoadConfig()
 	if config.APIKey == "" {
