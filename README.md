@@ -2,7 +2,7 @@
 
 Capture prompts and events from AI coding assistants.
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/dl/)
 
 ## Overview
@@ -268,32 +268,29 @@ Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typ
        └─────────────────┼──────────────────────┘
                          ▼
               ┌─────────────────────┐
-              │   promptconduit     │  ← Hook receives JSON
+              │   promptconduit     │  ← Hook receives raw JSON
               │      hook           │    from stdin
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │   Tool Adapter      │  ← Translates to
-              │ (Claude/Cursor/...) │    canonical format
+              │   Raw Envelope      │  ← Wraps event with
+              │   + Git Context     │    metadata & repo state
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │  Canonical Event    │  ← Normalized schema
-              │   + Git Context     │    with repo state
+              │    Async Send       │  ← Non-blocking POST to
+              │  (subprocess)       │    /v1/events/raw
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │    Async Send       │  ← Non-blocking
-              │  (subprocess)       │    to API
-              └──────────┬──────────┘
-                         │
-              ┌──────────▼──────────┐
-              │  PromptConduit API  │
+              │  PromptConduit API  │  ← Server-side adapters
+              │  (normalization)    │    transform to canonical
               └─────────────────────┘
 ```
 
 ### Key Design Principles
 
+- **Thin client**: The CLI wraps raw events in an envelope — all normalization happens server-side
 - **Never blocks tools**: Hook always returns immediately with success
 - **Async sending**: Events are sent in a detached subprocess
 - **Rich context**: Captures git state (branch, commit, dirty files, etc.)
@@ -382,28 +379,22 @@ make snapshot
 .
 ├── cmd/                    # CLI commands
 │   ├── root.go            # Root command
-│   ├── install.go         # Install command
-│   ├── uninstall.go       # Uninstall command
-│   ├── status.go          # Status command
-│   ├── test.go            # Test command
-│   ├── hook.go            # Hook entry point
+│   ├── install.go         # Install hooks for AI tools
+│   ├── uninstall.go       # Remove hooks
+│   ├── status.go          # Show installation status
+│   ├── test.go            # Test API connectivity
+│   ├── hook.go            # Hook entry point (receives raw events)
 │   ├── config.go          # Config management
 │   └── sync.go            # Transcript sync command
 ├── internal/
-│   ├── adapters/          # Tool-specific adapters
-│   │   ├── adapter.go     # Base adapter interface
-│   │   ├── claudecode.go  # Claude Code adapter
-│   │   ├── cursor.go      # Cursor adapter
-│   │   ├── gemini.go      # Gemini adapter
-│   │   └── registry.go    # Adapter registry
+│   ├── envelope/          # Raw event envelope types
 │   ├── client/            # HTTP client with multipart upload
 │   ├── git/               # Git context extraction
 │   ├── sync/              # Transcript sync and parsing
 │   │   ├── claudecode.go  # Claude Code transcript parser
 │   │   ├── state.go       # Sync state management
 │   │   └── types.go       # Parser interface and types
-│   ├── transcript/        # Transcript parsing & attachment extraction
-│   └── schema/            # Event schemas
+│   └── transcript/        # Transcript parsing & attachment extraction
 ├── scripts/
 │   └── install.sh         # Curl installer
 ├── .goreleaser.yaml       # Release configuration
@@ -420,7 +411,7 @@ make snapshot
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+[MIT](LICENSE) - Copyright (c) 2025 PromptConduit
 
 ## Links
 
