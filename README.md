@@ -11,11 +11,21 @@ PromptConduit CLI captures prompts, tool executions, and session events from var
 
 ### Supported Tools
 
+**Real-time hooks** (platform mode — requires account):
+
 | Tool | Events Captured |
 |------|-----------------|
 | [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments |
 | [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
+
+**Local skill detection** (no account required):
+
+| Tool | Transcript Location |
+|------|---------------------|
+| Claude Code | `~/.claude/projects/**/*.jsonl` |
+| OpenAI Codex CLI | `~/.codex/**/*.jsonl` |
+| GitHub Copilot CLI | `~/.copilot/session-state/**/*.jsonl` |
 
 ### Attachment Support
 
@@ -62,6 +72,8 @@ make install
 Download the latest release for your platform from the [releases page](https://github.com/promptconduit/cli/releases).
 
 ## Quick Start
+
+> **No platform account?** Jump to [Local Skill Generation](#local-skill-generation) — works today with your existing Claude Code subscription.
 
 ### 1. Get your API key
 
@@ -115,6 +127,12 @@ promptconduit status
 # Test API connectivity
 promptconduit test
 
+# Generate skills locally (no account needed)
+promptconduit skills generate --local [flags]
+
+# Generate skills via platform (requires account)
+promptconduit skills generate [flags]
+
 # Sync transcripts (manual)
 promptconduit sync [tool] [flags]
 
@@ -155,6 +173,54 @@ promptconduit sync --limit 10
 **Hooks vs Sync:**
 - **Hooks** capture events in real-time during AI tool usage (automatic after installation)
 - **Sync** uploads historical transcripts (must be run manually when needed)
+
+### Local Skill Generation
+
+Extract reusable skills from your AI coding transcripts — **no platform account required**. Uses your existing Claude Code subscription (or an API key) to analyze patterns and write skill files directly to `~/.claude/skills/`.
+
+```bash
+# Analyze all tools, write skills globally
+promptconduit skills generate --local
+
+# Analyze only Claude Code transcripts
+promptconduit skills generate --local --tool claude-code
+
+# Scope skills to current git repo
+promptconduit skills generate --local --repo owner/repo
+
+# Re-analyze previously seen transcripts
+promptconduit skills generate --local --force
+
+# Preview what would be generated
+promptconduit skills generate --local --dry-run
+```
+
+**AI provider auto-detection** (in priority order):
+1. `claude` CLI binary in PATH — uses your existing [Claude Code](https://claude.ai/code) / claude.ai Pro subscription
+2. `ANTHROPIC_API_KEY` env var — direct Anthropic API access
+3. `OPENAI_API_KEY` env var — OpenAI fallback (gpt-4o-mini)
+
+**How it works:**
+- Reads transcripts from Claude Code, OpenAI Codex CLI, and GitHub Copilot (whichever are installed)
+- Requires ≥ 5 new conversations to detect patterns (use `--force` to override)
+- Writes `SKILL.md` files with YAML frontmatter to `~/.claude/skills/<name>/`
+- Tracks analyzed transcripts by SHA256 hash in `~/.config/promptconduit/local_skills_state.json`
+- Skills appear immediately in Claude Code's `/` autocomplete
+
+**Output example:**
+```
+Analyzing 47 local transcripts (global)...
+Using Claude Code (claude CLI).
+
+Detected 3 skills:
+
+  /ci-monitor  (workflow, 90%)
+    CI Monitor
+    Check CI status and fix failures until green.
+    → Written to: /Users/you/.claude/skills/ci-monitor/SKILL.md
+
+3 skills written. Use them with /ci-monitor, etc.
+```
 
 ## Configuration
 
