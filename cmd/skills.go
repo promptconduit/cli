@@ -11,7 +11,6 @@ import (
 )
 
 var (
-	skillsFormat   string
 	skillsApproved string
 	skillsType     string
 	skillsLimit    int
@@ -95,18 +94,18 @@ Requires the Anthropic API key to be configured on the platform.`,
 }
 
 func init() {
-	skillsListCmd.Flags().StringVarP(&skillsFormat, "format", "f", "text", "Output format (text, json)")
+	skillsListCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 	skillsListCmd.Flags().StringVar(&skillsApproved, "approved", "", "Filter by approval: true, false, or pending")
 	skillsListCmd.Flags().StringVar(&skillsType, "type", "", "Filter by type: workflow, command, template, checklist")
 	skillsListCmd.Flags().IntVarP(&skillsLimit, "limit", "l", 50, "Maximum number of skills to show")
 
 	skillsGenerateCmd.Flags().BoolVar(&skillsForce, "force", false, "Re-analyze even if cache is still valid")
-	skillsGenerateCmd.Flags().StringVarP(&skillsFormat, "format", "f", "text", "Output format (text, json)")
+	skillsGenerateCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 
 	skillsSyncCmd.Flags().StringVar(&skillsSyncDir, "dir", "", "Target directory (default: ~/.claude/commands/)")
-	skillsSyncCmd.Flags().StringVarP(&skillsFormat, "format", "f", "text", "Output format (text, json)")
+	skillsSyncCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 
-	skillsPatternsCmd.Flags().StringVarP(&skillsFormat, "format", "f", "text", "Output format (text, json)")
+	skillsPatternsCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 
 	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsGenerateCmd)
@@ -139,7 +138,8 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to list skills: %s", resp.Error)
 	}
 
-	if skillsFormat == "json" {
+	format, _ := cmd.Flags().GetString("format")
+	if format == "json" {
 		return outputJSON(resp.Data)
 	}
 
@@ -163,7 +163,8 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to generate skills: %s", resp.Error)
 	}
 
-	if skillsFormat == "json" {
+	format, _ := cmd.Flags().GetString("format")
+	if format == "json" {
 		return outputJSON(resp.Data)
 	}
 
@@ -285,7 +286,8 @@ func runSkillsPatterns(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get patterns: %s", resp.Error)
 	}
 
-	if skillsFormat == "json" {
+	format, _ := cmd.Flags().GetString("format")
+	if format == "json" {
 		return outputJSON(resp.Data)
 	}
 
@@ -474,8 +476,9 @@ func outputPromptPatterns(data map[string]interface{}) error {
 }
 
 func truncateString(s string, max int) string {
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	return string(runes[:max-3]) + "..."
 }
