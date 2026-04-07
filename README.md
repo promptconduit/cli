@@ -92,6 +92,8 @@ Download the latest release for your platform from the [releases page](https://g
 
 > **No account?** See [No Account? Start Here](#no-account-start-here) above.
 
+![PromptConduit dashboard — sessions, skills, and recent activity](docs/screenshot-dashboard.png)
+
 ### 1. Get your API key
 
 Sign up at [promptconduit.dev](https://promptconduit.dev) and create an API key.
