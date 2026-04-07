@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // CodexParser parses OpenAI Codex CLI transcript files from ~/.codex/
@@ -200,6 +199,3 @@ func repoNameFromPath(path string) string {
 
 // ensure CodexParser implements Parser at compile time
 var _ Parser = (*CodexParser)(nil)
-
-// ensure time is used (for future timestamp parsing)
-var _ = time.Now

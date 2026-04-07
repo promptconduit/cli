@@ -401,11 +401,13 @@ func summarizeConvos(convos []*intsync.ParsedConversation) []convoSummary {
 	out := make([]convoSummary, len(convos))
 	for i, c := range convos {
 		toolCount := 0
+		userMsgCount := 0
 		var prompts []string
 		for _, m := range c.Messages {
 			if m.ToolName != "" || (m.Type == "assistant" && m.ToolUseID != "") {
 				toolCount++
 			} else if m.Type == "user" && m.ToolUseID == "" && m.Content != "" {
+				userMsgCount++
 				if len(prompts) < 3 {
 					prompts = append(prompts, truncateString(m.Content, 120))
 				}
@@ -415,7 +417,7 @@ func summarizeConvos(convos []*intsync.ParsedConversation) []convoSummary {
 			Title:            c.Title,
 			Summary:          c.Summary,
 			ToolUseCount:     toolCount,
-			UserMessageCount: len(prompts),
+			UserMessageCount: userMsgCount,
 			UserPrompts:      prompts,
 		}
 	}
@@ -508,6 +510,9 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 		return "", err
 	}
 
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("Anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+	}
 	var result struct {
 		Content []struct {
 			Type string `json:"type"`
@@ -523,9 +528,6 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 	}
 	if result.Error != nil {
 		return "", fmt.Errorf("Anthropic API error (%s): %s", result.Error.Type, result.Error.Message)
-	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("Anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 	}
 	for _, c := range result.Content {
 		if c.Type == "text" {
@@ -573,6 +575,9 @@ func callViaOpenAI(apiKey, userPrompt string) (string, error) {
 		return "", err
 	}
 
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("OpenAI API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+	}
 	var result struct {
 		Choices []struct {
 			Message struct {
@@ -588,9 +593,6 @@ func callViaOpenAI(apiKey, userPrompt string) (string, error) {
 	}
 	if result.Error != nil {
 		return "", fmt.Errorf("OpenAI API error: %s", result.Error.Message)
-	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("OpenAI API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 	}
 	if len(result.Choices) == 0 {
 		return "", fmt.Errorf("OpenAI API returned no choices")
@@ -658,7 +660,9 @@ func parseLocalSkillResponse(text string) ([]localDetectedSkill, error) {
 // writeLocalSkills writes each skill as a SKILL.md file in the new skills/ format.
 // Global skills → ~/.claude/skills/<name>/SKILL.md
 // Project skills → <gitRoot>/.claude/skills/<name>/SKILL.md
-func writeLocalSkills(skills []localDetectedSkill, gitRoot, repo string) (written []string, errs []error) {
+// Returns a map of skill name → written path so callers can look up by name.
+func writeLocalSkills(skills []localDetectedSkill, gitRoot, repo string) (written map[string]string, errs []error) {
+	written = map[string]string{}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		errs = append(errs, fmt.Errorf("failed to get home dir: %w", err))
@@ -684,7 +688,7 @@ func writeLocalSkills(skills []localDetectedSkill, gitRoot, repo string) (writte
 			errs = append(errs, fmt.Errorf("failed to write %s: %w", dest, err))
 			continue
 		}
-		written = append(written, dest)
+		written[skill.Name] = dest
 	}
 	return
 }
@@ -700,7 +704,7 @@ func formatLocalSkillFile(s localDetectedSkill) string {
 	if s.TriggerPattern != "" {
 		desc = s.Description + " " + s.TriggerPattern
 	}
-	sb.WriteString(fmt.Sprintf("description: %s\n", desc))
+	sb.WriteString(fmt.Sprintf("description: %q\n", desc))
 	sb.WriteString("---\n\n")
 
 	// Body: commandContent + attribution
@@ -783,15 +787,15 @@ func markLocalTranscriptsAnalyzed(s *localSkillsState, convos []*intsync.ParsedC
 // OUTPUT
 // ============================================================================
 
-func outputLocalSkillsGenerated(skills []localDetectedSkill, written []string, errs []error, convCount int) {
+func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]string, errs []error, convCount int) {
 	fmt.Printf("Detected %d skills:\n\n", len(skills))
 
-	for i, s := range skills {
+	for _, s := range skills {
 		fmt.Printf("  /%s  (%s, %d%%)\n", s.Name, s.SkillType, int(s.Confidence*100))
 		fmt.Printf("    %s\n", s.DisplayName)
 		fmt.Printf("    %s\n", truncateString(s.Description, 80))
-		if i < len(written) {
-			fmt.Printf("    → Written to: %s\n", written[i])
+		if path, ok := written[s.Name]; ok {
+			fmt.Printf("    → Written to: %s\n", path)
 		}
 		fmt.Println()
 	}
@@ -804,9 +808,13 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written []string, e
 	}
 
 	successCount := len(written)
-	fmt.Printf("%d skill%s written. Use them with /%s, etc.\n",
-		successCount, pluralS(successCount), skills[0].Name)
-	fmt.Println("Review and delete ~/.claude/skills/<name>/ for any you don't want.")
+	if successCount > 0 && len(skills) > 0 {
+		fmt.Printf("%d skill%s written. Use them with /%s, etc.\n",
+			successCount, pluralS(successCount), skills[0].Name)
+		fmt.Println("Review and delete ~/.claude/skills/<name>/ for any you don't want.")
+	} else {
+		fmt.Println("No skills written.")
+	}
 }
 
 func pluralS(n int) string {
@@ -816,9 +824,3 @@ func pluralS(n int) string {
 	return "s"
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
