@@ -1038,12 +1038,52 @@ func (c *Client) GetSkills(approved string, skillType string, limit int, repoNam
 
 // GenerateSkills triggers skill detection on the platform.
 // repoName: scope to a specific project (empty = global).
+// Uses the long HTTP client (10 min) since AI analysis can take > 30s.
 func (c *Client) GenerateSkills(force bool, repoName string) *APIResponse {
 	body := map[string]interface{}{"force": force}
 	if repoName != "" {
 		body["repo"] = repoName
 	}
-	return c.sendRequest("/v1/skills/generate", body)
+
+	jsonData, err := json.Marshal(body)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to marshal payload: %v", err)}
+	}
+
+	req, err := http.NewRequest("POST", c.config.APIURL+"/v1/skills/generate", bytes.NewReader(jsonData))
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to create request: %v", err)}
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.longHttpClient.Do(req)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body2, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &APIResponse{Success: false, StatusCode: resp.StatusCode, Error: fmt.Sprintf("failed to read response: %v", err)}
+	}
+
+	var data map[string]interface{}
+	if err := json.Unmarshal(body2, &data); err != nil {
+		return &APIResponse{Success: false, StatusCode: resp.StatusCode, Error: fmt.Sprintf("failed to parse response: %v", err)}
+	}
+
+	if resp.StatusCode >= 400 {
+		errMsg := "request failed"
+		if detail, ok := data["detail"].(string); ok {
+			errMsg = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, detail)
+		} else {
+			errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return &APIResponse{Success: false, StatusCode: resp.StatusCode, Error: errMsg, Data: data}
+	}
+
+	return &APIResponse{Success: true, StatusCode: resp.StatusCode, Data: data}
 }
 
 // GetSkillPatterns returns detected prompt clusters for the user.
