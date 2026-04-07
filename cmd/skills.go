@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/git"
 	"github.com/spf13/cobra"
 )
 
@@ -16,6 +17,7 @@ var (
 	skillsLimit    int
 	skillsForce    bool
 	skillsSyncDir  string
+	skillsRepo     string
 )
 
 // skillsCmd is the parent command
@@ -98,14 +100,17 @@ func init() {
 	skillsListCmd.Flags().StringVar(&skillsApproved, "approved", "", "Filter by approval: true, false, or pending")
 	skillsListCmd.Flags().StringVar(&skillsType, "type", "", "Filter by type: workflow, command, template, checklist")
 	skillsListCmd.Flags().IntVarP(&skillsLimit, "limit", "l", 50, "Maximum number of skills to show")
+	skillsListCmd.Flags().StringVar(&skillsRepo, "repo", "", "Filter to a specific project (e.g. my-org/my-repo)")
 
 	skillsGenerateCmd.Flags().BoolVar(&skillsForce, "force", false, "Re-analyze even if cache is still valid")
 	skillsGenerateCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
+	skillsGenerateCmd.Flags().StringVar(&skillsRepo, "repo", "", "Scope to a specific project (auto-detected if in a git repo)")
 
-	skillsSyncCmd.Flags().StringVar(&skillsSyncDir, "dir", "", "Target directory (default: ~/.claude/commands/)")
+	skillsSyncCmd.Flags().StringVar(&skillsSyncDir, "dir", "", "Override global command directory (default: ~/.claude/commands/)")
 	skillsSyncCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 
 	skillsPatternsCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
+	skillsPatternsCmd.Flags().StringVar(&skillsRepo, "repo", "", "Scope to a specific project (auto-detected if in a git repo)")
 
 	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsGenerateCmd)
@@ -132,7 +137,7 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 	}
 
 	apiClient := client.NewClient(cfg, Version)
-	resp := apiClient.GetSkills(approvedFilter, skillsType, skillsLimit)
+	resp := apiClient.GetSkills(approvedFilter, skillsType, skillsLimit, skillsRepo)
 
 	if !resp.Success {
 		return fmt.Errorf("failed to list skills: %s", resp.Error)
@@ -152,12 +157,25 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	fmt.Println("Analyzing your AI coding session patterns...")
+	// Auto-detect repo from working directory if --repo not explicitly set
+	repo := skillsRepo
+	if repo == "" {
+		cwd, err := os.Getwd()
+		if err == nil {
+			repo = git.GetRepoName(cwd)
+		}
+	}
+
+	if repo != "" {
+		fmt.Printf("Analyzing AI coding session patterns for %q...\n", repo)
+	} else {
+		fmt.Println("Analyzing your AI coding session patterns (global)...")
+	}
 	fmt.Println("This may take up to 30 seconds.")
 	fmt.Println()
 
 	apiClient := client.NewClient(cfg, Version)
-	resp := apiClient.GenerateSkills(skillsForce)
+	resp := apiClient.GenerateSkills(skillsForce, repo)
 
 	if !resp.Success {
 		return fmt.Errorf("failed to generate skills: %s", resp.Error)
@@ -177,25 +195,24 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	// Determine target directory
-	targetDir := skillsSyncDir
-	if targetDir == "" {
+	// Determine the global commands directory (~/.claude/commands/ or --dir override)
+	globalDir := skillsSyncDir
+	if globalDir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("failed to determine home directory: %w", err)
 		}
-		targetDir = filepath.Join(home, ".claude", "commands")
+		globalDir = filepath.Join(home, ".claude", "commands")
 	}
 
-	// Ensure target directory exists
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return fmt.Errorf("failed to create commands directory %s: %w", targetDir, err)
-	}
+	// Detect git root for project-scoped skill routing (.claude/commands/ in repo)
+	cwd, _ := os.Getwd()
+	gitRoot := detectGitRoot(cwd)
 
 	apiClient := client.NewClient(cfg, Version)
 
-	// Fetch approved skills
-	resp := apiClient.GetSkills("true", "", 100)
+	// Fetch all approved skills (global + project)
+	resp := apiClient.GetSkills("true", "", 100, "")
 	if !resp.Success {
 		return fmt.Errorf("failed to fetch approved skills: %s", resp.Error)
 	}
@@ -214,7 +231,7 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 	synced := 0
 	failed := 0
 
-	fmt.Printf("Syncing %d approved skills to %s\n\n", len(skillsList), targetDir)
+	fmt.Printf("Syncing %d approved skills...\n\n", len(skillsList))
 
 	for _, s := range skillsList {
 		skill, ok := s.(map[string]interface{})
@@ -225,11 +242,24 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 		id, _ := skill["id"].(string)
 		name, _ := skill["name"].(string)
 		displayName, _ := skill["display_name"].(string)
+		repoName, _ := skill["repo_name"].(string)
 		if displayName == "" {
 			displayName = name
 		}
 
 		if id == "" || name == "" {
+			continue
+		}
+
+		// Route: project skills → .claude/commands/ at git root; global → ~/.claude/commands/
+		targetDir := globalDir
+		if repoName != "" && gitRoot != "" {
+			targetDir = filepath.Join(gitRoot, ".claude", "commands")
+		}
+
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			fmt.Printf("  [FAIL] %s: failed to create directory %s: %v\n", name, targetDir, err)
+			failed++
 			continue
 		}
 
@@ -241,7 +271,6 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Write to ~/.claude/commands/<name>.md
 		filename := filepath.Join(targetDir, name+".md")
 		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
 			fmt.Printf("  [FAIL] %s: failed to write file: %v\n", name, err)
@@ -249,10 +278,11 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		fmt.Printf("  [OK]   /%s → %s\n", name, filepath.Base(filename))
-		if displayName != name {
-			fmt.Printf("         %s\n", displayName)
+		scope := "global"
+		if repoName != "" {
+			scope = repoName
 		}
+		fmt.Printf("  [OK]   /%s (%s) → %s\n", name, scope, filename)
 		synced++
 	}
 
@@ -260,7 +290,10 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 
 	if synced > 0 {
 		fmt.Printf("\nSkills installed! Use them in Claude Code with /<skill-name>\n")
-		fmt.Printf("Location: %s\n", targetDir)
+		if gitRoot != "" {
+			fmt.Printf("Project skills: %s\n", filepath.Join(gitRoot, ".claude", "commands"))
+		}
+		fmt.Printf("Global skills:  %s\n", globalDir)
 	}
 
 	if failed > 0 {
@@ -270,17 +303,48 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// detectGitRoot walks up from dir to find the git repository root.
+// Returns empty string if not in a git repo.
+func detectGitRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
 func runSkillsPatterns(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	fmt.Println("Analyzing your prompt history for recurring patterns...")
+	// Auto-detect repo from working directory if --repo not explicitly set
+	repo := skillsRepo
+	if repo == "" {
+		cwd, err := os.Getwd()
+		if err == nil {
+			repo = git.GetRepoName(cwd)
+		}
+	}
+
+	if repo != "" {
+		fmt.Printf("Analyzing prompt history for %q...\n", repo)
+	} else {
+		fmt.Println("Analyzing your prompt history for recurring patterns...")
+	}
 	fmt.Println()
 
 	apiClient := client.NewClient(cfg, Version)
-	resp := apiClient.GetSkillPatterns()
+	resp := apiClient.GetSkillPatterns(repo)
 
 	if !resp.Success {
 		return fmt.Errorf("failed to get patterns: %s", resp.Error)

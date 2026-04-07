@@ -1018,7 +1018,8 @@ func (c *Client) GetSessions(limit int, offset int, repo string) *APIResponse {
 
 // GetSkills retrieves the user's detected skills with optional filters.
 // approved: "true", "false", or "" (all); skillType: "workflow", "command", etc.
-func (c *Client) GetSkills(approved string, skillType string, limit int) *APIResponse {
+// repoName: filter to a specific project (empty = all scopes).
+func (c *Client) GetSkills(approved string, skillType string, limit int, repoName string) *APIResponse {
 	query := make(map[string]string)
 	if approved != "" {
 		query["approved"] = approved
@@ -1029,17 +1030,29 @@ func (c *Client) GetSkills(approved string, skillType string, limit int) *APIRes
 	if limit > 0 {
 		query["limit"] = fmt.Sprintf("%d", limit)
 	}
+	if repoName != "" {
+		query["repo"] = repoName
+	}
 	return c.Get("/v1/skills", query)
 }
 
 // GenerateSkills triggers skill detection on the platform.
-func (c *Client) GenerateSkills(force bool) *APIResponse {
-	return c.sendRequest("/v1/skills/generate", map[string]interface{}{"force": force})
+// repoName: scope to a specific project (empty = global).
+func (c *Client) GenerateSkills(force bool, repoName string) *APIResponse {
+	body := map[string]interface{}{"force": force}
+	if repoName != "" {
+		body["repo"] = repoName
+	}
+	return c.sendRequest("/v1/skills/generate", body)
 }
 
 // GetSkillPatterns returns detected prompt clusters for the user.
-func (c *Client) GetSkillPatterns() *APIResponse {
-	return c.Get("/v1/skills/patterns", nil)
+// repoName: scope to a specific project (empty = global).
+func (c *Client) GetSkillPatterns(repoName string) *APIResponse {
+	if repoName == "" {
+		return c.Get("/v1/skills/patterns", nil)
+	}
+	return c.Get("/v1/skills/patterns", map[string]string{"repo": repoName})
 }
 
 // ApproveSkill approves or rejects a skill by ID.
