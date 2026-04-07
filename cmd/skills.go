@@ -157,9 +157,11 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	// Auto-detect repo from working directory if --repo not explicitly set
+	// Auto-detect repo from working directory only when --repo was not explicitly set.
+	// Explicitly passing --repo "" means "global" (no project scope).
+	repoFlag := cmd.Flags().Lookup("repo")
 	repo := skillsRepo
-	if repo == "" {
+	if !repoFlag.Changed {
 		cwd, err := os.Getwd()
 		if err == nil {
 			repo = git.GetRepoName(cwd)
@@ -327,9 +329,11 @@ func runSkillsPatterns(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	// Auto-detect repo from working directory if --repo not explicitly set
+	// Auto-detect repo from working directory only when --repo was not explicitly set.
+	// Explicitly passing --repo "" means "global" (no project scope).
+	repoFlag := cmd.Flags().Lookup("repo")
 	repo := skillsRepo
-	if repo == "" {
+	if !repoFlag.Changed {
 		cwd, err := os.Getwd()
 		if err == nil {
 			repo = git.GetRepoName(cwd)
