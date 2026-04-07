@@ -1015,3 +1015,113 @@ func (c *Client) GetSessions(limit int, offset int, repo string) *APIResponse {
 	}
 	return c.Get("/v1/me/sessions", query)
 }
+
+// GetSkills retrieves the user's detected skills with optional filters.
+// approved: "true", "false", or "" (all); skillType: "workflow", "command", etc.
+// repoName: filter to a specific project (empty = all scopes).
+func (c *Client) GetSkills(approved string, skillType string, limit int, repoName string) *APIResponse {
+	query := make(map[string]string)
+	if approved != "" {
+		query["approved"] = approved
+	}
+	if skillType != "" {
+		query["skill_type"] = skillType
+	}
+	if limit > 0 {
+		query["limit"] = fmt.Sprintf("%d", limit)
+	}
+	if repoName != "" {
+		query["repo"] = repoName
+	}
+	return c.Get("/v1/skills", query)
+}
+
+// GenerateSkills triggers skill detection on the platform.
+// repoName: scope to a specific project (empty = global).
+func (c *Client) GenerateSkills(force bool, repoName string) *APIResponse {
+	body := map[string]interface{}{"force": force}
+	if repoName != "" {
+		body["repo"] = repoName
+	}
+	return c.sendRequest("/v1/skills/generate", body)
+}
+
+// GetSkillPatterns returns detected prompt clusters for the user.
+// repoName: scope to a specific project (empty = global).
+func (c *Client) GetSkillPatterns(repoName string) *APIResponse {
+	if repoName == "" {
+		return c.Get("/v1/skills/patterns", nil)
+	}
+	return c.Get("/v1/skills/patterns", map[string]string{"repo": repoName})
+}
+
+// ApproveSkill approves or rejects a skill by ID.
+func (c *Client) ApproveSkill(id string, approve bool) *APIResponse {
+	return c.patchRequest(fmt.Sprintf("/v1/skills/%s", id), map[string]interface{}{"is_approved": approve})
+}
+
+// GetSkillCommandFile fetches the raw markdown command file for a skill.
+// Returns the file content suitable for writing to ~/.claude/commands/<name>.md
+func (c *Client) GetSkillCommandFile(id string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", c.config.APIURL+fmt.Sprintf("/v1/skills/%s/command", id), nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	return string(body), nil
+}
+
+// patchRequest sends a PATCH request with a JSON payload
+func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to marshal payload: %v", err)}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "PATCH", c.config.APIURL+path, bytes.NewReader(jsonData))
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to create request: %v", err)}
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	result := &APIResponse{StatusCode: resp.StatusCode, Success: resp.StatusCode >= 200 && resp.StatusCode < 300}
+	if len(body) > 0 {
+		var data map[string]interface{}
+		if err := json.Unmarshal(body, &data); err == nil {
+			result.Data = data
+		}
+	}
+	if !result.Success {
+		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return result
+}
