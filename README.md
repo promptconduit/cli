@@ -2,16 +2,35 @@
 
 Capture prompts and events from AI coding assistants.
 
+[![CI](https://github.com/promptconduit/cli/actions/workflows/test.yml/badge.svg)](https://github.com/promptconduit/cli/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/dl/)
 
+## No Account? Start Here
+
+Turn your existing AI coding transcripts into reusable Claude Code skills — **no sign-up required**.
+
+```bash
+# Install
+brew tap promptconduit/tap && brew install promptconduit
+
+# Generate skills from your transcripts (uses your Claude Code subscription)
+promptconduit skills generate --local
+```
+
+Skills are written directly to `~/.claude/commands/` and show up in Claude Code's `/` autocomplete immediately. Reads from Claude Code, OpenAI Codex CLI, and GitHub Copilot CLI — whichever you have installed.
+
+[Jump to full local skills docs →](#local-skill-generation)
+
+---
+
 ## Overview
 
-PromptConduit CLI captures prompts, tool executions, and session events from various AI coding assistants. All events are normalized to a canonical schema and sent to the PromptConduit API for analysis.
+PromptConduit CLI captures prompts, tool executions, and session events from AI coding assistants and forwards them to the PromptConduit platform for analysis and insights.
 
 ### Supported Tools
 
-**Real-time hooks** (platform mode — requires account):
+**Real-time hooks** (requires [platform account](https://promptconduit.dev)):
 
 | Tool | Events Captured |
 |------|-----------------|
@@ -19,7 +38,7 @@ PromptConduit CLI captures prompts, tool executions, and session events from var
 | [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
 
-**Local skill detection** (no account required):
+**Local skill generation** (no account required):
 
 | Tool | Transcript Location |
 |------|---------------------|
@@ -35,27 +54,25 @@ The CLI automatically extracts and uploads attachments from prompts:
 - **Documents**: PDF, Word (.doc/.docx), Excel (.xls/.xlsx), PowerPoint (.ppt/.pptx)
 - **Text**: Plain text, CSV, HTML, Markdown, JSON, XML
 
-Attachments are uploaded via multipart form data alongside the event metadata.
-
 ## Installation
 
-### Quick Install (Recommended)
+### Homebrew (Recommended)
+
+```bash
+brew tap promptconduit/tap
+brew install promptconduit
+```
+
+### Quick Install Script
 
 ```bash
 curl -fsSL https://promptconduit.dev/install | bash
 ```
 
-Or with your API key:
+Or with your API key pre-configured:
 
 ```bash
 curl -fsSL https://promptconduit.dev/install | bash -s -- YOUR_API_KEY
-```
-
-### Homebrew
-
-```bash
-brew tap promptconduit/tap
-brew install promptconduit
 ```
 
 ### From Source
@@ -71,9 +88,9 @@ make install
 
 Download the latest release for your platform from the [releases page](https://github.com/promptconduit/cli/releases).
 
-## Quick Start
+## Platform Quick Start
 
-> **No platform account?** Jump to [Local Skill Generation](#local-skill-generation) — works today with your existing Claude Code subscription.
+> **No account?** See [No Account? Start Here](#no-account-start-here) above.
 
 ### 1. Get your API key
 
