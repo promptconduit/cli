@@ -18,6 +18,8 @@ var (
 	skillsForce    bool
 	skillsSyncDir  string
 	skillsRepo     string
+	skillsLocal    bool
+	skillsTool     string
 )
 
 // skillsCmd is the parent command
@@ -56,14 +58,20 @@ var skillsGenerateCmd = &cobra.Command{
 	Long: `Analyze your AI coding session history to detect repeatable workflows
 and generate suggested slash commands (skills).
 
-The platform analyzes:
-  - Conversation patterns from synced transcripts
-  - Recurring prompt themes (repeated questions and requests)
+Platform mode (default):
+  Analyzes synced transcripts on the platform. Results are pending approval.
+  Review with 'skills list', then install with 'skills sync'.
 
-Generated skills are pending approval. Review them with 'skills list',
-then install with 'skills sync' after approving in the dashboard.
+Local mode (--local):
+  Reads your AI tool transcripts directly from disk and writes skills
+  immediately to ~/.claude/skills/. No platform account required.
+  Uses your existing Claude Code subscription, ANTHROPIC_API_KEY, or OPENAI_API_KEY.
 
-Results are cached for 24 hours. Use --force to re-analyze.`,
+Examples:
+  promptconduit skills generate             # Platform mode
+  promptconduit skills generate --local     # Local mode (any AI subscription)
+  promptconduit skills generate --local --tool claude-code  # Claude Code only
+  promptconduit skills generate --force     # Re-analyze regardless of cache`,
 	RunE: runSkillsGenerate,
 }
 
@@ -105,6 +113,8 @@ func init() {
 	skillsGenerateCmd.Flags().BoolVar(&skillsForce, "force", false, "Re-analyze even if cache is still valid")
 	skillsGenerateCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 	skillsGenerateCmd.Flags().StringVar(&skillsRepo, "repo", "", "Scope to a specific project (auto-detected if in a git repo)")
+	skillsGenerateCmd.Flags().BoolVar(&skillsLocal, "local", false, "Run locally using your existing AI subscription (no platform account needed)")
+	skillsGenerateCmd.Flags().StringVar(&skillsTool, "tool", "all", "Which AI tool transcripts to read: claude-code, codex, copilot, all")
 
 	skillsSyncCmd.Flags().StringVar(&skillsSyncDir, "dir", "", "Override global command directory (default: ~/.claude/commands/)")
 	skillsSyncCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
@@ -152,6 +162,10 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 }
 
 func runSkillsGenerate(cmd *cobra.Command, args []string) error {
+	if skillsLocal {
+		return runSkillsGenerateLocal(cmd, args)
+	}
+
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
