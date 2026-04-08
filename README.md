@@ -496,10 +496,10 @@ make snapshot
 
 ## License
 
-[MIT](LICENSE) - Copyright (c) 2025 PromptConduit
+[MIT](LICENSE) - Copyright (c) 2026 PromptConduit
 
 ## Links
 
 - [PromptConduit Website](https://promptconduit.dev)
-- [Documentation](https://docs.promptconduit.dev)
+- [Documentation](https://promptconduit.dev/docs)
 - [Issue Tracker](https://github.com/promptconduit/cli/issues)
