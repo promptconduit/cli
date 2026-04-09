@@ -1,8 +1,9 @@
 # PromptConduit CLI
 
-Capture prompts and events from AI coding assistants.
+Every great workflow you build in Claude Code disappears when the session ends. PromptConduit captures your AI coding sessions and turns repeated patterns into reusable slash commands — automatically, and without a platform account.
 
 [![CI](https://github.com/promptconduit/cli/actions/workflows/test.yml/badge.svg)](https://github.com/promptconduit/cli/actions/workflows/test.yml)
+[![GitHub Stars](https://img.shields.io/github/stars/promptconduit/cli?style=social)](https://github.com/promptconduit/cli/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go](https://img.shields.io/badge/go-1.21+-blue.svg)](https://go.dev/dl/)
 
@@ -18,7 +19,7 @@ brew tap promptconduit/tap && brew install promptconduit
 promptconduit skills generate --local
 ```
 
-Skills are written directly to `~/.claude/commands/` and show up in Claude Code's `/` autocomplete immediately. Reads from Claude Code, OpenAI Codex CLI, and GitHub Copilot CLI — whichever you have installed.
+Skills are written directly to `~/.claude/skills/` and show up in Claude Code's `/` autocomplete immediately. Reads from Claude Code, OpenAI Codex CLI, and GitHub Copilot CLI — whichever you have installed.
 
 [Jump to full local skills docs →](#local-skill-generation)
 
@@ -295,14 +296,12 @@ promptconduit config env add prod \
 ### Switching Environments
 
 ```bash
-# Switch to local development (shortcut)
-promptconduit config set-env local
-
-# Switch to production
-promptconduit config set-env prod
-
-# Or use the full command
+# Switch environments
 promptconduit config env use local
+promptconduit config env use prod
+
+# Shorthand alias
+promptconduit config set-env local
 
 # List all environments
 promptconduit config env list
