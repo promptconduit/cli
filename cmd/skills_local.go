@@ -213,6 +213,7 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 
 	// 4. Filter by repo if scoped
 	if repo != "" {
+		globalCount := len(allConvos)
 		var filtered []*intsync.ParsedConversation
 		for _, c := range allConvos {
 			if c.RepoName == repo {
@@ -220,6 +221,9 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 			}
 		}
 		allConvos = filtered
+		if len(allConvos) == 0 {
+			return fmt.Errorf("no transcripts found for repo %q (found %d global transcripts)\n\nUse --repo='' to analyze all transcripts globally, or run from outside a git repo", repo, globalCount)
+		}
 	}
 
 	// Cap at max
@@ -251,13 +255,16 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 
 	// 6. Minimum conversation guard
 	if len(toAnalyze) < localMinConversations {
-		if len(toAnalyze) > 0 {
-			fmt.Printf("Only %d new transcript(s) since last analysis (need %d).\n", len(toAnalyze), localMinConversations)
-			fmt.Println("Use --force to re-analyze all transcripts.")
-			return nil
+		total := len(allConvos)
+		already := total - len(toAnalyze)
+		if already > 0 {
+			fmt.Printf("Only %d new transcript(s) since last analysis (need %d to detect patterns).\n", len(toAnalyze), localMinConversations)
+			fmt.Printf("%d transcript(s) were already analyzed. Use --force to re-analyze all %d.\n", already, total)
+		} else {
+			fmt.Printf("Need at least %d conversations to detect patterns, found %d.\n", localMinConversations, len(toAnalyze))
+			fmt.Println("Use Claude Code more and run again, or use --force to analyze what's available now.")
 		}
-		return fmt.Errorf("need at least %d conversations for skill detection, found %d\n\nUse Claude Code more, or run with --force to include previously analyzed sessions",
-			localMinConversations, len(toAnalyze))
+		return nil
 	}
 
 	// 7. Progress header
@@ -286,14 +293,20 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// 9. Write SKILL.md files
+	// 9. Dry-run: preview without writing
+	if skillsDryRun {
+		outputLocalSkillsDryRun(skills, len(toAnalyze))
+		return nil
+	}
+
+	// 10. Write SKILL.md files
 	written, writeErrs := writeLocalSkills(skills, gitRoot, repo)
 
-	// 10. Save state
+	// 11. Save state
 	markLocalTranscriptsAnalyzed(state, toAnalyze)
 	_ = saveLocalSkillsState(state)
 
-	// 11. Output results
+	// 12. Output results
 	outputLocalSkillsGenerated(skills, written, writeErrs, len(toAnalyze))
 
 	return nil
@@ -796,6 +809,8 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]
 		fmt.Printf("    %s\n", truncateString(s.Description, 80))
 		if path, ok := written[s.Name]; ok {
 			fmt.Printf("    → Written to: %s\n", path)
+		} else {
+			fmt.Printf("    → Not written (see errors below)\n")
 		}
 		fmt.Println()
 	}
@@ -808,13 +823,33 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]
 	}
 
 	successCount := len(written)
-	if successCount > 0 && len(skills) > 0 {
+	total := len(skills)
+	if successCount == total && successCount > 0 {
 		fmt.Printf("%d skill%s written. Use them with /%s, etc.\n",
 			successCount, pluralS(successCount), skills[0].Name)
 		fmt.Println("Review and delete ~/.claude/skills/<name>/ for any you don't want.")
+	} else if successCount > 0 {
+		fmt.Printf("%d of %d skill%s written. Use them with /%s, etc.\n",
+			successCount, total, pluralS(total), skills[0].Name)
+		fmt.Println("Review and delete ~/.claude/skills/<name>/ for any you don't want.")
 	} else {
-		fmt.Println("No skills written.")
+		fmt.Fprintln(os.Stderr, "No skills written. Check that ~/.claude/skills/ is writable.")
 	}
+}
+
+func outputLocalSkillsDryRun(skills []localDetectedSkill, convCount int) {
+	fmt.Printf("Dry run — %d skill%s would be generated from %d transcripts:\n\n",
+		len(skills), pluralS(len(skills)), convCount)
+
+	for _, s := range skills {
+		fmt.Printf("  /%s  (%s, %d%%)\n", s.Name, s.SkillType, int(s.Confidence*100))
+		fmt.Printf("    %s\n", s.DisplayName)
+		fmt.Printf("    %s\n", truncateString(s.Description, 80))
+		fmt.Printf("    → Would write to: ~/.claude/skills/%s/SKILL.md\n", s.Name)
+		fmt.Println()
+	}
+
+	fmt.Println("Run without --dry-run to write these files.")
 }
 
 func pluralS(n int) string {
