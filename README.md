@@ -433,6 +433,7 @@ All events are normalized to this schema:
 | `agent_response` | Agent completed a response turn |
 | `agent_response_failure` | Response turn ended due to API error |
 | `subagent_start` | Subagent spawned |
+| `subagent_stop` | Subagent completed |
 | `task_created` | Task created (agent teams) |
 | `task_completed` | Task completed (agent teams) |
 | `teammate_idle` | Agent team teammate went idle |

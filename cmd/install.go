@@ -158,10 +158,10 @@ func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 		"CwdChanged":         []map[string]interface{}{{"hooks": makeHook(5000)}},
 		"FileChanged":        []map[string]interface{}{{"hooks": makeHook(5000)}},
 		// Context compaction events
-		"PreCompact":    makeMatcherHook(5000),
-		"PostCompact":   makeMatcherHook(5000),
-		"WorktreeCreate": makeMatcherHook(5000),
-		"WorktreeRemove": makeMatcherHook(5000),
+		"PreCompact":     []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"PostCompact":    []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"WorktreeCreate": []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"WorktreeRemove": []map[string]interface{}{{"hooks": makeHook(5000)}},
 		// MCP events
 		"Elicitation":       makeMatcherHook(5000),
 		"ElicitationResult": makeMatcherHook(5000),
