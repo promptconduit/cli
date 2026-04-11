@@ -427,12 +427,45 @@ All events are normalized to this schema:
 | `prompt_submit` | User submitted a prompt |
 | `tool_pre` | Before tool execution |
 | `tool_post` | After tool execution |
+| `tool_failure` | Tool execution failed |
 | `session_start` | Session started |
 | `session_end` | Session ended |
+| `agent_response` | Agent completed a response turn |
+| `agent_response_failure` | Response turn ended due to API error |
+| `subagent_start` | Subagent spawned |
+| `subagent_stop` | Subagent completed |
+| `task_created` | Task created (agent teams) |
+| `task_completed` | Task completed (agent teams) |
+| `teammate_idle` | Agent team teammate went idle |
+| `permission_request` | Permission prompt shown |
+| `permission_denied` | Tool call denied by auto mode |
+| `context_compact` | Context compaction triggered |
+| `context_compact_done` | Context compaction completed |
+| `worktree_create` | Git worktree created |
+| `worktree_remove` | Git worktree removed |
+| `instructions_loaded` | CLAUDE.md or rules file loaded |
+| `config_change` | Configuration file changed |
+| `cwd_changed` | Working directory changed |
+| `file_changed` | Watched file changed on disk |
+| `mcp_elicitation` | MCP server requested user input |
+| `mcp_elicitation_result` | User responded to MCP elicitation |
+| `notification` | System notification sent |
 | `shell_pre` | Before shell command (Cursor) |
 | `shell_post` | After shell command (Cursor) |
 | `file_read` | File read operation (Cursor) |
 | `file_edit` | File edit operation (Cursor) |
+
+### Headless Mode (claude -p)
+
+PromptConduit hooks work in Claude Code's headless/print mode (`claude -p "..."`) without any changes. Hooks fire and capture events identically in both interactive and non-interactive sessions.
+
+**`--bare` mode limitation:** When running `claude --bare -p "..."`, Claude Code skips auto-discovery of hooks and settings, so PromptConduit hooks will not fire. To capture events in bare mode, explicitly pass your settings file:
+
+```bash
+claude --bare -p "your prompt" --settings ~/.claude/settings.json
+```
+
+Note: `--bare` is expected to become the default for `-p` in a future Claude Code release. The `--settings` workaround ensures capture until that changes.
 
 ## Development
 
