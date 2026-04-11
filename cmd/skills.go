@@ -16,6 +16,7 @@ var (
 	skillsType     string
 	skillsLimit    int
 	skillsForce    bool
+	skillsDryRun   bool
 	skillsSyncDir  string
 	skillsRepo     string
 	skillsLocal    bool
@@ -115,6 +116,7 @@ func init() {
 	skillsGenerateCmd.Flags().StringVar(&skillsRepo, "repo", "", "Scope to a specific project (auto-detected if in a git repo)")
 	skillsGenerateCmd.Flags().BoolVar(&skillsLocal, "local", false, "Run locally using your existing AI subscription (no platform account needed)")
 	skillsGenerateCmd.Flags().StringVar(&skillsTool, "tool", "all", "Which AI tool transcripts to read: claude-code, codex, copilot, all")
+	skillsGenerateCmd.Flags().BoolVar(&skillsDryRun, "dry-run", false, "Preview skills that would be generated without writing files")
 
 	skillsSyncCmd.Flags().StringVar(&skillsSyncDir, "dir", "", "Override global command directory (default: ~/.claude/commands/)")
 	skillsSyncCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
@@ -488,7 +490,7 @@ func outputSkillsGenerated(data map[string]interface{}) error {
 	}
 
 	fmt.Println("Next steps:")
-	fmt.Println("  1. Review and approve skills at promptconduit.io/skills")
+	fmt.Println("  1. Review and approve skills at promptconduit.dev/skills")
 	fmt.Println("  2. Run 'promptconduit skills sync' to install approved skills")
 	return nil
 }
