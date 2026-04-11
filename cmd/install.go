@@ -133,21 +133,40 @@ func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		// Core events
+		// Session lifecycle
+		"SessionStart": []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"SessionEnd":   []map[string]interface{}{{"hooks": makeHook(5000)}},
+		// Per-turn events
 		"UserPromptSubmit": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"PreToolUse":       makeMatcherHook(5000),
-		"PostToolUse":      makeMatcherHook(5000),
-		"PostToolUseFailure": makeMatcherHook(5000), // Tool execution failures
-		"SessionStart":     []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"SessionEnd":       []map[string]interface{}{{"hooks": makeHook(5000)}},
-		// Agent events
-		"Stop":          []map[string]interface{}{{"hooks": makeHook(5000)}}, // Agent completes response
-		"SubagentStart": makeMatcherHook(5000),                               // Subagent spawned
-		"SubagentStop":  makeMatcherHook(5000),                               // Subagent completes
-		// Context and permission events
-		"PreCompact":        makeMatcherHook(5000), // Context compaction
-		"PermissionRequest": makeMatcherHook(5000), // Permission dialogs
-		"Notification":      makeMatcherHook(5000), // System notifications
+		"Stop":             []map[string]interface{}{{"hooks": makeHook(5000)}}, // Agent completes response
+		"StopFailure":      []map[string]interface{}{{"hooks": makeHook(5000)}}, // Turn ends due to API error
+		// Tool execution events
+		"PreToolUse":         makeMatcherHook(5000),
+		"PostToolUse":        makeMatcherHook(5000),
+		"PostToolUseFailure": makeMatcherHook(5000),
+		"PermissionRequest":  makeMatcherHook(5000),
+		"PermissionDenied":   makeMatcherHook(5000), // Auto mode denies a tool call
+		// Agent and task events
+		"SubagentStart": makeMatcherHook(5000),
+		"SubagentStop":  makeMatcherHook(5000),
+		"TaskCreated":   makeMatcherHook(5000),
+		"TaskCompleted": makeMatcherHook(5000),
+		"TeammateIdle":  makeMatcherHook(5000),
+		// File and configuration events
+		"InstructionsLoaded": []map[string]interface{}{{"hooks": makeHook(5000)}}, // CLAUDE.md loaded
+		"ConfigChange":       []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"CwdChanged":         []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"FileChanged":        []map[string]interface{}{{"hooks": makeHook(5000)}},
+		// Context compaction events
+		"PreCompact":    makeMatcherHook(5000),
+		"PostCompact":   makeMatcherHook(5000),
+		"WorktreeCreate": makeMatcherHook(5000),
+		"WorktreeRemove": makeMatcherHook(5000),
+		// MCP events
+		"Elicitation":       makeMatcherHook(5000),
+		"ElicitationResult": makeMatcherHook(5000),
+		// Notifications
+		"Notification": makeMatcherHook(5000),
 	}
 }
 
