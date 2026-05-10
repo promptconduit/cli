@@ -89,6 +89,28 @@ make install
 
 Download the latest release for your platform from the [releases page](https://github.com/promptconduit/cli/releases).
 
+### Staying up to date
+
+Once installed, `promptconduit` checks GitHub releases at most once every 24 hours
+in the background. When a newer version is published it prints a one-line notice
+to stderr and applies the upgrade in the background (atomic self-replace; the
+running process is unaffected). The next invocation runs the new version.
+
+```bash
+promptconduit upgrade         # upgrade now (interactive)
+promptconduit upgrade --check # only check; don't download
+
+# Opt out of background upgrades:
+promptconduit config set --disable-auto-update=true
+# Or via environment:
+PROMPTCONDUIT_AUTO_UPDATE=0 promptconduit ...
+```
+
+The check uses the unauthenticated GitHub API (60 requests/hour/IP) and is
+cached at `~/.config/promptconduit/update.json`. Homebrew users get a notice
+pointing them to `brew upgrade promptconduit` instead — the CLI never tries
+to overwrite a binary it cannot write to.
+
 ## Platform Quick Start
 
 > **No account?** See [No Account? Start Here](#no-account-start-here) above.
@@ -158,6 +180,9 @@ promptconduit sync [tool] [flags]
 
 # Show version
 promptconduit version
+
+# Upgrade to the latest release
+promptconduit upgrade
 ```
 
 ### Sync Command

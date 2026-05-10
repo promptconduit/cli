@@ -15,6 +15,7 @@ const (
 	EnvDebug           = "PROMPTCONDUIT_DEBUG"
 	EnvTimeout         = "PROMPTCONDUIT_TIMEOUT"
 	EnvTool            = "PROMPTCONDUIT_TOOL"
+	EnvAutoUpdate      = "PROMPTCONDUIT_AUTO_UPDATE" // "0"/"false" disables background self-upgrade
 	EnvXDGConfigHome   = "XDG_CONFIG_HOME"
 	ConfigDirName      = "promptconduit" // ~/.config/promptconduit/
 	ConfigFileName     = "config.json"
@@ -26,6 +27,9 @@ type Config struct {
 	APIURL         string `json:"api_url,omitempty"`
 	Debug          bool   `json:"debug,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	// DisableAutoUpdate opts out of the background "check + self-upgrade"
+	// behaviour. Zero value (false) leaves auto-update enabled.
+	DisableAutoUpdate bool `json:"disable_auto_update,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -37,10 +41,11 @@ type FileConfig struct {
 	Environments map[string]*Config `json:"environments,omitempty"`
 
 	// Legacy flat config (for backwards compatibility)
-	APIKey  string `json:"api_key,omitempty"`
-	APIURL  string `json:"api_url,omitempty"`
-	Debug   bool   `json:"debug,omitempty"`
-	Timeout int    `json:"timeout_seconds,omitempty"`
+	APIKey            string `json:"api_key,omitempty"`
+	APIURL            string `json:"api_url,omitempty"`
+	Debug             bool   `json:"debug,omitempty"`
+	Timeout           int    `json:"timeout_seconds,omitempty"`
+	DisableAutoUpdate bool   `json:"disable_auto_update,omitempty"`
 }
 
 // IsConfigured returns true if the API key is set
@@ -136,12 +141,13 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate {
 		return &Config{
-			APIKey:         fc.APIKey,
-			APIURL:         fc.APIURL,
-			Debug:          fc.Debug,
-			TimeoutSeconds: fc.Timeout,
+			APIKey:            fc.APIKey,
+			APIURL:            fc.APIURL,
+			Debug:             fc.Debug,
+			TimeoutSeconds:    fc.Timeout,
+			DisableAutoUpdate: fc.DisableAutoUpdate,
 		}
 	}
 
@@ -173,7 +179,16 @@ func LoadConfig() *Config {
 			if fileCfg.TimeoutSeconds > 0 {
 				cfg.TimeoutSeconds = fileCfg.TimeoutSeconds
 			}
+			if fileCfg.DisableAutoUpdate {
+				cfg.DisableAutoUpdate = true
+			}
 		}
+	}
+
+	// PROMPTCONDUIT_AUTO_UPDATE=0/false disables; anything else (or unset)
+	// leaves whatever the file config decided.
+	if v := os.Getenv(EnvAutoUpdate); v == "0" || v == "false" || v == "no" {
+		cfg.DisableAutoUpdate = true
 	}
 
 	// Apply defaults
