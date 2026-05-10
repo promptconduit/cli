@@ -100,32 +100,46 @@ func (s *Store) LoadOrCreateTrace(sessionID string) (*TraceRecord, error) {
 		return rec, nil
 	}
 
-	// Slow path: try to create exclusively.
+	// Slow path: write to a tempfile, then atomically link to the target.
+	// os.Link fails with EEXIST when the target already exists, which is the
+	// only race-safe primitive for "create-only" — unlike Rename, it never
+	// overwrites, and unlike O_CREATE|O_EXCL + sequential write, the file is
+	// fully populated at the moment any concurrent reader can see it.
 	rec := &TraceRecord{
 		SessionID:  sessionID,
 		TraceID:    NewTraceID(),
 		CreatedAt:  time.Now().UTC(),
 		LastSeenAt: time.Now().UTC(),
 	}
-
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return nil, fmt.Errorf("correlation: marshal trace: %w", err)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	tmp, err := os.CreateTemp(s.tracesDir(), ".tmp-*")
 	if err != nil {
-		if os.IsExist(err) {
-			// Lost the race; another hook wrote it first.
-			if existing, rerr := readTrace(path); rerr == nil {
-				return existing, nil
-			}
-		}
-		return nil, fmt.Errorf("correlation: create trace: %w", err)
+		return nil, fmt.Errorf("correlation: tempfile: %w", err)
 	}
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		return nil, fmt.Errorf("correlation: write trace: %w", err)
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return nil, fmt.Errorf("correlation: write tempfile: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return nil, fmt.Errorf("correlation: close tempfile: %w", err)
+	}
+
+	if err := os.Link(tmpName, path); err != nil {
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("correlation: link trace: %w", err)
+		}
+		// Lost the race; another process won. Read theirs.
+		existing, rerr := readTrace(path)
+		if rerr != nil {
+			return nil, fmt.Errorf("correlation: read after race: %w", rerr)
+		}
+		return existing, nil
 	}
 	return rec, nil
 }
