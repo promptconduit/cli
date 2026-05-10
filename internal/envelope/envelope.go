@@ -9,7 +9,7 @@ import (
 // The platform handles all transformation to canonical format.
 type RawEventEnvelope struct {
 	// Envelope metadata
-	EnvelopeVersion string `json:"envelope_version"` // Currently "1.0"
+	EnvelopeVersion string `json:"envelope_version"` // Currently "1.1"
 	CliVersion      string `json:"cli_version"`      // CLI semver
 
 	// Tool identification
@@ -27,6 +27,23 @@ type RawEventEnvelope struct {
 
 	// Attachment metadata (binary data sent separately in multipart)
 	Attachments []AttachmentMetadata `json:"attachments,omitempty"`
+
+	// W3C Trace Context-compatible correlation IDs.
+	// Optional: older CLIs won't emit it; servers should treat absence as
+	// "no correlation, fall back to existing heuristics".
+	Correlation *Correlation `json:"correlation,omitempty"`
+}
+
+// Correlation carries W3C Trace Context-compatible IDs so events can be
+// stitched into a single trace. Generated locally; not OTEL-SDK backed.
+type Correlation struct {
+	// TraceID is 32 lowercase hex chars (16 bytes), stable per session.
+	TraceID string `json:"trace_id"`
+	// SpanID is 16 lowercase hex chars (8 bytes), unique per event.
+	SpanID string `json:"span_id"`
+	// ParentSpanID is 16 lowercase hex chars when this event has a known
+	// parent in a defined event-chain (tool_post → tool_pre, etc.).
+	ParentSpanID string `json:"parent_span_id,omitempty"`
 }
 
 // AttachmentMetadata describes an attachment sent with the envelope.
@@ -62,7 +79,7 @@ type GitContext struct {
 // New creates a new RawEventEnvelope
 func New(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext) *RawEventEnvelope {
 	return &RawEventEnvelope{
-		EnvelopeVersion: "1.0",
+		EnvelopeVersion: "1.1",
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,
@@ -75,7 +92,7 @@ func New(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitConte
 // NewWithAttachments creates a new RawEventEnvelope with attachment metadata
 func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext, attachments []AttachmentMetadata) *RawEventEnvelope {
 	return &RawEventEnvelope{
-		EnvelopeVersion: "1.0",
+		EnvelopeVersion: "1.1",
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,

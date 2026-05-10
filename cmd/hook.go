@@ -91,15 +91,23 @@ func processHookEvent() error {
 	// Detect tool (simple heuristics)
 	tool := detectTool(nativeEvent)
 	hookEvent := getHookEventName(nativeEvent)
+	sessionID := getSessionID(nativeEvent)
 
 	fileLog("Detected tool: %s, hook event: %s", tool, hookEvent)
+
+	// Build correlation IDs (W3C-compatible trace_id/span_id).
+	// Stable across hook fires within a session; best-effort, never blocks.
+	corr := buildCorrelation(tool, hookEvent, sessionID, nativeEvent)
+	if corr != nil {
+		fileLog("correlation: trace=%s span=%s parent=%s", corr.TraceID, corr.SpanID, corr.ParentSpanID)
+	}
 
 	// Extract git context from working directory
 	var gitCtx *envelope.GitContext
 	cwd := getWorkingDirectory(nativeEvent)
 
 	// Write to local events file for macOS app
-	writeLocalEvent(hookEvent, cwd, getSessionID(nativeEvent))
+	writeLocalEvent(hookEvent, cwd, sessionID)
 
 	// Trigger auto-sync on SessionEnd or Stop events
 	// SessionEnd: Fires when user explicitly ends session (rare - users often just close terminal)
@@ -107,7 +115,6 @@ func processHookEvent() error {
 	// The sync logic deduplicates via hash checking, so frequent triggers are safe
 	// NOTE: Called directly (not in goroutine) since it spawns a subprocess and returns quickly
 	if hookEvent == "SessionEnd" || hookEvent == "Stop" {
-		sessionID := getSessionID(nativeEvent)
 		if sessionID != "" {
 			triggerAutoSync(sessionID)
 		}
@@ -158,6 +165,7 @@ func processHookEvent() error {
 
 				// Create envelope with attachment metadata
 				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, gitCtx, envAttachments)
+				env.Correlation = corr
 
 				// Send via multipart with binary attachments
 				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
@@ -173,6 +181,7 @@ func processHookEvent() error {
 
 	// Create envelope with raw payload (no attachments case, or non-UserPromptSubmit events)
 	env := envelope.New(Version, tool, hookEvent, rawInput, gitCtx)
+	env.Correlation = corr
 
 	fileLog("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
