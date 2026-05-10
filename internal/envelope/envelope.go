@@ -5,12 +5,21 @@ import (
 	"time"
 )
 
+// EnvelopeVersion is the current envelope schema version. The platform is
+// expected to handle older versions transparently — the CLI is intentionally
+// thin and the server normalizes everything.
+const EnvelopeVersion = "1.2"
+
 // RawEventEnvelope is the wrapper sent to the platform API.
-// The platform handles all transformation to canonical format.
+//
+// The CLI is a thin client: it forwards the tool's raw event payload
+// untouched (`native_payload`), plus an `enrichment` block of locally
+// computed/inferred context (git, host, correlation IDs, etc.) to help the
+// server normalize. All canonical-format work happens server-side.
 type RawEventEnvelope struct {
 	// Envelope metadata
-	EnvelopeVersion string `json:"envelope_version"` // Currently "1.0"
-	CliVersion      string `json:"cli_version"`      // CLI semver
+	EnvelopeVersion string `json:"envelope_version"`
+	CliVersion      string `json:"cli_version"`
 
 	// Tool identification
 	Tool      string `json:"tool"`       // claude-code, cursor, gemini-cli, etc.
@@ -19,14 +28,63 @@ type RawEventEnvelope struct {
 	// Timing
 	CapturedAt string `json:"captured_at"` // ISO8601 timestamp
 
-	// Git context (extracted by CLI)
-	Git *GitContext `json:"git,omitempty"`
-
 	// Raw native payload (passed through untouched)
 	NativePayload json.RawMessage `json:"native_payload"`
 
 	// Attachment metadata (binary data sent separately in multipart)
 	Attachments []AttachmentMetadata `json:"attachments,omitempty"`
+
+	// Enrichment is everything the CLI added on top of the raw payload.
+	// Optional: the server should treat absence as "no enrichment available"
+	// rather than erroring.
+	Enrichment *Enrichment `json:"enrichment,omitempty"`
+
+	// Deprecated: use Enrichment.Git. Mirrored for one or two releases so
+	// servers expecting the 1.0/1.1 shape continue to receive git context.
+	// Remove once all servers read from enrichment.git.
+	Git *GitContext `json:"git,omitempty"`
+
+	// Deprecated: use Enrichment.Correlation. Mirrored for one or two
+	// releases so servers expecting the 1.1 shape continue to receive
+	// correlation IDs. Remove once all servers read from
+	// enrichment.correlation.
+	Correlation *Correlation `json:"correlation,omitempty"`
+}
+
+// Enrichment carries CLI-computed context that augments the raw payload.
+// Add new fields here rather than at the top level so the envelope keeps a
+// clean separation between metadata, raw data, and enrichment.
+type Enrichment struct {
+	// Git context (extracted by walking up from cwd).
+	Git *GitContext `json:"git,omitempty"`
+
+	// Source provider derived from the git remote URL: "github", "gitlab",
+	// "bitbucket", "azure", or "" when unknown / no remote.
+	Source string `json:"source,omitempty"`
+
+	// W3C Trace Context-compatible correlation IDs.
+	Correlation *Correlation `json:"correlation,omitempty"`
+
+	// Host is the machine hostname (best-effort; "" if unavailable).
+	Host string `json:"host,omitempty"`
+
+	// OS is runtime.GOOS (linux, darwin, windows, ...).
+	OS string `json:"os,omitempty"`
+
+	// Arch is runtime.GOARCH (amd64, arm64, ...).
+	Arch string `json:"arch,omitempty"`
+}
+
+// Correlation carries W3C Trace Context-compatible IDs so events can be
+// stitched into a single trace. Generated locally; not OTEL-SDK backed.
+type Correlation struct {
+	// TraceID is 32 lowercase hex chars (16 bytes), stable per session.
+	TraceID string `json:"trace_id"`
+	// SpanID is 16 lowercase hex chars (8 bytes), unique per event.
+	SpanID string `json:"span_id"`
+	// ParentSpanID is 16 lowercase hex chars when this event has a known
+	// parent in a defined event-chain (tool_post → tool_pre, etc.).
+	ParentSpanID string `json:"parent_span_id,omitempty"`
 }
 
 // AttachmentMetadata describes an attachment sent with the envelope.
@@ -59,30 +117,51 @@ type GitContext struct {
 	IsDetachedHead   bool   `json:"is_detached_head,omitempty"`
 }
 
-// New creates a new RawEventEnvelope
-func New(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext) *RawEventEnvelope {
-	return &RawEventEnvelope{
-		EnvelopeVersion: "1.0",
+// New creates a new RawEventEnvelope with the given enrichment block.
+// Pass nil for enrichment if none is available.
+func New(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment) *RawEventEnvelope {
+	env := &RawEventEnvelope{
+		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		Git:             git,
 		NativePayload:   nativePayload,
+		Enrichment:      enr,
 	}
+	mirrorLegacyFields(env)
+	return env
 }
 
-// NewWithAttachments creates a new RawEventEnvelope with attachment metadata
-func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext, attachments []AttachmentMetadata) *RawEventEnvelope {
-	return &RawEventEnvelope{
-		EnvelopeVersion: "1.0",
+// NewWithAttachments creates a new RawEventEnvelope with attachment metadata.
+func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment, attachments []AttachmentMetadata) *RawEventEnvelope {
+	env := &RawEventEnvelope{
+		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		Git:             git,
 		NativePayload:   nativePayload,
 		Attachments:     attachments,
+		Enrichment:      enr,
+	}
+	mirrorLegacyFields(env)
+	return env
+}
+
+// mirrorLegacyFields copies enrichment.git and enrichment.correlation to the
+// deprecated top-level fields so older servers that read the 1.1 shape keep
+// working during the transition. Remove once all servers consume from
+// enrichment.* directly.
+func mirrorLegacyFields(env *RawEventEnvelope) {
+	if env.Enrichment == nil {
+		return
+	}
+	if env.Enrichment.Git != nil {
+		env.Git = env.Enrichment.Git
+	}
+	if env.Enrichment.Correlation != nil {
+		env.Correlation = env.Enrichment.Correlation
 	}
 }
 
