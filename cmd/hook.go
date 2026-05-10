@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -127,6 +128,8 @@ func processHookEvent() error {
 		}
 	}
 
+	enr := buildEnrichment(gitCtx, corr)
+
 	apiClient := client.NewClient(cfg, Version)
 
 	// For UserPromptSubmit events, check if the user's message includes attachments
@@ -164,8 +167,7 @@ func processHookEvent() error {
 				}
 
 				// Create envelope with attachment metadata
-				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, gitCtx, envAttachments)
-				env.Correlation = corr
+				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, enr, envAttachments)
 
 				// Send via multipart with binary attachments
 				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
@@ -180,8 +182,7 @@ func processHookEvent() error {
 	}
 
 	// Create envelope with raw payload (no attachments case, or non-UserPromptSubmit events)
-	env := envelope.New(Version, tool, hookEvent, rawInput, gitCtx)
-	env.Correlation = corr
+	env := envelope.New(Version, tool, hookEvent, rawInput, enr)
 
 	fileLog("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
@@ -193,6 +194,32 @@ func processHookEvent() error {
 
 	fileLog("Envelope queued for async send")
 	return nil
+}
+
+// buildEnrichment assembles the enrichment block: CLI-computed context that
+// augments the raw native payload (git, source provider, correlation IDs,
+// host/os/arch). Returns nil only when there's nothing to send.
+func buildEnrichment(gitCtx *envelope.GitContext, corr *envelope.Correlation) *envelope.Enrichment {
+	enr := &envelope.Enrichment{
+		Git:         gitCtx,
+		Correlation: corr,
+		Host:        hostname(),
+		OS:          runtime.GOOS,
+		Arch:        runtime.GOARCH,
+	}
+	if gitCtx != nil {
+		enr.Source = git.DetectSource(gitCtx.RemoteURL)
+	}
+	return enr
+}
+
+// hostname returns the machine hostname or "" if unavailable.
+func hostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return h
 }
 
 // detectTool identifies which AI tool generated the event

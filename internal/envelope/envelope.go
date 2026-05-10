@@ -5,12 +5,21 @@ import (
 	"time"
 )
 
+// EnvelopeVersion is the current envelope schema version. The platform is
+// expected to handle older versions transparently — the CLI is intentionally
+// thin and the server normalizes everything.
+const EnvelopeVersion = "1.2"
+
 // RawEventEnvelope is the wrapper sent to the platform API.
-// The platform handles all transformation to canonical format.
+//
+// The CLI is a thin client: it forwards the tool's raw event payload
+// untouched (`native_payload`), plus an `enrichment` block of locally
+// computed/inferred context (git, host, correlation IDs, etc.) to help the
+// server normalize. All canonical-format work happens server-side.
 type RawEventEnvelope struct {
 	// Envelope metadata
-	EnvelopeVersion string `json:"envelope_version"` // Currently "1.1"
-	CliVersion      string `json:"cli_version"`      // CLI semver
+	EnvelopeVersion string `json:"envelope_version"`
+	CliVersion      string `json:"cli_version"`
 
 	// Tool identification
 	Tool      string `json:"tool"`       // claude-code, cursor, gemini-cli, etc.
@@ -19,19 +28,40 @@ type RawEventEnvelope struct {
 	// Timing
 	CapturedAt string `json:"captured_at"` // ISO8601 timestamp
 
-	// Git context (extracted by CLI)
-	Git *GitContext `json:"git,omitempty"`
-
 	// Raw native payload (passed through untouched)
 	NativePayload json.RawMessage `json:"native_payload"`
 
 	// Attachment metadata (binary data sent separately in multipart)
 	Attachments []AttachmentMetadata `json:"attachments,omitempty"`
 
+	// Enrichment is everything the CLI added on top of the raw payload.
+	// Optional: the server should treat absence as "no enrichment available"
+	// rather than erroring.
+	Enrichment *Enrichment `json:"enrichment,omitempty"`
+}
+
+// Enrichment carries CLI-computed context that augments the raw payload.
+// Add new fields here rather than at the top level so the envelope keeps a
+// clean separation between metadata, raw data, and enrichment.
+type Enrichment struct {
+	// Git context (extracted by walking up from cwd).
+	Git *GitContext `json:"git,omitempty"`
+
+	// Source provider derived from the git remote URL: "github", "gitlab",
+	// "bitbucket", "azure", or "" when unknown / no remote.
+	Source string `json:"source,omitempty"`
+
 	// W3C Trace Context-compatible correlation IDs.
-	// Optional: older CLIs won't emit it; servers should treat absence as
-	// "no correlation, fall back to existing heuristics".
 	Correlation *Correlation `json:"correlation,omitempty"`
+
+	// Host is the machine hostname (best-effort; "" if unavailable).
+	Host string `json:"host,omitempty"`
+
+	// OS is runtime.GOOS (linux, darwin, windows, ...).
+	OS string `json:"os,omitempty"`
+
+	// Arch is runtime.GOARCH (amd64, arm64, ...).
+	Arch string `json:"arch,omitempty"`
 }
 
 // Correlation carries W3C Trace Context-compatible IDs so events can be
@@ -76,30 +106,31 @@ type GitContext struct {
 	IsDetachedHead   bool   `json:"is_detached_head,omitempty"`
 }
 
-// New creates a new RawEventEnvelope
-func New(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext) *RawEventEnvelope {
+// New creates a new RawEventEnvelope with the given enrichment block.
+// Pass nil for enrichment if none is available.
+func New(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment) *RawEventEnvelope {
 	return &RawEventEnvelope{
-		EnvelopeVersion: "1.1",
+		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		Git:             git,
 		NativePayload:   nativePayload,
+		Enrichment:      enr,
 	}
 }
 
-// NewWithAttachments creates a new RawEventEnvelope with attachment metadata
-func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, git *GitContext, attachments []AttachmentMetadata) *RawEventEnvelope {
+// NewWithAttachments creates a new RawEventEnvelope with attachment metadata.
+func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment, attachments []AttachmentMetadata) *RawEventEnvelope {
 	return &RawEventEnvelope{
-		EnvelopeVersion: "1.1",
+		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
 		HookEvent:       hookEvent,
 		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		Git:             git,
 		NativePayload:   nativePayload,
 		Attachments:     attachments,
+		Enrichment:      enr,
 	}
 }
 
