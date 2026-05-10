@@ -38,6 +38,17 @@ type RawEventEnvelope struct {
 	// Optional: the server should treat absence as "no enrichment available"
 	// rather than erroring.
 	Enrichment *Enrichment `json:"enrichment,omitempty"`
+
+	// Deprecated: use Enrichment.Git. Mirrored for one or two releases so
+	// servers expecting the 1.0/1.1 shape continue to receive git context.
+	// Remove once all servers read from enrichment.git.
+	Git *GitContext `json:"git,omitempty"`
+
+	// Deprecated: use Enrichment.Correlation. Mirrored for one or two
+	// releases so servers expecting the 1.1 shape continue to receive
+	// correlation IDs. Remove once all servers read from
+	// enrichment.correlation.
+	Correlation *Correlation `json:"correlation,omitempty"`
 }
 
 // Enrichment carries CLI-computed context that augments the raw payload.
@@ -109,7 +120,7 @@ type GitContext struct {
 // New creates a new RawEventEnvelope with the given enrichment block.
 // Pass nil for enrichment if none is available.
 func New(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment) *RawEventEnvelope {
-	return &RawEventEnvelope{
+	env := &RawEventEnvelope{
 		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
@@ -118,11 +129,13 @@ func New(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichme
 		NativePayload:   nativePayload,
 		Enrichment:      enr,
 	}
+	mirrorLegacyFields(env)
+	return env
 }
 
 // NewWithAttachments creates a new RawEventEnvelope with attachment metadata.
 func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment, attachments []AttachmentMetadata) *RawEventEnvelope {
-	return &RawEventEnvelope{
+	env := &RawEventEnvelope{
 		EnvelopeVersion: EnvelopeVersion,
 		CliVersion:      cliVersion,
 		Tool:            tool,
@@ -131,6 +144,24 @@ func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte
 		NativePayload:   nativePayload,
 		Attachments:     attachments,
 		Enrichment:      enr,
+	}
+	mirrorLegacyFields(env)
+	return env
+}
+
+// mirrorLegacyFields copies enrichment.git and enrichment.correlation to the
+// deprecated top-level fields so older servers that read the 1.1 shape keep
+// working during the transition. Remove once all servers consume from
+// enrichment.* directly.
+func mirrorLegacyFields(env *RawEventEnvelope) {
+	if env.Enrichment == nil {
+		return
+	}
+	if env.Enrichment.Git != nil {
+		env.Git = env.Enrichment.Git
+	}
+	if env.Enrichment.Correlation != nil {
+		env.Correlation = env.Enrichment.Correlation
 	}
 }
 
