@@ -47,6 +47,14 @@ func buildCorrelation(tool, hookEvent, sessionID string, nativeEvent map[string]
 
 // lookupParentSpan resolves parent_span_id for known event chains.
 // Returns "" if no parent applies or the lookup misses.
+//
+// Note: Claude Code's hook payloads do NOT currently carry tool_use_id /
+// task_id / elicitation_id directly — those fields only appear in the
+// transcript JSONL referenced by transcript_path. The chain-keying below
+// remains a no-op for those events in real traffic; server-side adapters
+// can enrich linkage by parsing transcript_path. SubagentStart/Stop do
+// carry agent_id and will resolve. session_id-keyed chains (PreCompact,
+// SessionEnd, Stop) work everywhere.
 func lookupParentSpan(store *correlation.Store, tool, hookEvent, sessionID string, e map[string]interface{}) string {
 	switch tool {
 	case "claude-code":
