@@ -81,8 +81,17 @@ func installClaudeCode(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildClaudeCodeHooks(hookCmd)
 
-	// Merge hooks into settings
+	// Strip any of OUR previously-installed hook entries first so events we
+	// no longer ship (e.g. WorktreeCreate, which we used to register but now
+	// deliberately skip) get cleaned up rather than lingering forever. Any
+	// hook whose value doesn't reference "promptconduit" is left alone —
+	// that's the user's own configuration.
 	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		for name, config := range existingHooks {
+			if containsPromptConduit(config) {
+				delete(existingHooks, name)
+			}
+		}
 		for name, config := range hooks {
 			existingHooks[name] = config
 		}
@@ -112,6 +121,20 @@ func installClaudeCode(exePath string) error {
 	return nil
 }
 
+// buildClaudeCodeHooks registers for every event in the current Claude Code
+// hooks reference (https://code.claude.com/docs/en/hooks) except for
+// WorktreeCreate. Configuring a WorktreeCreate hook *replaces* the default
+// `git worktree` behavior — Claude Code expects the hook to print the
+// new worktree path on stdout, but our hook handler always prints
+// `{"continue": true}`, which would cause `claude --worktree` and
+// `isolation: "worktree"` subagents to fail outright. Until our hook
+// handler can detect WorktreeCreate events and behave correctly (return
+// the path), we don't register for that event.
+//
+// Matchers on no-matcher events (TaskCreated, TaskCompleted, TeammateIdle,
+// PostToolBatch, etc.) are silently ignored per the spec, so we use
+// `makeHook` for those rather than `makeMatcherHook` to keep the
+// settings.json output tidy.
 func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 	makeHook := func(timeout int) []map[string]interface{} {
 		return []map[string]interface{}{
@@ -132,37 +155,44 @@ func buildClaudeCodeHooks(hookCmd string) map[string]interface{} {
 		}
 	}
 
+	plainEvent := func() []map[string]interface{} {
+		return []map[string]interface{}{{"hooks": makeHook(5000)}}
+	}
+
 	return map[string]interface{}{
 		// Session lifecycle
-		"SessionStart": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"SessionEnd":   []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"SessionStart": plainEvent(),
+		"Setup":        plainEvent(), // --init-only / -p --init / -p --maintenance
+		"SessionEnd":   plainEvent(),
 		// Per-turn events
-		"UserPromptSubmit": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"Stop":             []map[string]interface{}{{"hooks": makeHook(5000)}}, // Agent completes response
-		"StopFailure":      []map[string]interface{}{{"hooks": makeHook(5000)}}, // Turn ends due to API error
-		// Tool execution events
+		"UserPromptSubmit":    plainEvent(),
+		"UserPromptExpansion": plainEvent(), // slash-command expansion path
+		"Stop":                plainEvent(), // Agent completes response
+		"StopFailure":         plainEvent(), // Turn ends due to API error
+		// Tool execution events (matchers filter on tool name)
 		"PreToolUse":         makeMatcherHook(5000),
 		"PostToolUse":        makeMatcherHook(5000),
 		"PostToolUseFailure": makeMatcherHook(5000),
+		"PostToolBatch":      plainEvent(), // no matcher support — fires once per batch
 		"PermissionRequest":  makeMatcherHook(5000),
 		"PermissionDenied":   makeMatcherHook(5000), // Auto mode denies a tool call
 		// Agent and task events
-		"SubagentStart": makeMatcherHook(5000),
+		"SubagentStart": makeMatcherHook(5000), // matcher filters on agent type
 		"SubagentStop":  makeMatcherHook(5000),
-		"TaskCreated":   makeMatcherHook(5000),
-		"TaskCompleted": makeMatcherHook(5000),
-		"TeammateIdle":  makeMatcherHook(5000),
+		"TaskCreated":   plainEvent(), // no matcher support
+		"TaskCompleted": plainEvent(), // no matcher support
+		"TeammateIdle":  plainEvent(), // no matcher support
 		// File and configuration events
-		"InstructionsLoaded": []map[string]interface{}{{"hooks": makeHook(5000)}}, // CLAUDE.md loaded
-		"ConfigChange":       []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"CwdChanged":         []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"FileChanged":        []map[string]interface{}{{"hooks": makeHook(5000)}},
+		"InstructionsLoaded": plainEvent(), // CLAUDE.md / .claude/rules/*.md loaded
+		"ConfigChange":       plainEvent(),
+		"CwdChanged":         plainEvent(),
+		"FileChanged":        plainEvent(),
 		// Context compaction events
-		"PreCompact":     []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"PostCompact":    []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"WorktreeCreate": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"WorktreeRemove": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		// MCP events
+		"PreCompact":  plainEvent(),
+		"PostCompact": plainEvent(),
+		// Worktree (only Remove — see Create note in function comment)
+		"WorktreeRemove": plainEvent(),
+		// MCP events (matcher filters on MCP server name)
 		"Elicitation":       makeMatcherHook(5000),
 		"ElicitationResult": makeMatcherHook(5000),
 		// Notifications
@@ -190,8 +220,17 @@ func installCursor(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildCursorHooks(hookCmd)
 
-	// Merge hooks into settings
+	// Strip any of OUR previously-installed hook entries first so events we
+	// no longer ship (e.g. WorktreeCreate, which we used to register but now
+	// deliberately skip) get cleaned up rather than lingering forever. Any
+	// hook whose value doesn't reference "promptconduit" is left alone —
+	// that's the user's own configuration.
 	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		for name, config := range existingHooks {
+			if containsPromptConduit(config) {
+				delete(existingHooks, name)
+			}
+		}
 		for name, config := range hooks {
 			existingHooks[name] = config
 		}
@@ -295,8 +334,17 @@ func installGemini(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildGeminiHooks(hookCmd)
 
-	// Merge hooks into settings
+	// Strip any of OUR previously-installed hook entries first so events we
+	// no longer ship (e.g. WorktreeCreate, which we used to register but now
+	// deliberately skip) get cleaned up rather than lingering forever. Any
+	// hook whose value doesn't reference "promptconduit" is left alone —
+	// that's the user's own configuration.
 	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		for name, config := range existingHooks {
+			if containsPromptConduit(config) {
+				delete(existingHooks, name)
+			}
+		}
 		for name, config := range hooks {
 			existingHooks[name] = config
 		}
