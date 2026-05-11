@@ -221,6 +221,18 @@ func installCursor(exePath string) error {
 	return nil
 }
 
+// buildCursorHooks registers for every event the current Cursor agent + Tab
+// hooks spec exposes (https://cursor.com/docs/hooks). Agent hooks cover the
+// Cmd+K / Agent Chat flow; Tab hooks cover inline-completion autonomous
+// edits, which deliberately get a separate policy from user-directed Agent
+// operations.
+//
+// We register both the generic `preToolUse`/`postToolUse` AND the
+// specific-tool variants (`beforeShellExecution`, `beforeMCPExecution`,
+// `beforeReadFile`, `afterFileEdit`). The specific events are richer
+// (they carry the actual command / file path / MCP server), and the
+// generic ones backfill any tool category that doesn't have a dedicated
+// hook. The platform dedupes server-side by event id.
 func buildCursorHooks(hookCmd string) map[string]interface{} {
 	makeHook := func() []map[string]interface{} {
 		return []map[string]interface{}{
@@ -229,10 +241,37 @@ func buildCursorHooks(hookCmd string) map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"beforeSubmitPrompt":   makeHook(),
+		// Session lifecycle
+		"sessionStart": makeHook(),
+		"sessionEnd":   makeHook(),
+		// Generic tool use (fires for every tool, including the specific
+		// ones below; we keep both for coverage of unknown tool kinds)
+		"preToolUse":         makeHook(),
+		"postToolUse":        makeHook(),
+		"postToolUseFailure": makeHook(),
+		// Subagent (Task tool) lifecycle
+		"subagentStart": makeHook(),
+		"subagentStop":  makeHook(),
+		// Shell command execution
 		"beforeShellExecution": makeHook(),
 		"afterShellExecution":  makeHook(),
-		"afterFileEdit":        makeHook(),
+		// MCP tool execution
+		"beforeMCPExecution": makeHook(),
+		"afterMCPExecution":  makeHook(),
+		// File access and edits
+		"beforeReadFile": makeHook(),
+		"afterFileEdit":  makeHook(),
+		// Prompts and agent output
+		"beforeSubmitPrompt": makeHook(),
+		"afterAgentResponse": makeHook(),
+		"afterAgentThought":  makeHook(),
+		// Context window
+		"preCompact": makeHook(),
+		// Stop
+		"stop": makeHook(),
+		// Tab (inline completions) — separate policy from Agent operations
+		"beforeTabFileRead": makeHook(),
+		"afterTabFileEdit":  makeHook(),
 	}
 }
 
