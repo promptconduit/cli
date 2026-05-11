@@ -89,11 +89,22 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 	cfg := client.LoadConfig()
 
 	cachePath := filepath.Join(client.ConfigDir(), updater.CacheFileName)
+
+	// If a previous run upgraded us, the cache's recorded CurrentVersion no
+	// longer matches the running binary — surface a one-time success notice
+	// and rewrite the cache so we don't show it again.
+	if cached, _ := updater.LoadCache(cachePath); cached != nil &&
+		cached.CurrentVersion != "" && cached.CurrentVersion != Version {
+		notifyUpgraded(cmd, cached.CurrentVersion, Version, cached.ReleaseURL)
+		cached.CurrentVersion = Version
+		_ = updater.SaveCache(cachePath, cached)
+	}
+
 	if !updater.ShouldCheck(cachePath, Version, updater.CheckTTL) {
 		// Use the cached result to still nudge the user if a known
 		// upgrade has been pending since the last check.
 		if cached, _ := updater.LoadCache(cachePath); cached != nil && cached.IsNewer() {
-			notifyNewer(cmd, cached.LatestVersion, cfg.DisableAutoUpdate)
+			notifyNewer(cmd, cached.LatestVersion, cached.ReleaseURL, cfg.DisableAutoUpdate)
 			if !cfg.DisableAutoUpdate {
 				spawnBackgroundUpgrade()
 			}
@@ -122,20 +133,30 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 		return
 	}
 
-	notifyNewer(cmd, rel.TagName, cfg.DisableAutoUpdate)
+	notifyNewer(cmd, rel.TagName, rel.HTMLURL, cfg.DisableAutoUpdate)
 	if !cfg.DisableAutoUpdate {
 		spawnBackgroundUpgrade()
 	}
 }
 
-func notifyNewer(cmd *cobra.Command, latest string, disabled bool) {
+func notifyNewer(cmd *cobra.Command, latest, releaseURL string, disabled bool) {
 	hint := "run `promptconduit upgrade` to install"
 	if !disabled {
-		hint = "applying in background — `promptconduit version` after this command will show the new version"
+		hint = "downloading in background; next invocation will use the new version"
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(),
-		"promptconduit: %s available (you have %s) — %s\n",
-		latest, Version, hint)
+	w := cmd.ErrOrStderr()
+	fmt.Fprintf(w, "promptconduit: %s available (you have %s) — %s\n", latest, Version, hint)
+	if releaseURL != "" {
+		fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+	}
+}
+
+func notifyUpgraded(cmd *cobra.Command, from, to, releaseURL string) {
+	w := cmd.ErrOrStderr()
+	fmt.Fprintf(w, "promptconduit: upgraded %s → %s\n", from, to)
+	if releaseURL != "" {
+		fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+	}
 }
 
 // spawnBackgroundUpgrade launches `promptconduit upgrade` as a detached

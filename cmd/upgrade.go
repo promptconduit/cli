@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,6 +81,19 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Take an advisory lock so two concurrent invocations don't race on
+	// the same binary swap.
+	lockPath := filepath.Join(client.ConfigDir(), updater.LockFileName)
+	release, err := updater.Lock(lockPath)
+	defer release()
+	if err != nil {
+		if errors.Is(err, updater.ErrLocked) {
+			cmd.Println("Another upgrade is already in progress; skipping.")
+			return nil
+		}
+		return fmt.Errorf("acquire upgrade lock: %w", err)
+	}
+
 	archive, checksums, err := updater.AssetForCurrent(rel)
 	if err != nil {
 		return fmt.Errorf("no matching release asset: %w", err)
@@ -95,7 +109,6 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	}
 
 	cmd.Printf("Upgraded to %s (replaced %s)\n", rel.TagName, replaced)
-	cmd.Println("Run `promptconduit version` to confirm.")
 	return nil
 }
 

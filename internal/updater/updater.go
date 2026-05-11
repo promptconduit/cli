@@ -275,6 +275,55 @@ func CleanupOldBinary() {
 	_ = os.Remove(old)
 }
 
+// LockFileName is the on-disk advisory lock used to prevent two concurrent
+// upgrade subprocesses from racing on the binary swap.
+const LockFileName = "upgrade.lock"
+
+// staleLockAfter declares when an existing lock file is considered
+// abandoned (e.g. a previous upgrade was killed mid-flight). Slightly
+// longer than DownloadTimeout to allow a slow-but-progressing upgrade to
+// finish.
+const staleLockAfter = 10 * time.Minute
+
+// Lock acquires an exclusive on-disk lock at lockPath. Concurrent callers
+// will fail fast with errLocked unless the existing lock is older than
+// staleLockAfter, in which case it is considered abandoned and replaced.
+// Returns a release func; safe to call even if Lock errored.
+func Lock(lockPath string) (release func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return func() {}, err
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			pidLine := fmt.Sprintf("%d\n", os.Getpid())
+			_, _ = f.WriteString(pidLine)
+			_ = f.Close()
+			return func() { _ = os.Remove(lockPath) }, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return func() {}, err
+		}
+		// Existing lock — only override if it's stale.
+		info, statErr := os.Stat(lockPath)
+		if statErr != nil {
+			return func() {}, err
+		}
+		if time.Since(info.ModTime()) < staleLockAfter {
+			return func() {}, ErrLocked
+		}
+		if rmErr := os.Remove(lockPath); rmErr != nil {
+			return func() {}, rmErr
+		}
+		// loop and retry once
+	}
+	return func() {}, ErrLocked
+}
+
+// ErrLocked is returned by Lock when another upgrade is already in flight.
+var ErrLocked = errors.New("another upgrade is in progress")
+
 // fetchChecksum downloads checksums.txt and returns the hex sum for
 // assetName. The file format is `<sum>  <name>` per goreleaser default.
 func fetchChecksum(ctx context.Context, c *http.Client, url, assetName string) (string, error) {
