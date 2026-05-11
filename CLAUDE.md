@@ -31,10 +31,30 @@ cli/
 │   ├── envelope/     # Raw event envelope types
 │   ├── git/          # Git context extraction
 │   ├── sync/         # Transcript sync and parsing (Claude Code parser, state management)
-│   └── transcript/   # Transcript parsing and attachment extraction
+│   ├── transcript/   # Transcript parsing and attachment extraction
+│   └── updater/      # GitHub-release version check + self-replace upgrade
 ├── scripts/          # Install scripts
 └── main.go           # Entry point
 ```
+
+## Auto-update
+
+`promptconduit` checks GitHub Releases once every 24h on top-level commands
+(skipped for `hook` to keep per-event latency tiny, and `upgrade` which
+checks itself). When a newer version is found, it prints a one-line notice
+and — unless `disable_auto_update` is set in config or
+`PROMPTCONDUIT_AUTO_UPDATE=0` is set in the environment — spawns a detached
+`promptconduit upgrade` subprocess that atomically replaces the binary. The
+running process keeps its inode and finishes unaffected; the next invocation
+runs the new build.
+
+```bash
+promptconduit upgrade           # explicit upgrade
+promptconduit upgrade --check   # check-only
+promptconduit config set --disable-auto-update=true   # opt out
+```
+
+Cache file: `~/.config/promptconduit/update.json`.
 
 ## Sync Command (Manual Only)
 

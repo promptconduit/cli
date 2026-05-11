@@ -294,51 +294,6 @@ func getParser(tool string) (sync.Parser, error) {
 	}
 }
 
-func buildSyncRequest(conv *sync.ParsedConversation) *client.TranscriptSyncRequest {
-	messages := make([]client.TranscriptMessage, len(conv.Messages))
-	for i, m := range conv.Messages {
-		messages[i] = client.TranscriptMessage{
-			UUID:              m.UUID,
-			ParentUUID:        m.ParentUUID,
-			Type:              m.Type,
-			Role:              m.Role,
-			Content:           m.Content,
-			Model:             m.Model,
-			Thinking:          m.Thinking,
-			ToolName:          m.ToolName,
-			ToolUseID:         m.ToolUseID,
-			ToolInput:         m.ToolInput,
-			ToolResult:        m.ToolResult,
-			ToolResultSuccess: m.ToolResultSuccess,
-			Timestamp:         m.Timestamp,
-			SequenceNumber:    m.SequenceNumber,
-			GitBranch:         m.GitBranch,
-			GitCommit:         m.GitCommit,
-			Cwd:               m.Cwd,
-			AttachmentCount:   m.AttachmentCount,
-		}
-	}
-
-	return &client.TranscriptSyncRequest{
-		Conversation: client.TranscriptConversation{
-			SessionID:        conv.SessionID,
-			Tool:             conv.Tool,
-			Title:            conv.Title,
-			Summary:          conv.Summary,
-			StartedAt:        conv.StartedAt,
-			EndedAt:          conv.EndedAt,
-			RepoName:         conv.RepoName,
-			Branch:           conv.Branch,
-			WorkingDirectory: conv.WorkingDirectory,
-			PrimaryModel:     conv.PrimaryModel,
-			CLIVersion:       conv.CLIVersion,
-			SourceFilePath:   conv.SourceFilePath,
-			SourceFileHash:   conv.SourceFileHash,
-		},
-		Messages: messages,
-	}
-}
-
 // buildRawSyncRequest creates a request with raw JSONL for server-side categorization
 func buildRawSyncRequest(conv *sync.ParsedConversation) *client.RawTranscriptSyncRequest {
 	rawMessages := make([]client.RawTranscriptMessage, len(conv.Messages))

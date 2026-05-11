@@ -34,17 +34,22 @@ var configShowCmd = &cobra.Command{
 		envURL := os.Getenv(client.EnvAPIURL)
 		hasPartialEnvOverride := envKey != "" && envURL == ""
 
-		cmd.Printf("API URL: %s\n", cfg.APIURL)
-		cmd.Printf("API Key: %s\n", client.MaskAPIKey(cfg.APIKey))
+		cmd.Printf("API URL:     %s\n", cfg.APIURL)
+		cmd.Printf("API Key:     %s\n", client.MaskAPIKey(cfg.APIKey))
 		if cfg.Debug {
-			cmd.Printf("Debug:   %v\n", cfg.Debug)
+			cmd.Printf("Debug:       %v\n", cfg.Debug)
 		}
+		autoUpdate := "enabled"
+		if cfg.DisableAutoUpdate {
+			autoUpdate = "disabled"
+		}
+		cmd.Printf("Auto-update: %s\n", autoUpdate)
 		cmd.Println()
-		cmd.Printf("Config:  %s\n", client.ConfigPath())
+		cmd.Printf("Config:      %s\n", client.ConfigPath())
 
 		// Show environment info if using environments
 		if fc != nil && fc.CurrentEnv != "" && len(fc.Environments) > 0 {
-			cmd.Printf("Env:     %s\n", fc.CurrentEnv)
+			cmd.Printf("Env:         %s\n", fc.CurrentEnv)
 		}
 
 		// Warn about partial env var override
@@ -60,9 +65,10 @@ var configShowCmd = &cobra.Command{
 }
 
 var (
-	setAPIKey string
-	setAPIURL string
-	setDebug  bool
+	setAPIKey            string
+	setAPIURL            string
+	setDebug             bool
+	setDisableAutoUpdate bool
 )
 
 var configSetCmd = &cobra.Command{
@@ -78,7 +84,13 @@ Examples:
   promptconduit config set --api-key=sk_xxx --api-url=http://localhost:8787
 
   # Enable debug mode
-  promptconduit config set --debug`,
+  promptconduit config set --debug
+
+  # Opt out of automatic background upgrades
+  promptconduit config set --disable-auto-update=true
+
+  # Re-enable automatic background upgrades
+  promptconduit config set --disable-auto-update=false`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -103,9 +115,13 @@ Examples:
 			fc.Debug = setDebug
 			changed = true
 		}
+		if cmd.Flags().Changed("disable-auto-update") {
+			fc.DisableAutoUpdate = setDisableAutoUpdate
+			changed = true
+		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, or --debug")
+			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, or --disable-auto-update")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -114,13 +130,20 @@ Examples:
 
 		cmd.Println("Configuration saved")
 		if fc.APIKey != "" {
-			cmd.Printf("  API Key: %s\n", client.MaskAPIKey(fc.APIKey))
+			cmd.Printf("  API Key:     %s\n", client.MaskAPIKey(fc.APIKey))
 		}
 		if fc.APIURL != "" {
-			cmd.Printf("  API URL: %s\n", fc.APIURL)
+			cmd.Printf("  API URL:     %s\n", fc.APIURL)
 		}
 		if fc.Debug {
-			cmd.Printf("  Debug:   %v\n", fc.Debug)
+			cmd.Printf("  Debug:       %v\n", fc.Debug)
+		}
+		if cmd.Flags().Changed("disable-auto-update") {
+			state := "enabled"
+			if fc.DisableAutoUpdate {
+				state = "disabled"
+			}
+			cmd.Printf("  Auto-update: %s\n", state)
 		}
 
 		return nil
@@ -341,6 +364,7 @@ func init() {
 	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "API key")
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
 	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
+	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)
