@@ -52,9 +52,11 @@ const (
 
 	// DownloadTimeout is the HTTP timeout for downloading a release archive.
 	DownloadTimeout = 5 * time.Minute
-
-	releaseAPIURL = "https://api.github.com/repos/%s/releases/latest"
 )
+
+// releaseAPIURL is var (not const) so tests can point it at an
+// httptest.Server. The %s is filled with Repo at call time.
+var releaseAPIURL = "https://api.github.com/repos/%s/releases/latest"
 
 // Release holds the metadata we need from a GitHub release.
 type Release struct {
@@ -84,6 +86,19 @@ func (r *CheckResult) IsNewer() bool {
 		return false
 	}
 	cmp, ok := compareSemver(r.LatestVersion, r.CurrentVersion)
+	return ok && cmp > 0
+}
+
+// DetectUpgrade reports whether `runningVersion` is strictly newer than
+// the cached CurrentVersion. Used to fire the one-time "upgraded vX → vY"
+// notice on the first invocation after a self-replace; gated on actual
+// forward progress so a downgrade (e.g. `brew install --version vOLD`)
+// is silent rather than mislabelled as an upgrade.
+func (r *CheckResult) DetectUpgrade(runningVersion string) bool {
+	if r == nil || r.CurrentVersion == "" || r.CurrentVersion == runningVersion {
+		return false
+	}
+	cmp, ok := compareSemver(runningVersion, r.CurrentVersion)
 	return ok && cmp > 0
 }
 

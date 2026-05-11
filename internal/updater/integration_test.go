@@ -195,21 +195,104 @@ func TestApply_ChecksumMismatch(t *testing.T) {
 	}
 }
 
-func TestCheckLatest_EndToEnd(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("skipping on windows path")
+func TestCheckLatest_HappyPath(t *testing.T) {
+	srv, _ := fakeRelease(t, "v9.9.9", "x")
+	withReleaseAPIURL(t, srv.URL+"/repos/%s/releases/latest")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	rel, newer, err := CheckLatest(ctx, "v0.3.2")
+	if err != nil {
+		t.Fatalf("CheckLatest: %v", err)
 	}
+	if !newer {
+		t.Errorf("expected v9.9.9 > v0.3.2")
+	}
+	if rel.TagName != "v9.9.9" {
+		t.Errorf("rel.TagName = %q, want v9.9.9", rel.TagName)
+	}
+}
 
-	// Save and override the GH API URL for this test by spinning up a
-	// fake server and pointing the constant via a wrapped client. Since
-	// `CheckLatest` builds its URL from `releaseAPIURL` we just exercise
-	// the lower-level decoder here.
-	_, rel := fakeRelease(t, "v9.9.9", "x")
+func TestCheckLatest_NotNewer(t *testing.T) {
+	srv, _ := fakeRelease(t, "v0.3.2", "x")
+	withReleaseAPIURL(t, srv.URL+"/repos/%s/releases/latest")
 
-	// Pretend we ran CheckLatest and decoded this release directly:
-	cmpResult, ok := compareSemver(rel.TagName, "v0.3.2")
-	if !ok || cmpResult <= 0 {
-		t.Fatalf("expected v9.9.9 > v0.3.2, got cmp=%d ok=%v", cmpResult, ok)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, newer, err := CheckLatest(ctx, "v0.3.2")
+	if err != nil {
+		t.Fatalf("CheckLatest: %v", err)
+	}
+	if newer {
+		t.Errorf("expected equal version not to be reported as newer")
+	}
+}
+
+func TestCheckLatest_Non200(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"rate limited"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	withReleaseAPIURL(t, srv.URL+"/repos/%s/releases/latest")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, _, err := CheckLatest(ctx, "v0.3.2"); err == nil {
+		t.Error("expected non-200 response to surface an error")
+	}
+}
+
+// withReleaseAPIURL swaps the package-level releaseAPIURL for the duration
+// of the test.
+func withReleaseAPIURL(t *testing.T, url string) {
+	t.Helper()
+	orig := releaseAPIURL
+	releaseAPIURL = url
+	t.Cleanup(func() { releaseAPIURL = orig })
+}
+
+func TestLoadCache_CorruptJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CacheFileName)
+	if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("seed corrupt cache: %v", err)
+	}
+	if _, err := LoadCache(path); err == nil {
+		t.Error("expected LoadCache to return an error on corrupt JSON")
+	}
+	// ShouldCheck must still recover (return true) so the next invocation
+	// just re-checks rather than wedging.
+	if !ShouldCheck(path, "v0.3.2", time.Hour) {
+		t.Error("expected ShouldCheck to return true on corrupt cache")
+	}
+}
+
+func TestDetectUpgrade(t *testing.T) {
+	cases := []struct {
+		name    string
+		cache   *CheckResult
+		running string
+		want    bool
+	}{
+		{"nil cache", nil, "v0.4.0", false},
+		{"empty cache version", &CheckResult{CurrentVersion: ""}, "v0.4.0", false},
+		{"same version", &CheckResult{CurrentVersion: "v0.3.2"}, "v0.3.2", false},
+		{"forward upgrade", &CheckResult{CurrentVersion: "v0.3.2"}, "v0.4.0", true},
+		{"downgrade is silent", &CheckResult{CurrentVersion: "v0.4.0"}, "v0.3.2", false},
+		{"unparseable running version", &CheckResult{CurrentVersion: "v0.3.2"}, "dev", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.cache.DetectUpgrade(c.running); got != c.want {
+				t.Errorf("DetectUpgrade(%v, %q) = %v, want %v", c.cache, c.running, got, c.want)
+			}
+		})
 	}
 }
 
