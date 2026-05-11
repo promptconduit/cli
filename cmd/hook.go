@@ -19,10 +19,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	sendEvent  bool
-	sendPrompt bool
-)
+var sendEvent bool
 
 var hookCmd = &cobra.Command{
 	Use:    "hook",
@@ -34,15 +31,11 @@ var hookCmd = &cobra.Command{
 
 func init() {
 	hookCmd.Flags().BoolVar(&sendEvent, "send-event", false, "Send event data from stdin (internal use)")
-	hookCmd.Flags().BoolVar(&sendPrompt, "send-prompt", false, "Send prompt with images from stdin (internal use)")
 }
 
 func runHook(cmd *cobra.Command, args []string) error {
 	if sendEvent {
 		return sendEnvelopeFromStdin()
-	}
-	if sendPrompt {
-		return sendPromptFromStdin()
 	}
 	return processHookEvent()
 }
@@ -293,70 +286,12 @@ func getWorkingDirectory(event map[string]interface{}) string {
 	return ""
 }
 
-// isPromptEvent returns true if the hook event is a user prompt submission
-func isPromptEvent(hookEvent string) bool {
-	switch hookEvent {
-	case "UserPromptSubmit",     // Claude Code
-		"beforeSubmitPrompt",    // Cursor
-		"BeforeAgent":           // Gemini CLI
-		return true
-	default:
-		return false
-	}
-}
-
-// getPromptText extracts the prompt text from native event
-func getPromptText(event map[string]interface{}) string {
-	if prompt, ok := event["prompt"].(string); ok {
-		return prompt
-	}
-	return ""
-}
-
 // getSessionID extracts the session ID from native event
 func getSessionID(event map[string]interface{}) string {
 	if sessionID, ok := event["session_id"].(string); ok {
 		return sessionID
 	}
 	return ""
-}
-
-// buildPromptMetadata creates metadata for prompt with images
-func buildPromptMetadata(tool, prompt, sessionID, cwd string, gitCtx *envelope.GitContext) *client.PromptMetadata {
-	metadata := &client.PromptMetadata{
-		Tool:           tool,
-		HookVersion:    Version,
-		Prompt:         prompt,
-		ConversationID: sessionID,
-		CapturedAt:     time.Now().UTC().Format(time.RFC3339),
-	}
-
-	if cwd != "" || gitCtx != nil {
-		metadata.Context = &client.PromptContextMetadata{
-			WorkingDirectory: cwd,
-		}
-
-		if gitCtx != nil {
-			metadata.Context.RepoName = gitCtx.RepoName
-			metadata.Context.RepoPath = gitCtx.RepoPath
-			metadata.Context.Branch = gitCtx.Branch
-			metadata.Context.GitMetadata = &client.GitMetadata{
-				CommitHash:     gitCtx.CommitHash,
-				CommitMessage:  gitCtx.CommitMessage,
-				CommitAuthor:   gitCtx.CommitAuthor,
-				IsDirty:        gitCtx.IsDirty,
-				StagedCount:    gitCtx.StagedCount,
-				UnstagedCount:  gitCtx.UnstagedCount,
-				UntrackedCount: gitCtx.UntrackedCount,
-				AheadCount:     gitCtx.AheadCount,
-				BehindCount:    gitCtx.BehindCount,
-				RemoteURL:      gitCtx.RemoteURL,
-				IsDetachedHead: gitCtx.IsDetachedHead,
-			}
-		}
-	}
-
-	return metadata
 }
 
 // sendEnvelopeFromStdin sends envelope data directly (called by async subprocess)
@@ -385,35 +320,6 @@ func sendEnvelopeFromStdin() error {
 		return err
 	}
 	fileLog("Async subprocess: envelope sent successfully")
-	return nil
-}
-
-// sendPromptFromStdin sends prompt with images directly (called by async subprocess)
-func sendPromptFromStdin() error {
-	fileLog("Async prompt subprocess started")
-
-	inputData, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		fileLog("Async prompt subprocess failed to read stdin: %v", err)
-		return fmt.Errorf("failed to read stdin: %w", err)
-	}
-
-	fileLog("Async prompt subprocess received %d bytes", len(inputData))
-
-	cfg := client.LoadConfig()
-	if !cfg.IsConfigured() {
-		fileLog("Async prompt subprocess: API key not configured")
-		return fmt.Errorf("API key not configured")
-	}
-
-	fileLog("Async prompt subprocess sending to API: %s", cfg.APIURL)
-	apiClient := client.NewClient(cfg, Version)
-	err = apiClient.SendPromptDirect(inputData)
-	if err != nil {
-		fileLog("Async prompt subprocess API error: %v", err)
-		return err
-	}
-	fileLog("Async prompt subprocess: prompt sent successfully")
 	return nil
 }
 
