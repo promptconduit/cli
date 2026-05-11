@@ -55,6 +55,7 @@ func init() {
 	rootCmd.AddCommand(skillsCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(upgradeCmd)
+	rootCmd.AddCommand(watchCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -194,7 +195,10 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "upgrade":
+	case "hook", "upgrade", "watch":
+		// hook is per-event and must stay fast; upgrade and watch
+		// drive their own long-running loops and shouldn't have a
+		// random update banner interrupt them.
 		return true
 	}
 	return false

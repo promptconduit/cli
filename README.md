@@ -183,7 +183,37 @@ promptconduit version
 
 # Upgrade to the latest release
 promptconduit upgrade
+
+# Tail outbound HTTP traffic in real time (great for debugging hooks)
+promptconduit watch
+promptconduit watch --verbose    # also pretty-print request/response bodies
+promptconduit watch --lines 20   # backfill the last 20 entries before going live
 ```
+
+### Tail outbound traffic
+
+`promptconduit watch` streams every HTTP request the CLI makes to the
+platform — hook envelope sends, transcript syncs, insights queries,
+skills traffic — to your terminal as it happens. Useful for answering
+"is my hook actually sending anything when Claude Code fires?" without
+spelunking the debug log.
+
+Each request appears as a one-line summary by default:
+
+```
+15:30:42  POST  /v1/events/raw  3.2KB  → 200 (87ms)
+```
+
+Add `--verbose` to also see the pretty-printed JSON body underneath
+each summary.
+
+Implementation note: every request the CLI makes is mirrored to
+`~/.config/promptconduit/outbound.ndjson` (mode `0600`). Authorization,
+Cookie, and similar credential headers are redacted before write;
+bodies are capped at 64KB per row and the file rotates to
+`outbound.ndjson.1` when it crosses 50MB. Update-check traffic from
+`internal/updater` uses a separate HTTP client and is **not** mirrored
+— that traffic is predictable and noisy and isn't what `watch` is for.
 
 ### Sync Command
 
