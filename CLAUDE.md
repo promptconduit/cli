@@ -30,6 +30,7 @@ cli/
 │   ├── correlation/  # W3C trace_id/span_id generation and per-session persistence
 │   ├── envelope/     # Raw event envelope types
 │   ├── git/          # Git context extraction
+│   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
 │   ├── sync/         # Transcript sync and parsing (Claude Code parser, state management)
 │   ├── transcript/   # Transcript parsing and attachment extraction
 │   └── updater/      # GitHub-release version check + self-replace upgrade

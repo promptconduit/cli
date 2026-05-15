@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/outbound"
 )
 
 // APIResponse represents a response from the API
@@ -33,15 +35,20 @@ type Client struct {
 	version        string
 }
 
-// NewClient creates a new API client
+// NewClient creates a new API client. Every outbound HTTP request is
+// mirrored to ~/.config/promptconduit/outbound.ndjson so users can run
+// `promptconduit watch` to see what the CLI is uploading in real time.
 func NewClient(config *Config, version string) *Client {
+	mirror := outbound.New(filepath.Join(ConfigDir(), outbound.MirrorFileName), http.DefaultTransport)
 	return &Client{
 		config: config,
 		httpClient: &http.Client{
-			Timeout: time.Duration(config.TimeoutSeconds) * time.Second,
+			Timeout:   time.Duration(config.TimeoutSeconds) * time.Second,
+			Transport: mirror,
 		},
 		longHttpClient: &http.Client{
-			Timeout: 600 * time.Second, // 10 min for large transcript sync (chunked complete can be slow)
+			Timeout:   600 * time.Second, // 10 min for large transcript sync (chunked complete can be slow)
+			Transport: mirror,
 		},
 		version: version,
 	}
