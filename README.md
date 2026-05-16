@@ -445,78 +445,69 @@ Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typ
 - **Multipart uploads**: Attachments sent efficiently via multipart form data
 - **Graceful degradation**: Unknown events are silently skipped
 
-## Canonical Event Schema
+## Wire format
 
-All events are normalized to this schema:
+The CLI is intentionally thin: it forwards each AI tool's raw hook event
+untouched in `native_payload`, plus an `enrichment` block of locally
+computed context (git, host, correlation IDs). The platform's server-side
+adapters do the categorization and normalization. That keeps the CLI
+small and lets the platform evolve event taxonomy without forcing CLI
+upgrades.
+
+The envelope is currently at version `1.2`:
 
 ```json
 {
+  "envelope_version": "1.2",
+  "cli_version": "v0.5.0",
   "tool": "claude-code",
-  "event_type": "prompt_submit",
-  "event_id": "uuid",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "adapter_version": "1.0.0",
-  "session_id": "...",
-  "workspace": {
-    "repo_name": "my-project",
-    "repo_path": "/path/to/repo",
-    "working_directory": "/path/to/repo"
+  "hook_event": "UserPromptSubmit",
+  "captured_at": "2026-05-16T13:04:11Z",
+  "native_payload": {
+    "session_id": "abc123",
+    "hook_event_name": "UserPromptSubmit",
+    "prompt": "Refactor the auth module",
+    "cwd": "/Users/me/my-project"
   },
-  "git": {
-    "commit_hash": "abc123",
-    "branch": "main",
-    "is_dirty": true,
-    "staged_count": 2,
-    "unstaged_count": 1,
-    "remote_url": "git@github.com:user/repo.git"
-  },
-  "prompt": {
-    "prompt": "User's prompt text",
-    "attachments": [
-      {
-        "filename": "image_1.png",
-        "media_type": "image/png",
-        "type": "image"
-      }
-    ]
+  "enrichment": {
+    "git": {
+      "repo_name": "my-project",
+      "branch": "main",
+      "commit_hash": "abc123",
+      "is_dirty": true,
+      "remote_url": "git@github.com:me/my-project.git"
+    },
+    "source": "github",
+    "correlation": {
+      "trace_id": "151a9441671718243f44d5b0fa183894",
+      "span_id": "143855046e61e7f8"
+    },
+    "host": "my-laptop",
+    "os": "darwin",
+    "arch": "arm64"
   }
 }
 ```
 
-### Event Types
+Field reference:
 
-| Type | Description |
-|------|-------------|
-| `prompt_submit` | User submitted a prompt |
-| `tool_pre` | Before tool execution |
-| `tool_post` | After tool execution |
-| `tool_failure` | Tool execution failed |
-| `session_start` | Session started |
-| `session_end` | Session ended |
-| `agent_response` | Agent completed a response turn |
-| `agent_response_failure` | Response turn ended due to API error |
-| `subagent_start` | Subagent spawned |
-| `subagent_stop` | Subagent completed |
-| `task_created` | Task created (agent teams) |
-| `task_completed` | Task completed (agent teams) |
-| `teammate_idle` | Agent team teammate went idle |
-| `permission_request` | Permission prompt shown |
-| `permission_denied` | Tool call denied by auto mode |
-| `context_compact` | Context compaction triggered |
-| `context_compact_done` | Context compaction completed |
-| `worktree_create` | Git worktree created |
-| `worktree_remove` | Git worktree removed |
-| `instructions_loaded` | CLAUDE.md or rules file loaded |
-| `config_change` | Configuration file changed |
-| `cwd_changed` | Working directory changed |
-| `file_changed` | Watched file changed on disk |
-| `mcp_elicitation` | MCP server requested user input |
-| `mcp_elicitation_result` | User responded to MCP elicitation |
-| `notification` | System notification sent |
-| `shell_pre` | Before shell command (Cursor) |
-| `shell_post` | After shell command (Cursor) |
-| `file_read` | File read operation (Cursor) |
-| `file_edit` | File edit operation (Cursor) |
+| Field | Description |
+| --- | --- |
+| `envelope_version` | Schema version. Currently `1.2`. |
+| `cli_version` | Version of `promptconduit` that produced the event. |
+| `tool` | `claude-code`, `cursor`, `gemini-cli`, `codex`, `copilot`, or `unknown`. |
+| `hook_event` | The tool's native hook event name (e.g. `UserPromptSubmit`, `preToolUse`). Not canonicalized — that happens server-side. |
+| `captured_at` | ISO 8601 timestamp at the moment the hook fired. |
+| `native_payload` | Raw JSON the tool wrote to the hook's stdin. Pass-through. |
+| `enrichment.git` | Repo metadata derived from `cwd` (branch, dirty state, commit hash, remote). Omitted when not in a git repo. |
+| `enrichment.source` | Git provider derived from the remote URL (`github`, `gitlab`, `bitbucket`, `azure`). |
+| `enrichment.correlation` | W3C Trace Context-compatible IDs so events stitch into a single trace. `trace_id` is stable per session; `span_id` is unique per event. |
+| `enrichment.host`, `os`, `arch` | Machine identity, runtime GOOS, runtime GOARCH. |
+| `attachments` | When present: array of `{attachment_id, filename, content_type, size_bytes, type}`. Binary data is sent as a separate multipart field. |
+
+Image and document bytes ride alongside the envelope as multipart parts
+on the same `/v1/events/raw` request — never embedded as base64 in the
+JSON.
 
 ### Headless Mode (claude -p)
 
@@ -558,28 +549,39 @@ make snapshot
 ```
 .
 ├── cmd/                    # CLI commands
-│   ├── root.go            # Root command
-│   ├── install.go         # Install hooks for AI tools
-│   ├── uninstall.go       # Remove hooks
-│   ├── status.go          # Show installation status
-│   ├── test.go            # Test API connectivity
-│   ├── hook.go            # Hook entry point (receives raw events)
-│   ├── config.go          # Config management
-│   └── sync.go            # Transcript sync command
+│   ├── root.go             # Root command + background update-check wiring
+│   ├── install.go          # Install hooks for AI tools (5 tools)
+│   ├── uninstall.go        # Remove hooks
+│   ├── status.go           # Show installation status
+│   ├── test.go             # Test API connectivity
+│   ├── hook.go             # Hook entry point (receives raw events)
+│   ├── config.go           # Config management
+│   ├── sync.go             # Manual transcript sync
+│   ├── upgrade.go          # `promptconduit upgrade` (self-replace)
+│   ├── watch.go            # `promptconduit watch` (tail outbound traffic)
+│   ├── insights.go         # Personal usage insights
+│   ├── skills.go           # Skill detection (platform)
+│   ├── skills_local.go     # Skill detection (local, no account)
+│   ├── correlation.go      # W3C trace_id/span_id helpers
+│   └── debug.go            # Internal debugging commands
 ├── internal/
-│   ├── envelope/          # Raw event envelope types
-│   ├── client/            # HTTP client with multipart upload
-│   ├── git/               # Git context extraction
-│   ├── sync/              # Transcript sync and parsing
-│   │   ├── claudecode.go  # Claude Code transcript parser
-│   │   ├── state.go       # Sync state management
-│   │   └── types.go       # Parser interface and types
-│   └── transcript/        # Transcript parsing & attachment extraction
+│   ├── envelope/           # Raw event envelope types (v1.2)
+│   ├── client/             # HTTP client with multipart upload
+│   ├── correlation/        # W3C trace_id/span_id generation + persistence
+│   ├── git/                # Git context extraction
+│   ├── outbound/           # http.RoundTripper that mirrors outbound traffic
+│   │                       # to outbound.ndjson (drives `watch`)
+│   ├── sync/               # Transcript sync and parsing
+│   │   ├── claudecode.go   # Claude Code transcript parser
+│   │   ├── state.go        # Sync state management
+│   │   └── types.go        # Parser interface and types
+│   ├── transcript/         # Transcript parsing & attachment extraction
+│   └── updater/            # GitHub-release version check + atomic self-replace
 ├── scripts/
-│   └── install.sh         # Curl installer
-├── .goreleaser.yaml       # Release configuration
-├── Makefile               # Build commands
-└── go.mod                 # Go module
+│   └── install.sh          # Curl installer
+├── .goreleaser.yaml        # Release configuration
+├── Makefile                # Build commands
+└── go.mod                  # Go module
 ```
 
 ## Privacy & Security
@@ -588,6 +590,17 @@ make snapshot
 - **Minimal**: Only captures events needed for analysis
 - **Secure**: HTTPS with API key authentication
 - **Non-blocking**: Never interferes with your workflow
+- **Local outbound mirror**: Every HTTP request the CLI makes is also
+  written to `~/.config/promptconduit/outbound.ndjson` (mode `0600`,
+  owner-only) so you can tail it with `promptconduit watch`.
+  Authorization, Cookie, and any header matching `token` / `secret` /
+  `key` is redacted to `***` before write. Bodies are capped at 64KB
+  per row; the file rotates to `outbound.ndjson.1` at 50MB.
+- **Background self-upgrade**: A once-per-24h GitHub releases check
+  fetches `/repos/promptconduit/cli/releases/latest` (no auth, no
+  payload uploaded). Disable with
+  `promptconduit config set --disable-auto-update=true` or
+  `PROMPTCONDUIT_AUTO_UPDATE=0`.
 
 ## License
 
