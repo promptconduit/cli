@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,8 +78,13 @@ func TestOTLPTracesHandler(t *testing.T) {
 	if v := r.ResourceAttrs["service.name"]; v != "claude-code" {
 		t.Errorf("service.name = %v", v)
 	}
-	if v := r.Attributes["tokens.input"]; v != int64(412) {
-		t.Errorf("tokens.input = %v (%T)", v, v)
+	// Round-tripping a SpanRow through NDJSON loses the int64-vs-float64
+	// distinction: encoding/json emits int64 as a bare JSON number, then
+	// decoding back into map[string]any (SpanRow.Attributes) rebuilds it as
+	// float64. The exact integer-typing guarantee from anyValueToGo before
+	// the round-trip is covered separately by TestAnyValueToGoTypes below.
+	if v := r.Attributes["tokens.input"]; v != float64(412) {
+		t.Errorf("tokens.input = %v (%T), want 412", v, v)
 	}
 	if r.ServiceName != "claude-code" {
 		t.Errorf("ServiceName = %q", r.ServiceName)
@@ -125,5 +131,36 @@ func TestOTLPRejectsGET(t *testing.T) {
 	handler(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d", rec.Code)
+	}
+}
+
+// TestAnyValueToGoTypes pins down the in-process Go types anyValueToGo emits
+// before the SpanRow is serialized to NDJSON. The round-trip in
+// TestOTLPTracesHandler asserts the post-decode shape (float64); this test
+// asserts the pre-encode shape, so a regression that returns the int as a
+// string or float64 directly out of anyValueToGo would still get caught.
+func TestAnyValueToGoTypes(t *testing.T) {
+	s := "hello"
+	b := true
+	d := 3.14
+	n := json.Number("42")
+	bs := "Ynl0ZXM="
+
+	cases := []struct {
+		name string
+		in   otlpAnyValue
+		want any
+	}{
+		{"string", otlpAnyValue{StringValue: &s}, "hello"},
+		{"bool", otlpAnyValue{BoolValue: &b}, true},
+		{"int-as-string", otlpAnyValue{IntValue: &n}, int64(42)},
+		{"double", otlpAnyValue{DoubleValue: &d}, 3.14},
+		{"bytes", otlpAnyValue{BytesValue: &bs}, "Ynl0ZXM="},
+	}
+	for _, c := range cases {
+		got := anyValueToGo(c.in)
+		if got != c.want {
+			t.Errorf("%s: got %v (%T), want %v (%T)", c.name, got, got, c.want, c.want)
+		}
 	}
 }
