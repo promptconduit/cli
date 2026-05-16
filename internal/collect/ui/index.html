@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PromptConduit local agent traces</title>
+<style>
+  body { font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 0; color: #111; background: #fff; }
+  header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .status { color: #888; font-size: 12px; }
+  main { display: flex; height: calc(100vh - 49px); }
+  .traces { width: 360px; border-right: 1px solid #ddd; overflow-y: auto; }
+  .trace { padding: 10px 12px; border-bottom: 1px solid #eee; cursor: pointer; }
+  .trace:hover { background: #f6f6f6; }
+  .trace.selected { background: #eef4ff; }
+  .trace .name { font-weight: 500; }
+  .trace .meta { color: #888; font-size: 11px; margin-top: 2px; }
+  .trace .tid { font-family: ui-monospace, Menlo, monospace; }
+  .spans { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  .empty { color: #888; padding: 24px; }
+  .span { border-bottom: 1px solid #eee; padding: 8px 0; }
+  .span .head { display: flex; gap: 8px; align-items: baseline; }
+  .span .name { font-weight: 500; }
+  .span .dur { color: #888; font-size: 11px; }
+  .span .ind { color: #bbb; font-family: ui-monospace, Menlo, monospace; }
+  .attrs { color: #555; font-size: 11px; margin-top: 4px; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
+  .status-err { color: #c44; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #111; color: #eee; }
+    header, .traces, .span, .trace { border-color: #333; }
+    .trace:hover { background: #1c1c1c; }
+    .trace.selected { background: #1a2030; }
+    .trace .meta, .span .dur, .empty { color: #888; }
+    .attrs { color: #aaa; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>PromptConduit · local agent traces</h1>
+  <span class="status" id="status">loading…</span>
+</header>
+<main>
+  <div class="traces" id="traces"></div>
+  <div class="spans" id="spans"><div class="empty">Select a trace to view its spans.</div></div>
+</main>
+<script>
+let selectedTraceId = null;
+
+async function fetchJSON(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString();
+}
+
+function fmtMs(ms) {
+  if (!ms) return '';
+  if (ms < 1) return ms.toFixed(2) + 'ms';
+  if (ms < 1000) return ms.toFixed(0) + 'ms';
+  return (ms / 1000).toFixed(2) + 's';
+}
+
+function escapeHTML(s) {
+  return String(s == null ? '' : s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function renderTraces() {
+  try {
+    const traces = await fetchJSON('/api/traces?limit=100');
+    document.getElementById('status').textContent = traces.length + ' trace' + (traces.length === 1 ? '' : 's');
+    const list = document.getElementById('traces');
+    if (!traces.length) {
+      list.innerHTML = '<div class="empty">No traces yet. Point an OTLP-emitting agent at <code>http://127.0.0.1:4318</code>.</div>';
+      return;
+    }
+    list.innerHTML = traces.map(t => {
+      const errFlag = t.status === 2 ? ' <span class="status-err">!</span>' : '';
+      const tid = (t.trace_id || '').slice(0, 16);
+      return '<div class="trace ' + (t.trace_id === selectedTraceId ? 'selected' : '') + '" data-id="' + escapeHTML(t.trace_id) + '">' +
+        '<div class="name">' + escapeHTML(t.root_name || '(no root span yet)') + errFlag + '</div>' +
+        '<div class="meta">' + escapeHTML(t.service_name || 'unknown') + ' · ' + t.span_count + ' span' + (t.span_count === 1 ? '' : 's') + (t.duration_ms ? ' · ' + fmtMs(t.duration_ms) : '') + ' · ' + fmtTime(t.started_at) + '</div>' +
+        '<div class="meta tid">' + escapeHTML(tid) + '…</div>' +
+      '</div>';
+    }).join('');
+    list.querySelectorAll('.trace').forEach(el => {
+      el.addEventListener('click', () => {
+        selectedTraceId = el.dataset.id;
+        list.querySelectorAll('.trace').forEach(t => t.classList.toggle('selected', t.dataset.id === selectedTraceId));
+        renderSpans();
+      });
+    });
+  } catch (e) {
+    document.getElementById('status').textContent = 'error: ' + e.message;
+  }
+}
+
+async function renderSpans() {
+  if (!selectedTraceId) return;
+  try {
+    const spans = await fetchJSON('/api/spans?trace_id=' + encodeURIComponent(selectedTraceId) + '&limit=500');
+    spans.sort((a, b) => (a.start_unix_nano || 0) - (b.start_unix_nano || 0));
+    const byId = Object.fromEntries(spans.map(s => [s.span_id, s]));
+    const depth = {};
+    function d(s) {
+      if (depth[s.span_id] !== undefined) return depth[s.span_id];
+      if (!s.parent_span_id || !byId[s.parent_span_id]) { depth[s.span_id] = 0; return 0; }
+      depth[s.span_id] = d(byId[s.parent_span_id]) + 1;
+      return depth[s.span_id];
+    }
+    spans.forEach(d);
+    const root = document.getElementById('spans');
+    if (!spans.length) { root.innerHTML = '<div class="empty">No spans in this trace.</div>'; return; }
+    root.innerHTML = spans.map(s => {
+      const ind = '· '.repeat(depth[s.span_id] || 0);
+      const attrs = s.attributes ? Object.entries(s.attributes).map(([k, v]) => k + '=' + JSON.stringify(v)).join('  ') : '';
+      const errPart = s.status_code === 2 ? '<span class="status-err">' + escapeHTML(s.status_message || 'error') + '</span>' : '';
+      return '<div class="span">' +
+        '<div class="head">' +
+          '<span class="ind">' + ind + '</span>' +
+          '<span class="name">' + escapeHTML(s.name || '(unnamed)') + '</span>' +
+          '<span class="dur">' + fmtMs(s.duration_ms) + '</span>' +
+          errPart +
+        '</div>' +
+        (attrs ? '<div class="attrs">' + escapeHTML(attrs) + '</div>' : '') +
+      '</div>';
+    }).join('');
+  } catch (e) {
+    document.getElementById('spans').innerHTML = '<div class="empty">Error: ' + escapeHTML(e.message) + '</div>';
+  }
+}
+
+renderTraces();
+setInterval(() => {
+  renderTraces();
+  if (selectedTraceId) renderSpans();
+}, 2000);
+</script>
+</body>
+</html>

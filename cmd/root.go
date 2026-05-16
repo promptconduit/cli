@@ -56,6 +56,7 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(watchCmd)
+	rootCmd.AddCommand(collectCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -188,17 +189,15 @@ func spawnBackgroundUpgrade() {
 
 // skipUpdateCheckFor returns true when the current command must not pay
 // the cost of (or output) an update check. Hooks run many times per
-// session and must stay fast; upgrade does its own checking.
+// session and must stay fast; upgrade does its own checking; long-running
+// loops shouldn't be interrupted with an update banner.
 func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	if os.Getenv("PROMPTCONDUIT_AUTO_UPDATE_CHILD") == "1" {
 		return true
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "upgrade", "watch":
-		// hook is per-event and must stay fast; upgrade and watch
-		// drive their own long-running loops and shouldn't have a
-		// random update banner interrupt them.
+	case "hook", "upgrade", "watch", "collect":
 		return true
 	}
 	return false
