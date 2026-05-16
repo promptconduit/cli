@@ -18,8 +18,10 @@ var uninstallCmd = &cobra.Command{
 
 Supported tools:
   - claude-code: Claude Code CLI
-  - cursor: Cursor IDE
-  - gemini-cli: Gemini CLI (also accepts "gemini")`,
+  - cursor:      Cursor IDE
+  - gemini-cli:  Gemini CLI (also accepts "gemini")
+  - codex:       OpenAI Codex CLI
+  - copilot:     GitHub Copilot CLI`,
 	Args: cobra.ExactArgs(1),
 	RunE: runUninstall,
 }
@@ -38,6 +40,10 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		return uninstallCursor()
 	case "gemini-cli", "gemini":
 		return uninstallGemini()
+	case "codex":
+		return uninstallCodex()
+	case "copilot":
+		return uninstallCopilot()
 	default:
 		return fmt.Errorf("uninstallation not implemented for: %s", toolName)
 	}
@@ -245,4 +251,86 @@ func containsPromptConduit(v interface{}) bool {
 		}
 	}
 	return false
+}
+
+func uninstallCodex() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(homeDir, ".codex", "hooks.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No Codex CLI hooks file found - nothing to uninstall")
+			return nil
+		}
+		return fmt.Errorf("failed to read settings: %w", err)
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return fmt.Errorf("failed to parse settings: %w", err)
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		fmt.Println("No hooks found in Codex CLI settings")
+		return nil
+	}
+
+	removed := 0
+	for hookName, hookConfig := range hooks {
+		if containsPromptConduit(hookConfig) {
+			delete(hooks, hookName)
+			removed++
+		}
+	}
+
+	if removed == 0 {
+		fmt.Println("No PromptConduit hooks found in Codex CLI settings")
+		return nil
+	}
+
+	if len(hooks) == 0 {
+		delete(settings, "hooks")
+	}
+
+	data, err = json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write settings: %w", err)
+	}
+
+	fmt.Printf("Successfully removed %d PromptConduit hook(s) from Codex CLI\n", removed)
+	return nil
+}
+
+// uninstallCopilot removes our dedicated hooks file. Unlike the other
+// tools where we merge into a shared settings.json, Copilot reads every
+// *.json under ~/.copilot/hooks/, so our installer owns a single file and
+// uninstall is just a delete.
+func uninstallCopilot() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(homeDir, ".copilot", "hooks", CopilotHookFile)
+
+	if err := os.Remove(settingsPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No PromptConduit hooks file found for Copilot CLI - nothing to uninstall")
+			return nil
+		}
+		return fmt.Errorf("failed to remove hooks file: %w", err)
+	}
+
+	fmt.Printf("Successfully removed PromptConduit hooks from Copilot CLI (%s)\n", settingsPath)
+	return nil
 }
