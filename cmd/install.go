@@ -374,6 +374,16 @@ func installGemini(exePath string) error {
 	return nil
 }
 
+// buildGeminiHooks registers for every event Gemini CLI's hooks reference
+// exposes (https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md).
+// Matchers are only meaningful on BeforeTool/AfterTool (regex on tool name);
+// other events use `matcher: "*"` only when the spec calls for matcher
+// filtering, otherwise we omit it.
+//
+// NOTE: AfterModel fires per response chunk during streaming, so it can be
+// high-volume on long Gemini turns. We register it for completeness —
+// downstream consumers (the platform + `promptconduit watch`) can filter
+// or sample if it becomes a problem in practice.
 func buildGeminiHooks(hookCmd string) map[string]interface{} {
 	makeHook := func(timeout int) []map[string]interface{} {
 		return []map[string]interface{}{
@@ -394,12 +404,29 @@ func buildGeminiHooks(hookCmd string) map[string]interface{} {
 		}
 	}
 
+	plainEvent := func() []map[string]interface{} {
+		return []map[string]interface{}{{"hooks": makeHook(5000)}}
+	}
+
 	return map[string]interface{}{
-		"BeforeAgent":  []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"BeforeTool":   makeMatcherHook(5000),
-		"AfterTool":    makeMatcherHook(5000),
-		"SessionStart": []map[string]interface{}{{"hooks": makeHook(5000)}},
-		"SessionEnd":   []map[string]interface{}{{"hooks": makeHook(5000)}},
+		// Session lifecycle
+		"SessionStart": plainEvent(),
+		"SessionEnd":   plainEvent(),
+		// Per-turn lifecycle
+		"BeforeAgent": plainEvent(), // user submitted a prompt, before planning
+		"AfterAgent":  plainEvent(), // final turn response produced
+		// Model interaction (BeforeModel fires per LLM call; AfterModel
+		// fires per response chunk — see note above)
+		"BeforeModel":         plainEvent(),
+		"AfterModel":          plainEvent(),
+		"BeforeToolSelection": plainEvent(),
+		// Tool execution (matcher = regex on tool name)
+		"BeforeTool": makeMatcherHook(5000),
+		"AfterTool":  makeMatcherHook(5000),
+		// Context compaction
+		"PreCompress": plainEvent(),
+		// System alerts
+		"Notification": plainEvent(),
 	}
 }
 
