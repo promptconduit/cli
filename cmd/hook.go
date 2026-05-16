@@ -19,7 +19,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var sendEvent bool
+var (
+	sendEvent bool
+	// toolOverride is set by the install command (`--tool codex`,
+	// `--tool copilot`) when the host AI tool's hook payload can't be
+	// reliably distinguished from other tools by inspecting fields
+	// alone — Codex in particular sends `hook_event_name`, which would
+	// otherwise be tagged as Claude Code.
+	toolOverride string
+)
 
 var hookCmd = &cobra.Command{
 	Use:    "hook",
@@ -31,6 +39,7 @@ var hookCmd = &cobra.Command{
 
 func init() {
 	hookCmd.Flags().BoolVar(&sendEvent, "send-event", false, "Send event data from stdin (internal use)")
+	hookCmd.Flags().StringVar(&toolOverride, "tool", "", "Override tool name (codex, copilot, etc.); set by the install command")
 }
 
 func runHook(cmd *cobra.Command, args []string) error {
@@ -215,9 +224,16 @@ func hostname() string {
 	return h
 }
 
-// detectTool identifies which AI tool generated the event
+// detectTool identifies which AI tool generated the event.
+//
+// Precedence: --tool flag (set by install for Codex/Copilot whose payloads
+// can't be told apart from Claude Code by content) → PROMPTCONDUIT_TOOL
+// env var → heuristic field-presence detection.
 func detectTool(event map[string]interface{}) string {
-	// Check environment variable override first
+	if toolOverride != "" {
+		return toolOverride
+	}
+	// Check environment variable override next.
 	if tool := os.Getenv(client.EnvTool); tool != "" {
 		return tool
 	}

@@ -172,13 +172,13 @@ func (e *RawEventEnvelope) ToJSON() ([]byte, error) {
 
 // SupportedTools returns a list of supported tool names
 func SupportedTools() []string {
-	return []string{"claude-code", "cursor", "gemini-cli"}
+	return []string{"claude-code", "cursor", "gemini-cli", "codex", "copilot"}
 }
 
 // IsValidTool checks if the given tool name is supported
 func IsValidTool(toolName string) bool {
 	switch toolName {
-	case "claude-code", "cursor", "gemini-cli", "gemini":
+	case "claude-code", "cursor", "gemini-cli", "gemini", "codex", "copilot":
 		return true
 	default:
 		return false

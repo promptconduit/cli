@@ -38,6 +38,8 @@ PromptConduit CLI captures prompts, tool executions, and session events from AI 
 | [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments |
 | [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
+| [OpenAI Codex CLI](https://github.com/openai/codex) | Prompts, Tools, Permissions, Sessions |
+| [GitHub Copilot CLI](https://github.com/github/copilot-cli) | Prompts, Tools, Subagents, Errors, Sessions |
 
 **Local skill generation** (no account required):
 
@@ -140,6 +142,12 @@ promptconduit install cursor
 
 # For Gemini CLI
 promptconduit install gemini-cli
+
+# For OpenAI Codex CLI
+promptconduit install codex
+
+# For GitHub Copilot CLI
+promptconduit install copilot
 ```
 
 ### 4. Verify installation

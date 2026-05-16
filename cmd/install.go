@@ -17,9 +17,11 @@ var installCmd = &cobra.Command{
 	Long: `Install PromptConduit hooks for the specified AI coding assistant.
 
 Supported tools:
-  - claude-code: Claude Code CLI
-  - cursor: Cursor IDE
-  - gemini-cli: Gemini CLI (also accepts "gemini")
+  - claude-code: Claude Code CLI            (~/.claude/settings.json)
+  - cursor:      Cursor IDE                 (~/.cursor/hooks.json)
+  - gemini-cli:  Gemini CLI                 (~/.gemini/settings.json; also accepts "gemini")
+  - codex:       OpenAI Codex CLI           (~/.codex/hooks.json)
+  - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
 
 The hooks will capture events from the tool and send them to the PromptConduit API.
 
@@ -56,6 +58,10 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return installCursor(exePath)
 	case "gemini-cli", "gemini":
 		return installGemini(exePath)
+	case "codex":
+		return installCodex(exePath)
+	case "copilot":
+		return installCopilot(exePath)
 	default:
 		return fmt.Errorf("installation not implemented for: %s", toolName)
 	}
@@ -434,4 +440,228 @@ func buildGeminiHooks(hookCmd string) map[string]interface{} {
 func isCommandAvailable(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
+}
+
+// installCodex registers our hook handler with OpenAI Codex CLI.
+//
+// Codex's config format mirrors Claude Code's (event keys → matcher groups →
+// hook handlers), with two important differences from Claude Code:
+//   - timeout is in SECONDS (not milliseconds).
+//   - SessionEnd does not exist; sessions only emit SessionStart.
+//
+// We pass `--tool codex` to our hook binary because Codex's payload uses the
+// same `hook_event_name` field name as Claude Code, so the existing
+// detectTool heuristic would otherwise mistag the events.
+//
+// Spec: https://developers.openai.com/codex/hooks
+func installCodex(exePath string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(homeDir, ".codex", "hooks.json")
+
+	// Read existing settings or create new
+	settings := make(map[string]interface{})
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		if err := json.Unmarshal(data, &settings); err != nil {
+			return fmt.Errorf("failed to parse existing settings: %w", err)
+		}
+	}
+
+	hookCmd := fmt.Sprintf("%s hook --tool codex", exePath)
+	hooks := buildCodexHooks(hookCmd)
+
+	// Strip any of OUR previously-installed entries first so removed events
+	// (or stale --tool flags from earlier versions) self-heal on re-install.
+	// User-owned hook entries are left alone.
+	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		for name, config := range existingHooks {
+			if containsPromptConduit(config) {
+				delete(existingHooks, name)
+			}
+		}
+		for name, config := range hooks {
+			existingHooks[name] = config
+		}
+	} else {
+		settings["hooks"] = hooks
+	}
+
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		return fmt.Errorf("failed to create settings directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write settings: %w", err)
+	}
+
+	fmt.Println("Successfully installed PromptConduit hooks for Codex CLI")
+	fmt.Printf("Settings file: %s\n", settingsPath)
+	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+
+	return nil
+}
+
+// buildCodexHooks registers for every event in the Codex CLI hooks reference
+// (https://developers.openai.com/codex/hooks). Codex's matcher rules:
+//   - SessionStart matches start source: startup|resume|clear
+//   - PreToolUse / PostToolUse / PermissionRequest match tool name
+//   - UserPromptSubmit and Stop do not support matchers
+//
+// Codex's timeout field is in seconds; 30 is plenty for our hook
+// (read stdin → spawn async send → return).
+func buildCodexHooks(hookCmd string) map[string]interface{} {
+	makeHook := func(timeoutSec int) []map[string]interface{} {
+		return []map[string]interface{}{
+			{
+				"type":    "command",
+				"command": hookCmd,
+				"timeout": timeoutSec,
+			},
+		}
+	}
+
+	makeMatcherHook := func(timeoutSec int) []map[string]interface{} {
+		return []map[string]interface{}{
+			{
+				"matcher": "*",
+				"hooks":   makeHook(timeoutSec),
+			},
+		}
+	}
+
+	plainEvent := func() []map[string]interface{} {
+		return []map[string]interface{}{{"hooks": makeHook(30)}}
+	}
+
+	return map[string]interface{}{
+		// Session lifecycle (matcher = startup|resume|clear)
+		"SessionStart": makeMatcherHook(30),
+		// Per-turn (no matcher support)
+		"UserPromptSubmit": plainEvent(),
+		"Stop":             plainEvent(),
+		// Tool execution (matcher = tool name regex: Bash, apply_patch, mcp__*)
+		"PreToolUse":        makeMatcherHook(30),
+		"PostToolUse":       makeMatcherHook(30),
+		"PermissionRequest": makeMatcherHook(30),
+	}
+}
+
+// CopilotHookFile is the basename we write into ~/.copilot/hooks/. Copilot
+// loads every *.json in that directory, so owning a dedicated file lets us
+// uninstall cleanly without parsing or merging anything else.
+const CopilotHookFile = "promptconduit.json"
+
+// installCopilot registers our hook handler with GitHub Copilot CLI.
+//
+// Unlike Claude Code / Codex / Gemini which use a single merged settings
+// file, Copilot reads every *.json under ~/.copilot/hooks/ and combines
+// them, so we own a dedicated file (promptconduit.json) — uninstall is a
+// `rm` and idempotency is automatic.
+//
+// We pass `--tool copilot` to our hook binary because Copilot supports
+// both camelCase events (its native format, with sessionId/cwd payload
+// fields) AND PascalCase events (VS Code compatible, with hook_event_name
+// payload field). We use camelCase below; setting --tool ensures correct
+// attribution regardless of payload shape.
+//
+// Spec: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-hooks-reference
+func installCopilot(exePath string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	hooksDir := filepath.Join(homeDir, ".copilot", "hooks")
+	settingsPath := filepath.Join(hooksDir, CopilotHookFile)
+
+	hookCmd := fmt.Sprintf("%s hook --tool copilot", exePath)
+	doc := map[string]interface{}{
+		"version": 1,
+		"hooks":   buildCopilotHooks(hookCmd),
+	}
+
+	if err := os.MkdirAll(hooksDir, 0755); err != nil {
+		return fmt.Errorf("failed to create hooks directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal hooks: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write hooks file: %w", err)
+	}
+
+	fmt.Println("Successfully installed PromptConduit hooks for GitHub Copilot CLI")
+	fmt.Printf("Hooks file: %s\n", settingsPath)
+	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+
+	return nil
+}
+
+// buildCopilotHooks registers for every event in the Copilot CLI hooks
+// reference (camelCase form). Copilot's command-hook field semantics:
+//   - `command` is a cross-platform fallback used when neither `bash` nor
+//     `powershell` is set for the current platform. Since our hook is a
+//     single binary that invokes the same way on both, we use `command`
+//     alone and let Copilot pick.
+//   - timeoutSec, not timeout. Default is 30s which is plenty for our path.
+//
+// Matcher-supporting events get `"*"` for now (matches everything).
+// Note: under Copilot cloud agent, `notification` and `permissionRequest`
+// don't fire; harmless to register, just no-ops there.
+func buildCopilotHooks(hookCmd string) map[string]interface{} {
+	makeCmd := func() []map[string]interface{} {
+		return []map[string]interface{}{
+			{
+				"type":       "command",
+				"command":    hookCmd,
+				"timeoutSec": 30,
+			},
+		}
+	}
+
+	makeMatcherCmd := func(matcher string) []map[string]interface{} {
+		return []map[string]interface{}{
+			{
+				"type":       "command",
+				"command":    hookCmd,
+				"timeoutSec": 30,
+				"matcher":    matcher,
+			},
+		}
+	}
+
+	return map[string]interface{}{
+		// Session lifecycle
+		"sessionStart": makeCmd(),
+		"sessionEnd":   makeCmd(),
+		// Per-turn / agent lifecycle
+		"userPromptSubmitted": makeCmd(),
+		"agentStop":           makeCmd(),
+		// Subagent lifecycle (matcher = agent name regex)
+		"subagentStart": makeMatcherCmd("*"),
+		"subagentStop":  makeCmd(),
+		// Tool execution (matcher = tool name regex on preToolUse + permissionRequest)
+		"preToolUse":         makeMatcherCmd("*"),
+		"postToolUse":        makeCmd(),
+		"postToolUseFailure": makeCmd(),
+		"permissionRequest":  makeMatcherCmd("*"),
+		// Context compaction (matcher = "manual"|"auto")
+		"preCompact": makeMatcherCmd("*"),
+		// System / errors
+		"notification":  makeMatcherCmd("*"),
+		"errorOccurred": makeCmd(),
+	}
 }
