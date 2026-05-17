@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/outbound"
 )
 
@@ -209,19 +210,25 @@ func (c *Client) SendEnvelopeAsync(env *envelope.RawEventEnvelope) error {
 	return c.sendAsyncUnix(envJSON)
 }
 
-// sendAsyncUnix uses fork to send envelope without blocking
+// sendAsyncUnix uses fork to send envelope without blocking. The subprocess
+// inherits a file descriptor pointing at the persistent log file as stderr,
+// so any crash or panic — which the in-process logger can't catch — still
+// leaves a trace on disk. Previously stderr was discarded, which made
+// failed sends invisible.
 func (c *Client) sendAsyncUnix(envJSON []byte) error {
 	exe, err := os.Executable()
 	if err != nil {
+		logger.Error("async send: cannot resolve executable path: %v (falling back to blocking)", err)
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
 	cmd := exec.Command(exe, "hook", "--send-event")
 	cmd.Stdin = bytes.NewReader(envJSON)
 	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stderr = openLogForStderr()
 
 	if err := cmd.Start(); err != nil {
+		logger.Error("async send: cmd.Start failed: %v (falling back to blocking)", err)
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
@@ -236,13 +243,16 @@ func (c *Client) sendAsyncUnix(envJSON []byte) error {
 func (c *Client) sendAsyncWindows(envJSON []byte) error {
 	exe, err := os.Executable()
 	if err != nil {
+		logger.Error("async send: cannot resolve executable path: %v (falling back to blocking)", err)
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
 	cmd := exec.Command(exe, "hook", "--send-event")
 	cmd.Stdin = bytes.NewReader(envJSON)
+	cmd.Stderr = openLogForStderr()
 
 	if err := cmd.Start(); err != nil {
+		logger.Error("async send: cmd.Start failed: %v (falling back to blocking)", err)
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
@@ -251,6 +261,23 @@ func (c *Client) sendAsyncWindows(envJSON []byte) error {
 	}()
 
 	return nil
+}
+
+// openLogForStderr returns a file handle suitable to assign to cmd.Stderr.
+// The subprocess's runtime (panics, fatal errors that bypass the logger)
+// gets routed into the same persistent log so a crashed sender isn't
+// silent. Returns nil on any failure — exec then discards stderr, matching
+// the prior behavior, so we never make things worse than before.
+func openLogForStderr() *os.File {
+	dir := logger.Dir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(logger.Path(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 // sendEnvelopeBlocking sends the envelope synchronously (fallback)

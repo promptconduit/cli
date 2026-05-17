@@ -14,6 +14,7 @@ import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/git"
+	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/promptconduit/cli/internal/transcript"
 	"github.com/spf13/cobra"
@@ -53,19 +54,24 @@ func runHook(cmd *cobra.Command, args []string) error {
 func processHookEvent() error {
 	defer outputContinueResponse()
 
-	fileLog("Hook started")
+	// Load config first so we can set the debug flag for the logger before
+	// emitting any trace lines.
+	cfg := client.LoadConfig()
+	logger.SetDebug(cfg.Debug)
+
+	logger.Debug("Hook started")
 
 	// Read raw input from stdin
 	rawInput, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		debugLog("Failed to read stdin: %v", err)
-		fileLog("Failed to read stdin: %v", err)
+		logger.Error("Failed to read stdin: %v", err)
 		return nil
 	}
 
 	if len(rawInput) == 0 {
 		debugLog("Empty input, skipping")
-		fileLog("Empty input, skipping")
+		logger.Debug("Empty input, skipping")
 		return nil
 	}
 
@@ -73,21 +79,19 @@ func processHookEvent() error {
 	if previewLen > 200 {
 		previewLen = 200
 	}
-	fileLog("Received %d bytes: %s", len(rawInput), string(rawInput[:previewLen]))
+	logger.Debug("Received %d bytes: %s", len(rawInput), string(rawInput[:previewLen]))
 
 	// Parse just enough to detect tool and event name
 	var nativeEvent map[string]interface{}
 	if err := json.Unmarshal(rawInput, &nativeEvent); err != nil {
 		debugLog("Failed to parse JSON: %v", err)
-		fileLog("Failed to parse JSON: %v", err)
+		logger.Error("Failed to parse JSON: %v (raw=%q)", err, string(rawInput[:previewLen]))
 		return nil
 	}
 
-	// Load config
-	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
 		debugLog("API key not configured, skipping")
-		fileLog("API key not configured, skipping")
+		logger.Error("API key not configured — event dropped. Run `promptconduit config set --api-key=...`")
 		return nil
 	}
 
@@ -96,13 +100,13 @@ func processHookEvent() error {
 	hookEvent := getHookEventName(nativeEvent)
 	sessionID := getSessionID(nativeEvent)
 
-	fileLog("Detected tool: %s, hook event: %s", tool, hookEvent)
+	logger.Debug("Detected tool: %s, hook event: %s", tool, hookEvent)
 
 	// Build correlation IDs (W3C-compatible trace_id/span_id).
 	// Stable across hook fires within a session; best-effort, never blocks.
 	corr := buildCorrelation(tool, hookEvent, sessionID, nativeEvent)
 	if corr != nil {
-		fileLog("correlation: trace=%s span=%s parent=%s", corr.TraceID, corr.SpanID, corr.ParentSpanID)
+		logger.Debug("correlation: trace=%s span=%s parent=%s", corr.TraceID, corr.SpanID, corr.ParentSpanID)
 	}
 
 	// Extract git context from working directory
@@ -126,7 +130,7 @@ func processHookEvent() error {
 	if cwd != "" {
 		gitCtx = git.ExtractContext(cwd)
 		if gitCtx != nil {
-			fileLog("Extracted git context: repo=%s, branch=%s", gitCtx.RepoName, gitCtx.Branch)
+			logger.Debug("Extracted git context: repo=%s, branch=%s", gitCtx.RepoName, gitCtx.Branch)
 		}
 	}
 
@@ -139,12 +143,12 @@ func processHookEvent() error {
 	if hookEvent == "UserPromptSubmit" {
 		extractor := transcript.GetExtractor(tool)
 		if extractor.SupportsAttachments() {
-			fileLog("UserPromptSubmit: checking for attachments in current message")
+			logger.Debug("UserPromptSubmit: checking for attachments in current message")
 			attachments, _, err := extractor.ExtractAttachments(nativeEvent)
 			if err != nil {
-				fileLog("Error extracting attachments: %v", err)
+				logger.Error("Error extracting attachments: %v", err)
 			} else if len(attachments) > 0 {
-				fileLog("Found %d attachments in current message, sending with event", len(attachments))
+				logger.Debug("Found %d attachments in current message, sending with event", len(attachments))
 
 				// Build attachment metadata for envelope and binary data for multipart
 				envAttachments := make([]envelope.AttachmentMetadata, len(attachments))
@@ -165,7 +169,7 @@ func processHookEvent() error {
 						ContentType:  att.MediaType,
 						Data:         att.Data,
 					}
-					fileLog("Attachment %d: %s (%s, %d bytes)", i+1, att.Filename, att.MediaType, len(att.Data))
+					logger.Debug("Attachment %d: %s (%s, %d bytes)", i+1, att.Filename, att.MediaType, len(att.Data))
 				}
 
 				// Create envelope with attachment metadata
@@ -173,9 +177,9 @@ func processHookEvent() error {
 
 				// Send via multipart with binary attachments
 				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
-					fileLog("Failed to send envelope with attachments: %v", err)
+					logger.Error("Failed to send envelope with attachments (event=%s, tool=%s): %v", hookEvent, tool, err)
 				} else {
-					fileLog("UserPromptSubmit with %d attachments sent successfully", len(attachments))
+					logger.Debug("UserPromptSubmit with %d attachments sent successfully", len(attachments))
 				}
 				// Return here - we've sent the event with attachments, don't send again below
 				return nil
@@ -186,15 +190,15 @@ func processHookEvent() error {
 	// Create envelope with raw payload (no attachments case, or non-UserPromptSubmit events)
 	env := envelope.New(Version, tool, hookEvent, rawInput, enr)
 
-	fileLog("Created envelope: tool=%s, event=%s", tool, hookEvent)
+	logger.Debug("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
 	// Send async
 	if err := apiClient.SendEnvelopeAsync(env); err != nil {
 		debugLog("Failed to send envelope async: %v", err)
-		fileLog("Failed to send envelope async: %v", err)
+		logger.Error("Failed to spawn async sender (event=%s, tool=%s): %v", hookEvent, tool, err)
 	}
 
-	fileLog("Envelope queued for async send")
+	logger.Debug("Envelope queued for async send")
 	return nil
 }
 
@@ -312,30 +316,32 @@ func getSessionID(event map[string]interface{}) string {
 
 // sendEnvelopeFromStdin sends envelope data directly (called by async subprocess)
 func sendEnvelopeFromStdin() error {
-	fileLog("Async subprocess started")
+	cfg := client.LoadConfig()
+	logger.SetDebug(cfg.Debug)
+
+	logger.Debug("Async subprocess started")
 
 	inputData, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		fileLog("Async subprocess failed to read stdin: %v", err)
+		logger.Error("Async subprocess failed to read stdin: %v", err)
 		return fmt.Errorf("failed to read stdin: %w", err)
 	}
 
-	fileLog("Async subprocess received %d bytes", len(inputData))
+	logger.Debug("Async subprocess received %d bytes", len(inputData))
 
-	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		fileLog("Async subprocess: API key not configured")
+		logger.Error("Async subprocess: API key not configured — envelope dropped")
 		return fmt.Errorf("API key not configured")
 	}
 
-	fileLog("Async subprocess sending to API: %s", cfg.APIURL)
+	logger.Debug("Async subprocess sending to API: %s", cfg.APIURL)
 	apiClient := client.NewClient(cfg, Version)
 	err = apiClient.SendEnvelopeDirect(inputData)
 	if err != nil {
-		fileLog("Async subprocess API error: %v", err)
+		logger.Error("Async subprocess API send failed (url=%s): %v", cfg.APIURL, err)
 		return err
 	}
-	fileLog("Async subprocess: envelope sent successfully")
+	logger.Debug("Async subprocess: envelope sent successfully")
 	return nil
 }
 
@@ -348,7 +354,9 @@ func outputContinueResponse() {
 	fmt.Println(string(data))
 }
 
-// debugLog logs a message only if debug mode is enabled
+// debugLog mirrors a debug-level message to stderr (real-time visibility
+// when the user runs with debug mode). The persistent log file is handled
+// separately by the logger package.
 func debugLog(format string, args ...interface{}) {
 	cfg := client.LoadConfig()
 	if cfg.Debug {
@@ -356,48 +364,32 @@ func debugLog(format string, args ...interface{}) {
 	}
 }
 
-// fileLog logs a message to a file (for debugging hook issues)
-func fileLog(format string, args ...interface{}) {
-	cfg := client.LoadConfig()
-	if !cfg.Debug {
-		return
-	}
-	logPath := filepath.Join(os.TempDir(), "promptconduit-hook.log")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	msg := fmt.Sprintf(format, args...)
-	f.WriteString(fmt.Sprintf("[%s] %s\n", time.Now().Format(time.RFC3339), msg))
-}
-
 // triggerAutoSync triggers automatic transcript sync after SessionEnd or Stop events
 // Spawns a subprocess immediately to avoid being killed when the main process exits
 // Uses hash-based deduplication so frequent triggers are efficient (only syncs if file changed)
 func triggerAutoSync(sessionID string) {
-	fileLog("Auto-sync: triggered for session %s", sessionID)
+	logger.Debug("Auto-sync: triggered for session %s", sessionID)
 
 	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
-		fileLog("Auto-sync: could not find transcript for session %s: %v", sessionID, err)
+		logger.Debug("Auto-sync: could not find transcript for session %s: %v", sessionID, err)
 		return
 	}
 
-	fileLog("Auto-sync: found transcript at %s", transcriptPath)
+	logger.Debug("Auto-sync: found transcript at %s", transcriptPath)
 
 	// Spawn async subprocess to sync this file
 	// Use --delay flag so the subprocess waits for transcript to be fully flushed
 	exe, err := os.Executable()
 	if err != nil {
-		fileLog("Auto-sync: failed to get executable path: %v", err)
+		logger.Debug("Auto-sync: failed to get executable path: %v", err)
 		return
 	}
 
 	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", "1")
 	if err := cmd.Start(); err != nil {
-		fileLog("Auto-sync: failed to start sync subprocess: %v", err)
+		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
 		return
 	}
 
@@ -406,7 +398,7 @@ func triggerAutoSync(sessionID string) {
 		_ = cmd.Process.Release()
 	}
 
-	fileLog("Auto-sync: sync subprocess started for session %s", sessionID)
+	logger.Debug("Auto-sync: sync subprocess started for session %s", sessionID)
 
 	// Also retry any previously failed syncs (spawn as separate subprocess)
 	go retryFailedSyncs(exe)
@@ -416,7 +408,7 @@ func triggerAutoSync(sessionID string) {
 func retryFailedSyncs(exe string) {
 	stateManager, err := sync.NewStateManager()
 	if err != nil {
-		fileLog("Auto-sync retry: failed to load state: %v", err)
+		logger.Debug("Auto-sync retry: failed to load state: %v", err)
 		return
 	}
 
@@ -425,18 +417,18 @@ func retryFailedSyncs(exe string) {
 		return
 	}
 
-	fileLog("Auto-sync retry: found %d failed syncs to retry", len(failedSyncs))
+	logger.Debug("Auto-sync retry: found %d failed syncs to retry", len(failedSyncs))
 
 	for _, failed := range failedSyncs {
 		// Max 3 retries per file
 		if failed.RetryCount >= 3 {
-			fileLog("Auto-sync retry: skipping %s (exceeded max retries)", failed.SessionID)
+			logger.Debug("Auto-sync retry: skipping %s (exceeded max retries)", failed.SessionID)
 			continue
 		}
 
 		cmd := exec.Command(exe, "sync", "--file", failed.FilePath)
 		if err := cmd.Start(); err != nil {
-			fileLog("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
+			logger.Debug("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
 			continue
 		}
 
@@ -444,7 +436,7 @@ func retryFailedSyncs(exe string) {
 			_ = cmd.Process.Release()
 		}
 
-		fileLog("Auto-sync retry: started retry for session %s", failed.SessionID)
+		logger.Debug("Auto-sync retry: started retry for session %s", failed.SessionID)
 	}
 }
 

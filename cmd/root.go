@@ -57,6 +57,7 @@ func init() {
 	rootCmd.AddCommand(upgradeCmd)
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(collectCmd)
+	rootCmd.AddCommand(logsCmd)
 }
 
 var versionCmd = &cobra.Command{
