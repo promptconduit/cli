@@ -13,6 +13,7 @@ import (
 
 var (
 	skillsApproved string
+	skillsFilter   string
 	skillsType     string
 	skillsLimit    int
 	skillsForce    bool
@@ -107,6 +108,7 @@ Requires the Anthropic API key to be configured on the platform.`,
 func init() {
 	skillsListCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 	skillsListCmd.Flags().StringVar(&skillsApproved, "approved", "", "Filter by approval: true, false, or pending")
+	skillsListCmd.Flags().StringVar(&skillsFilter, "filter", "all", "Tab filter: new (unapproved), ready (approved), removed (rejected), all")
 	skillsListCmd.Flags().StringVar(&skillsType, "type", "", "Filter by type: workflow, command, template, checklist")
 	skillsListCmd.Flags().IntVarP(&skillsLimit, "limit", "l", 50, "Maximum number of skills to show")
 	skillsListCmd.Flags().StringVar(&skillsRepo, "repo", "", "Filter to a specific project (e.g. my-org/my-repo)")
@@ -124,10 +126,21 @@ func init() {
 	skillsPatternsCmd.Flags().StringP("format", "f", "text", "Output format (text, json)")
 	skillsPatternsCmd.Flags().StringVar(&skillsRepo, "repo", "", "Scope to a specific project (auto-detected if in a git repo)")
 
+	skillsInstallCmd.Flags().BoolVar(&skillsInstallAll, "all", false, "Install every approved skill")
+	skillsInstallCmd.Flags().StringVar(&skillsInstallScope, "scope", "", "Install scope: project (in current git repo) or global (~/.claude/skills)")
+	skillsInstallCmd.Flags().BoolVar(&skillsInstallForce, "force", false, "Overwrite local edits without prompting")
+
+	skillsUninstallCmd.Flags().BoolVar(&skillsUninstallAll, "all", false, "Uninstall every promptconduit-installed skill")
+	skillsUninstallCmd.Flags().BoolVar(&skillsUninstallForce, "force", false, "Remove even if the file has been hand-edited")
+
 	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsGenerateCmd)
 	skillsCmd.AddCommand(skillsSyncCmd)
 	skillsCmd.AddCommand(skillsPatternsCmd)
+	skillsCmd.AddCommand(skillsInstallCmd)
+	skillsCmd.AddCommand(skillsUninstallCmd)
+	skillsCmd.AddCommand(skillsApproveCmd)
+	skillsCmd.AddCommand(skillsRejectCmd)
 }
 
 // ============================================================================
@@ -140,12 +153,28 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
 	}
 
-	// Translate --approved flag
+	// --filter mirrors the web UI tabs and takes precedence over --approved.
+	// The web tabs are pure client-side derivations of is_approved:
+	//   new=null, ready=true, removed=false, all=any.
+	// Server has an approved=true|false param; null requires a client-side pass.
 	approvedFilter := ""
-	if skillsApproved == "true" {
+	wantNullOnly := false
+	switch strings.ToLower(skillsFilter) {
+	case "ready":
 		approvedFilter = "true"
-	} else if skillsApproved == "false" || skillsApproved == "pending" {
+	case "removed":
 		approvedFilter = "false"
+	case "new":
+		wantNullOnly = true
+	case "all", "":
+		// honor legacy --approved when --filter is "all" (its default)
+		if skillsApproved == "true" {
+			approvedFilter = "true"
+		} else if skillsApproved == "false" || skillsApproved == "pending" {
+			approvedFilter = "false"
+		}
+	default:
+		return fmt.Errorf("invalid --filter %q (want new|ready|removed|all)", skillsFilter)
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -155,12 +184,39 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to list skills: %s", resp.Error)
 	}
 
+	if wantNullOnly {
+		filterUnapproved(resp.Data)
+	}
+
 	format, _ := cmd.Flags().GetString("format")
 	if format == "json" {
 		return outputJSON(resp.Data)
 	}
 
 	return outputSkillsList(resp.Data)
+}
+
+// filterUnapproved mutates the response data in place to retain only skills
+// whose is_approved is null/missing. Used by --filter new since the server
+// can't express "approval IS NULL" via its current query params.
+func filterUnapproved(data map[string]interface{}) {
+	list, ok := data["skills"].([]interface{})
+	if !ok {
+		return
+	}
+	kept := make([]interface{}, 0, len(list))
+	for _, s := range list {
+		m, ok := s.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		v, present := m["is_approved"]
+		if !present || v == nil {
+			kept = append(kept, s)
+		}
+	}
+	data["skills"] = kept
+	data["total"] = float64(len(kept))
 }
 
 func runSkillsGenerate(cmd *cobra.Command, args []string) error {
