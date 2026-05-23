@@ -133,6 +133,8 @@ func init() {
 	skillsUninstallCmd.Flags().BoolVar(&skillsUninstallAll, "all", false, "Uninstall every promptconduit-installed skill")
 	skillsUninstallCmd.Flags().BoolVar(&skillsUninstallForce, "force", false, "Remove even if the file has been hand-edited")
 
+	skillsDeleteCmd.Flags().BoolVar(&skillsDeleteYes, "yes", false, "Skip the confirmation prompt (required for non-interactive use)")
+
 	skillsCmd.AddCommand(skillsListCmd)
 	skillsCmd.AddCommand(skillsGenerateCmd)
 	skillsCmd.AddCommand(skillsSyncCmd)
@@ -141,6 +143,7 @@ func init() {
 	skillsCmd.AddCommand(skillsUninstallCmd)
 	skillsCmd.AddCommand(skillsApproveCmd)
 	skillsCmd.AddCommand(skillsRejectCmd)
+	skillsCmd.AddCommand(skillsDeleteCmd)
 }
 
 // ============================================================================
@@ -459,6 +462,7 @@ func outputSkillsList(data map[string]interface{}) error {
 			continue
 		}
 
+		id, _ := skill["id"].(string)
 		name, _ := skill["name"].(string)
 		displayName, _ := skill["display_name"].(string)
 		description, _ := skill["description"].(string)
@@ -474,12 +478,18 @@ func outputSkillsList(data map[string]interface{}) error {
 			status = "[rejected]"
 		}
 
-		fmt.Printf("/%s  %s  %s  %.0f%%\n", name, skillType, status, confidence*100)
+		// Show short ID (first 8 chars) so users can disambiguate when
+		// multiple skills share a name. Full UUID is in --format json.
+		shortID := id
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		fmt.Printf("%-8s  /%s  %s  %s  %.0f%%\n", shortID, name, skillType, status, confidence*100)
 		if displayName != "" && displayName != name {
-			fmt.Printf("  %s\n", displayName)
+			fmt.Printf("          %s\n", displayName)
 		}
 		if description != "" {
-			fmt.Printf("  %s\n", description)
+			fmt.Printf("          %s\n", description)
 		}
 		fmt.Println()
 	}

@@ -799,6 +799,20 @@ func (c *Client) ApproveSkill(id string, approve bool) *APIResponse {
 	return c.patchRequest(fmt.Sprintf("/v1/skills/%s", id), map[string]interface{}{"is_approved": approve})
 }
 
+// GetSkill fetches a single skill by ID. Returns 404 if not found or
+// already soft-deleted.
+func (c *Client) GetSkill(id string) *APIResponse {
+	return c.Get(fmt.Sprintf("/v1/skills/%s", id), nil)
+}
+
+// DeleteSkill soft-deletes a skill by ID (sets is_active=false on the
+// platform). The row remains in the DB for audit but disappears from
+// listings. Wrapped in a method so we can later add confirmation hooks
+// or soft-vs-hard-delete options without touching command code.
+func (c *Client) DeleteSkill(id string) *APIResponse {
+	return c.deleteRequest(fmt.Sprintf("/v1/skills/%s", id))
+}
+
 // GetSkillCommandFile fetches the raw markdown command file for a skill.
 // Returns the file content suitable for writing to ~/.claude/commands/<name>.md
 func (c *Client) GetSkillCommandFile(id string) (string, error) {
@@ -827,6 +841,37 @@ func (c *Client) GetSkillCommandFile(id string) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+// deleteRequest sends a DELETE request with no body.
+func (c *Client) deleteRequest(path string) *APIResponse {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", c.config.APIURL+path, nil)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to create request: %v", err)}
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	result := &APIResponse{StatusCode: resp.StatusCode, Success: resp.StatusCode >= 200 && resp.StatusCode < 300}
+	if len(body) > 0 {
+		var data map[string]interface{}
+		if err := json.Unmarshal(body, &data); err == nil {
+			result.Data = data
+		}
+	}
+	if !result.Success {
+		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return result
 }
 
 // patchRequest sends a PATCH request with a JSON payload

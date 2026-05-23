@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,13 +17,14 @@ import (
 )
 
 // Flags. Reused state variables would collide with cmd/skills.go, so these
-// are install/uninstall-specific.
+// are install/uninstall/delete-specific.
 var (
-	skillsInstallAll       bool
-	skillsInstallScope     string
-	skillsInstallForce     bool
-	skillsUninstallAll     bool
-	skillsUninstallForce   bool
+	skillsInstallAll     bool
+	skillsInstallScope   string
+	skillsInstallForce   bool
+	skillsUninstallAll   bool
+	skillsUninstallForce bool
+	skillsDeleteYes      bool
 )
 
 // Exit codes the commands can return through cobra. We surface them via
@@ -34,15 +36,20 @@ var (
 // ============================================================================
 
 var skillsInstallCmd = &cobra.Command{
-	Use:   "install [name]",
+	Use:   "install [name|uuid]",
 	Short: "Install a skill into .claude/skills/<name>/SKILL.md",
 	Long: `Download a skill from the platform and write it to the Claude Code
 skills directory. Tracks the install in a local manifest so it can be
 safely uninstalled later.
 
+The argument is matched as a UUID first, falling back to skill name. If
+multiple skills share the same name (common after re-running 'generate'),
+the command errors with each candidate's UUID so you can disambiguate.
+
 Examples:
   promptconduit skills install shipping-features
   promptconduit skills install shipping-features --scope project
+  promptconduit skills install cc9f1eff-487c-4ff6-b542-5814ba815d45
   promptconduit skills install --all
   promptconduit skills install shipping-features --force   # overwrite local edits`,
 	RunE: runSkillsInstall,
@@ -73,7 +80,7 @@ Examples:
 // ============================================================================
 
 var skillsApproveCmd = &cobra.Command{
-	Use:   "approve [name]",
+	Use:   "approve [name|uuid]",
 	Short: "Mark a skill as approved on the platform (the Ready tab)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,12 +89,71 @@ var skillsApproveCmd = &cobra.Command{
 }
 
 var skillsRejectCmd = &cobra.Command{
-	Use:   "reject [name]",
+	Use:   "reject [name|uuid]",
 	Short: "Mark a skill as rejected on the platform (the Removed tab)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runApproveOrReject(args[0], false)
 	},
+}
+
+// ============================================================================
+// delete  (soft-delete via DELETE /v1/skills/:id)
+// ============================================================================
+
+var skillsDeleteCmd = &cobra.Command{
+	Use:   "delete [name|uuid]",
+	Short: "Soft-delete a skill on the platform (hidden from listings)",
+	Long: `Soft-delete a skill so it no longer appears in skill listings.
+
+The row stays in the platform DB for audit; deletion is reversible by
+the platform team if needed. Use this to clean up duplicates created by
+re-running 'skills generate', or to permanently remove a skill you've
+already rejected.
+
+Refuses unless you confirm at the prompt or pass --yes. On non-TTY
+(scripts, CI) --yes is required.
+
+Examples:
+  promptconduit skills delete git-feature-workflow
+  promptconduit skills delete 15686eb6-52d5-443e-9d0e-86e4b3e9cc53 --yes`,
+	Args: cobra.ExactArgs(1),
+	RunE: runSkillsDelete,
+}
+
+func runSkillsDelete(cmd *cobra.Command, args []string) error {
+	cfg := client.LoadConfig()
+	if !cfg.IsConfigured() {
+		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+	}
+	apiClient := client.NewClient(cfg, Version)
+
+	skill, err := resolveSkill(apiClient, args[0])
+	if err != nil {
+		return err
+	}
+	id, _ := skill["id"].(string)
+	name, _ := skill["name"].(string)
+	if id == "" {
+		return fmt.Errorf("skill %q has no id", args[0])
+	}
+
+	if !skillsDeleteYes {
+		if !stdinIsTerminal() {
+			return fmt.Errorf("refusing to delete %s without --yes (non-interactive stdin)", name)
+		}
+		if !confirm(fmt.Sprintf("Soft-delete skill %s (%s)?", name, id)) {
+			cmd.Println("Aborted.")
+			return nil
+		}
+	}
+
+	resp := apiClient.DeleteSkill(id)
+	if !resp.Success {
+		return fmt.Errorf("delete %s: %s", name, resp.Error)
+	}
+	cmd.Printf("Deleted %s (%s)\n", name, id)
+	return nil
 }
 
 // ============================================================================
@@ -133,11 +199,10 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 	} else {
-		name := args[0]
-		if err := skillspkg.ValidateName(name); err != nil {
-			return err
-		}
-		skill, err := findSkillByName(apiClient, name)
+		// args[0] may be a skill name or a UUID. resolveSkill auto-detects
+		// and errors loudly on ambiguous names. The resolved skill's name
+		// is re-validated by installOne before any filesystem operation.
+		skill, err := resolveSkill(apiClient, args[0])
 		if err != nil {
 			return err
 		}
@@ -330,19 +395,19 @@ func uninstallOne(cmd *cobra.Command, manifest *skillspkg.Manifest, name string)
 	return nil
 }
 
-func runApproveOrReject(name string, approve bool) error {
+func runApproveOrReject(identifier string, approve bool) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
 		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
 	}
 	apiClient := client.NewClient(cfg, Version)
-	skill, err := findSkillByName(apiClient, name)
+	skill, err := resolveSkill(apiClient, identifier)
 	if err != nil {
 		return err
 	}
 	id, _ := skill["id"].(string)
 	if id == "" {
-		return fmt.Errorf("skill %q has no id", name)
+		return fmt.Errorf("skill %q has no id", identifier)
 	}
 	resp := apiClient.ApproveSkill(id, approve)
 	if !resp.Success {
@@ -350,13 +415,19 @@ func runApproveOrReject(name string, approve bool) error {
 		if !approve {
 			verb = "reject"
 		}
-		return fmt.Errorf("%s %s: %s", verb, name, resp.Error)
+		return fmt.Errorf("%s %s: %s", verb, identifier, resp.Error)
 	}
 	verb := "approved"
 	if !approve {
 		verb = "rejected"
 	}
-	fmt.Printf("%s %s\n", verb, name)
+	// Show the resolved name in the success line, which is friendlier than
+	// echoing a UUID back at the user when they passed one.
+	resolvedName, _ := skill["name"].(string)
+	if resolvedName == "" {
+		resolvedName = identifier
+	}
+	fmt.Printf("%s %s\n", verb, resolvedName)
 	return nil
 }
 
@@ -364,25 +435,93 @@ func runApproveOrReject(name string, approve bool) error {
 // helpers
 // ============================================================================
 
-// findSkillByName lists up to 100 skills (any approval state) and returns
-// the first one whose name matches. Returns a structured error when not
-// found. Used by install + approve + reject.
-func findSkillByName(c *client.Client, name string) (map[string]interface{}, error) {
+// uuidRule matches the canonical 8-4-4-4-12 hex UUID form. Looser checks
+// (e.g. just "is it 36 chars with 4 dashes") would catch typos but also
+// accept garbage; we deliberately require well-formed UUIDs so a typo on
+// a skill name doesn't get silently routed through the ID path.
+var uuidRule = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// resolveSkill turns a user-provided identifier (UUID or skill name)
+// into a single skill record from the platform. Ambiguous names produce
+// a structured error listing all candidate IDs so the caller can re-run
+// with a UUID.
+//
+// Cheap to call (one HTTP round trip in either branch): GET /v1/skills/:id
+// for UUIDs, GET /v1/skills?limit=100 + client-side filter for names.
+func resolveSkill(c *client.Client, identifier string) (map[string]interface{}, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return nil, errors.New("empty skill identifier")
+	}
+
+	if uuidRule.MatchString(strings.ToLower(identifier)) {
+		resp := c.GetSkill(identifier)
+		if !resp.Success {
+			if resp.StatusCode == 404 {
+				return nil, fmt.Errorf("skill id %s not found on the platform", identifier)
+			}
+			return nil, fmt.Errorf("fetch skill %s: %s", identifier, resp.Error)
+		}
+		// /v1/skills/:id may wrap the row under "skill" or return it
+		// directly — accept either shape.
+		if inner, ok := resp.Data["skill"].(map[string]interface{}); ok {
+			return inner, nil
+		}
+		return resp.Data, nil
+	}
+
 	resp := c.GetSkills("", "", 100, "")
 	if !resp.Success {
 		return nil, fmt.Errorf("list skills: %s", resp.Error)
 	}
 	list, _ := resp.Data["skills"].([]interface{})
+	var matches []map[string]interface{}
 	for _, s := range list {
 		m, ok := s.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if n, _ := m["name"].(string); n == name {
-			return m, nil
+		if n, _ := m["name"].(string); n == identifier {
+			matches = append(matches, m)
 		}
 	}
-	return nil, fmt.Errorf("skill %q not found on the platform", name)
+
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("skill %q not found on the platform", identifier)
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, ambiguityError(identifier, matches)
+	}
+}
+
+// ambiguityError formats a multi-match name lookup into actionable text:
+// the user gets each candidate's UUID + a hint about repo scope and
+// approval state so they can re-run with the right ID.
+func ambiguityError(name string, matches []map[string]interface{}) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d skills named %q exist — re-run with the UUID instead of the name:\n", len(matches), name)
+	for _, m := range matches {
+		id, _ := m["id"].(string)
+		repo, _ := m["repo_name"].(string)
+		conf, _ := m["confidence"].(float64)
+		scope := "global"
+		if repo != "" {
+			scope = "repo=" + repo
+		}
+		approved := "new"
+		switch v := m["is_approved"].(type) {
+		case bool:
+			if v {
+				approved = "ready"
+			} else {
+				approved = "removed"
+			}
+		}
+		fmt.Fprintf(&b, "  %s  %s  conf=%.0f%%  %s\n", id, scope, conf*100, approved)
+	}
+	return errors.New(strings.TrimRight(b.String(), "\n"))
 }
 
 // writeAtomic writes data to path via tempfile + rename in the same dir.
@@ -463,8 +602,9 @@ func confirm(prompt string) bool {
 
 // stdinIsTerminal reports whether stdin is a character device (e.g. a tty).
 // Stdlib-only check that avoids dragging in golang.org/x/term and its
-// Go-toolchain floor.
-func stdinIsTerminal() bool {
+// Go-toolchain floor. Declared as a var so tests can override the result
+// without trying to fake a real terminal handle.
+var stdinIsTerminal = func() bool {
 	fi, err := os.Stdin.Stat()
 	if err != nil {
 		return false
