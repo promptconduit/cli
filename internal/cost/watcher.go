@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +60,7 @@ func NewWatcher(table *PriceTable, store *Store, out io.Writer, emitEvents bool)
 // `cost hook`). It seeds each (to populate session totals without flooding the
 // stream), tails for new entries, and periodically rescans Claude Code dirs for
 // new/resumed sessions. Returns when ctx is cancelled.
-func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string) error {
+func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string, cursorRescanDir string) error {
 	var wg sync.WaitGroup
 	tailed := make(map[string]bool)
 	var tmu sync.Mutex
@@ -147,6 +149,25 @@ func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string) 
 					}
 					if info, err := os.Stat(path); err == nil && info.ModTime().UnixNano() >= cutoff {
 						startTail(path)
+					}
+				}
+			}
+			// Under --all, pick up Cursor feeds for workspaces that started
+			// after the watcher did. New feed files are near-empty, so tailing
+			// from the end captures everything without re-seeding.
+			if cursorRescanDir != "" {
+				if entries, err := os.ReadDir(cursorRescanDir); err == nil {
+					for _, e := range entries {
+						if e.IsDir() || !strings.HasSuffix(e.Name(), ".ndjson") {
+							continue
+						}
+						p := filepath.Join(cursorRescanDir, e.Name())
+						tmu.Lock()
+						already := tailed[p]
+						tmu.Unlock()
+						if !already {
+							startCursorTail(p)
+						}
 					}
 				}
 			}

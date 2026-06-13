@@ -3,6 +3,8 @@ package cost
 import (
 	_ "embed"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -49,11 +51,60 @@ var modelAliases = map[string]string{
 	"claude-3-5-haiku-latest":   "claude-3-5-haiku",
 }
 
-// LoadBundledPriceTable parses the embedded snapshot. It never fails on a
-// well-formed build — the JSON is compiled in — but returns an error so a
-// future on-disk override path can share the signature.
+// LoadBundledPriceTable parses the embedded snapshot only. Tests use this for
+// deterministic rates; commands use LoadPriceTable so a user's refreshed cache
+// (if any) is layered in.
 func LoadBundledPriceTable() (*PriceTable, error) {
 	return parsePriceTable(bundledPricingJSON)
+}
+
+// CachedPricingPath is where an opt-in `cost refresh-pricing` writes the
+// fetched upstream table (~/.config/promptconduit/cost/pricing.json). It is
+// read locally — no network — by LoadPriceTable.
+func CachedPricingPath() string {
+	return filepath.Join(StoreDir(), "pricing.json")
+}
+
+// LoadPriceTable returns the curated embedded rates with the user's refreshed
+// cache (if present) layered in as a fallback for models the curated table
+// doesn't cover. Curated entries always win — they carry knowledge the upstream
+// table lacks (Anthropic's 1-hour cache rate, Cursor Composer rates). This read
+// is purely local; the network fetch lives behind the explicit
+// `cost refresh-pricing` command.
+func LoadPriceTable() (*PriceTable, error) {
+	base, err := parsePriceTable(bundledPricingJSON)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(CachedPricingPath())
+	if err != nil {
+		return base, nil // no cache yet — embedded only
+	}
+	cached, err := parsePriceTable(data)
+	if err != nil {
+		return base, nil // corrupt cache — ignore, fall back to embedded
+	}
+	for key, mp := range cached.models {
+		if _, exists := base.models[key]; exists {
+			continue // curated entry wins
+		}
+		if mp.Input == 0 && mp.Output == 0 {
+			continue // skip free/non-chat entries (embeddings, etc.)
+		}
+		base.models[key] = mp
+	}
+	return base, nil
+}
+
+// ValidatePricingData parses raw pricing JSON and returns how many priced
+// models it contains. Used by `cost refresh-pricing` to validate a fetched
+// table before caching it.
+func ValidatePricingData(data []byte) (int, error) {
+	t, err := parsePriceTable(data)
+	if err != nil {
+		return 0, err
+	}
+	return len(t.models), nil
 }
 
 func parsePriceTable(data []byte) (*PriceTable, error) {

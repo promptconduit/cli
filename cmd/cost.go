@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -95,6 +96,27 @@ var costUninstallHooksCmd = &cobra.Command{
 	RunE:          runCostUninstallHooks,
 }
 
+// litellmPricingURL is the public, maintained model-price table the optional
+// refresh fetches. It contains no user data; the request is a plain GET.
+// NOTE: the file lives at the repo ROOT, not under litellm/ (the latter 404s).
+const litellmPricingURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+
+var costRefreshPricingCmd = &cobra.Command{
+	Use:   "refresh-pricing",
+	Short: "Fetch the latest public model-price table and cache it locally (opt-in)",
+	Long: `Fetch LiteLLM's public model_prices_and_context_window.json and cache it at
+~/.config/promptconduit/cost/pricing.json. The curated built-in rates always
+take precedence; the cache only adds coverage for models the built-in table
+doesn't include.
+
+This is the only command that touches the network, it is never run
+automatically, and it sends none of your data — it's a plain GET of a public
+file.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE:          runCostRefreshPricing,
+}
+
 func init() {
 	costWatchCmd.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
 	costWatchCmd.Flags().BoolVar(&costAll, "all", false, "watch every Claude Code project, not just the current workspace")
@@ -112,6 +134,47 @@ func init() {
 	costCmd.AddCommand(costHookCmd)
 	costCmd.AddCommand(costInstallHooksCmd)
 	costCmd.AddCommand(costUninstallHooksCmd)
+	costCmd.AddCommand(costRefreshPricingCmd)
+}
+
+func runCostRefreshPricing(cmd *cobra.Command, args []string) error {
+	out := cmd.OutOrStdout()
+	fmt.Fprintf(cmd.ErrOrStderr(), "Fetching public price table (no data sent): %s\n", litellmPricingURL)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, litellmPricingURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch pricing: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch pricing: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
+	if err != nil {
+		return fmt.Errorf("read pricing: %w", err)
+	}
+
+	// Validate it parses before caching, so a bad fetch can't poison the table.
+	n, err := cost.ValidatePricingData(data)
+	if err != nil {
+		return fmt.Errorf("fetched pricing did not parse: %w", err)
+	}
+
+	path := cost.CachedPricingPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Cached %d model prices to %s\n", n, path)
+	fmt.Fprintln(out, "Built-in curated rates still take precedence; cached rates fill gaps.")
+	return nil
 }
 
 // resolveCwd returns the explicit --cwd or the process working directory.
@@ -126,7 +189,7 @@ func resolveCwd() string {
 }
 
 func runCostWatch(cmd *cobra.Command, args []string) error {
-	table, err := cost.LoadBundledPriceTable()
+	table, err := cost.LoadPriceTable()
 	if err != nil {
 		return fmt.Errorf("load pricing table: %w", err)
 	}
@@ -158,12 +221,19 @@ func runCostWatch(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s (Claude Code + Cursor) — local only, Ctrl-C to stop.\n", scope)
 
+	// Under --all, let the watcher rescan the Cursor feed dir for workspaces
+	// that come online after startup.
+	cursorRescanDir := ""
+	if costAll {
+		cursorRescanDir = cost.CursorFeedDir()
+	}
+
 	w := cost.NewWatcher(table, store, cmd.OutOrStdout(), true)
-	return w.Run(ctx, dirs, cursorFeeds)
+	return w.Run(ctx, dirs, cursorFeeds, cursorRescanDir)
 }
 
 func runCostSession(cmd *cobra.Command, args []string) error {
-	table, err := cost.LoadBundledPriceTable()
+	table, err := cost.LoadPriceTable()
 	if err != nil {
 		return fmt.Errorf("load pricing table: %w", err)
 	}
