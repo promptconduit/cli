@@ -1,0 +1,94 @@
+{
+  "_comment": "Curated USD per-token price snapshot, LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Cache rates follow Anthropic's documented multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
+  "claude-fable-5": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
+  },
+  "claude-mythos-5": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
+  },
+  "claude-opus-4-8": {
+    "input_cost_per_token": 0.000005,
+    "output_cost_per_token": 0.000025,
+    "cache_creation_input_token_cost": 0.00000625,
+    "cache_creation_input_token_cost_1h": 0.00001,
+    "cache_read_input_token_cost": 0.0000005
+  },
+  "claude-opus-4-7": {
+    "input_cost_per_token": 0.000005,
+    "output_cost_per_token": 0.000025,
+    "cache_creation_input_token_cost": 0.00000625,
+    "cache_creation_input_token_cost_1h": 0.00001,
+    "cache_read_input_token_cost": 0.0000005
+  },
+  "claude-opus-4-6": {
+    "input_cost_per_token": 0.000005,
+    "output_cost_per_token": 0.000025,
+    "cache_creation_input_token_cost": 0.00000625,
+    "cache_creation_input_token_cost_1h": 0.00001,
+    "cache_read_input_token_cost": 0.0000005
+  },
+  "claude-opus-4-5": {
+    "input_cost_per_token": 0.000005,
+    "output_cost_per_token": 0.000025,
+    "cache_creation_input_token_cost": 0.00000625,
+    "cache_creation_input_token_cost_1h": 0.00001,
+    "cache_read_input_token_cost": 0.0000005
+  },
+  "claude-opus-4-1": {
+    "input_cost_per_token": 0.000015,
+    "output_cost_per_token": 0.000075,
+    "cache_creation_input_token_cost": 0.00001875,
+    "cache_creation_input_token_cost_1h": 0.00003,
+    "cache_read_input_token_cost": 0.0000015
+  },
+  "claude-opus-4-0": {
+    "input_cost_per_token": 0.000015,
+    "output_cost_per_token": 0.000075,
+    "cache_creation_input_token_cost": 0.00001875,
+    "cache_creation_input_token_cost_1h": 0.00003,
+    "cache_read_input_token_cost": 0.0000015
+  },
+  "claude-sonnet-4-6": {
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015,
+    "cache_creation_input_token_cost": 0.00000375,
+    "cache_creation_input_token_cost_1h": 0.000006,
+    "cache_read_input_token_cost": 0.0000003
+  },
+  "claude-sonnet-4-5": {
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015,
+    "cache_creation_input_token_cost": 0.00000375,
+    "cache_creation_input_token_cost_1h": 0.000006,
+    "cache_read_input_token_cost": 0.0000003
+  },
+  "claude-sonnet-4-0": {
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015,
+    "cache_creation_input_token_cost": 0.00000375,
+    "cache_creation_input_token_cost_1h": 0.000006,
+    "cache_read_input_token_cost": 0.0000003
+  },
+  "claude-haiku-4-5": {
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000005,
+    "cache_creation_input_token_cost": 0.00000125,
+    "cache_creation_input_token_cost_1h": 0.000002,
+    "cache_read_input_token_cost": 0.0000001
+  },
+  "claude-3-5-haiku": {
+    "input_cost_per_token": 0.0000008,
+    "output_cost_per_token": 0.000004,
+    "cache_creation_input_token_cost": 0.000001,
+    "cache_creation_input_token_cost_1h": 0.0000016,
+    "cache_read_input_token_cost": 0.00000008
+  }
+}

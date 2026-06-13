@@ -58,6 +58,7 @@ func init() {
 	rootCmd.AddCommand(watchCmd)
 	rootCmd.AddCommand(collectCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(costCmd)
 }
 
 var versionCmd = &cobra.Command{
@@ -198,7 +199,7 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "upgrade", "watch", "collect":
+	case "hook", "upgrade", "watch", "collect", "cost":
 		return true
 	}
 	return false
