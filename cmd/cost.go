@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 	"time"
 
@@ -28,23 +27,26 @@ var costCmd = &cobra.Command{
 	Use:   "cost",
 	Short: "Real-time AI token cost for your sessions (100% local)",
 	Long: `Compute what your AI coding sessions cost, in real time, entirely on
-your machine. The cost feature reads local transcripts, prices each turn against
-a bundled rate table, and never sends any of your data to the PromptConduit
-platform or anywhere else.
+your machine. The cost feature reads local transcripts/hook payloads, prices
+each turn against a bundled rate table, and never sends any of your data to the
+PromptConduit platform or anywhere else.
+
+Run with no subcommand to see the current session's cost.
 
 Subcommands:
+  (none)          Show the current session's cost summary
   watch           Stream cost events as your session runs (the editor extension's feed)
-  session         Print the current session's cost summary
+  session         Same as running 'cost' with no subcommand
   history         Aggregate cost over the last N days
-  install-hooks   Wire the local Cursor cost hook into ~/.cursor/hooks.json
-  uninstall-hooks Remove it
+  refresh-pricing Fetch the latest public model-price table (opt-in)
 
-Prices both Claude Code (exact token counts from the transcript) and Cursor
-(exact token counts from its agent hooks — run install-hooks first). Models
-not in the bundled rate table are reported with exact tokens but flagged
-unpriced rather than guessed.`,
+Cost tracking is part of the standard setup: 'promptconduit install cursor'
+wires the hooks that capture Cursor's exact token usage, and Claude Code cost
+comes from its local transcripts automatically. Models not in the rate table are
+reported with exact tokens but flagged unpriced rather than guessed.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	RunE:          runCostSession, // bare 'promptconduit cost' shows the current session
 }
 
 var costWatchCmd = &cobra.Command{
@@ -71,31 +73,6 @@ var costHistoryCmd = &cobra.Command{
 	RunE:          runCostHistory,
 }
 
-var costHookCmd = &cobra.Command{
-	Use:           "hook",
-	Short:         "Record a Cursor agent hook payload's cost (local-only; for ~/.cursor/hooks.json)",
-	Hidden:        true,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostHook,
-}
-
-var costInstallHooksCmd = &cobra.Command{
-	Use:           "install-hooks",
-	Short:         "Wire the local Cursor cost hook into ~/.cursor/hooks.json",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostInstallHooks,
-}
-
-var costUninstallHooksCmd = &cobra.Command{
-	Use:           "uninstall-hooks",
-	Short:         "Remove the Cursor cost hook from ~/.cursor/hooks.json",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostUninstallHooks,
-}
-
 // litellmPricingURL is the public, maintained model-price table the optional
 // refresh fetches. It contains no user data; the request is a plain GET.
 // NOTE: the file lives at the repo ROOT, not under litellm/ (the latter 404s).
@@ -119,11 +96,15 @@ file.`,
 
 func init() {
 	costWatchCmd.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
-	costWatchCmd.Flags().BoolVar(&costAll, "all", false, "watch every Claude Code project, not just the current workspace")
-	costWatchCmd.Flags().BoolVar(&costJSON, "json", true, "emit newline-delimited JSON (the only format today)")
+	costWatchCmd.Flags().BoolVar(&costAll, "all", false, "watch every project, not just the current workspace")
+	costWatchCmd.Flags().BoolVar(&costJSON, "json", true, "emit newline-delimited JSON (the editor extension's feed)")
 
-	costSessionCmd.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
-	costSessionCmd.Flags().BoolVar(&costJSON, "json", true, "emit JSON (the only format today)")
+	// Bare `cost` and `cost session` share behavior: human-readable by default,
+	// --json for scripts. They bind the same package vars (only one runs).
+	for _, c := range []*cobra.Command{costCmd, costSessionCmd} {
+		c.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
+		c.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a human-readable summary")
+	}
 
 	costHistoryCmd.Flags().IntVar(&costDays, "days", 7, "number of days to include")
 	costHistoryCmd.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a table")
@@ -131,9 +112,6 @@ func init() {
 	costCmd.AddCommand(costWatchCmd)
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
-	costCmd.AddCommand(costHookCmd)
-	costCmd.AddCommand(costInstallHooksCmd)
-	costCmd.AddCommand(costUninstallHooksCmd)
 	costCmd.AddCommand(costRefreshPricingCmd)
 }
 
@@ -237,159 +215,49 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load pricing table: %w", err)
 	}
-	dirs, err := cost.ResolveDirs(resolveCwd(), false)
+	cwd := resolveCwd()
+	dirs, err := cost.ResolveDirs(cwd, false)
 	if err != nil {
 		return fmt.Errorf("resolve transcript directories: %w", err)
 	}
-	w := cost.NewWatcher(table, nil, cmd.OutOrStdout(), false)
+
+	// We read the summary directly rather than stream it, so the watcher's emit
+	// sink is discarded.
+	w := cost.NewWatcher(table, nil, io.Discard, false)
 	w.SeedNewest(dirs)
-	w.SeedCursorFeeds(cost.CursorFeedPaths(resolveCwd(), false))
-	w.EmitLatestSession()
-	return nil
-}
+	w.SeedCursorFeeds(cost.CursorFeedPaths(cwd, false))
 
-func runCostHook(cmd *cobra.Command, args []string) error {
-	// Always tell the agent to continue, no matter what — a cost hook must
-	// never block or fail the editor.
-	defer fmt.Fprintln(cmd.OutOrStdout(), `{"continue": true}`)
-
-	raw, err := io.ReadAll(cmd.InOrStdin())
-	if err != nil || len(raw) == 0 {
-		return nil
-	}
-	table, err := cost.LoadBundledPriceTable()
-	if err != nil {
-		return nil
-	}
-	ev, cwd, ok := cost.ParseCursorHookPayload(raw, table)
+	summary, ok := w.LatestSummary()
+	out := cmd.OutOrStdout()
 	if !ok {
-		return nil // not a token-bearing Cursor event — nothing to record
-	}
-	ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
-	_ = cost.AppendCursorEvent(ev, cwd) // best-effort, local-only
-	return nil
-}
-
-// cursorCostHooks are the Cursor agent events the cost hook listens on. Both
-// carry identical per-generation tokens; the watcher dedups by generation_id,
-// so installing both is safe and resilient.
-var cursorCostHookEvents = []string{"afterAgentResponse", "stop"}
-
-func runCostInstallHooks(cmd *cobra.Command, args []string) error {
-	exe, err := osExecutable()
-	if err != nil {
-		return err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(home, ".cursor", "hooks.json")
-
-	settings := map[string]interface{}{}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &settings)
-	}
-	hooks, _ := settings["hooks"].(map[string]interface{})
-	if hooks == nil {
-		hooks = map[string]interface{}{}
-	}
-
-	hookCmd := fmt.Sprintf("%s cost hook", exe)
-	for _, event := range cursorCostHookEvents {
-		entries, _ := hooks[event].([]interface{})
-		// Drop any prior cost-hook entry so re-install is idempotent.
-		kept := entries[:0:0]
-		for _, e := range entries {
-			if m, ok := e.(map[string]interface{}); ok {
-				if c, _ := m["command"].(string); containsCostHook(c) {
-					continue
-				}
-			}
-			kept = append(kept, e)
-		}
-		kept = append(kept, map[string]interface{}{"command": hookCmd})
-		hooks[event] = kept
-	}
-	settings["hooks"] = hooks
-	if settings["version"] == nil {
-		settings["version"] = 1
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Installed Cursor cost hooks (%v) in %s\n", cursorCostHookEvents, path)
-	fmt.Fprintln(cmd.OutOrStdout(), "Run `promptconduit cost watch` (or the editor extension) to see live cost.")
-	return nil
-}
-
-func runCostUninstallHooks(cmd *cobra.Command, args []string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(home, ".cursor", "hooks.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintln(cmd.OutOrStdout(), "No Cursor hooks file — nothing to remove.")
+		fmt.Fprintln(out, "No AI session cost recorded yet for this workspace.")
+		fmt.Fprintln(out, "Use Claude Code here, or run `promptconduit install cursor` and use Cursor, then try again.")
 		return nil
 	}
-	settings := map[string]interface{}{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		return err
-	}
-	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for event, v := range hooks {
-			entries, _ := v.([]interface{})
-			kept := entries[:0:0]
-			for _, e := range entries {
-				if m, ok := e.(map[string]interface{}); ok {
-					if c, _ := m["command"].(string); containsCostHook(c) {
-						continue
-					}
-				}
-				kept = append(kept, e)
-			}
-			if len(kept) == 0 {
-				delete(hooks, event)
-			} else {
-				hooks[event] = kept
-			}
+	if costJSON {
+		data, err := json.Marshal(summary)
+		if err != nil {
+			return err
 		}
+		fmt.Fprintln(out, string(data))
+		return nil
 	}
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintf(cmd.OutOrStdout(), "Removed Cursor cost hooks from %s\n", path)
+	renderSessionHuman(out, summary)
 	return nil
 }
 
-// containsCostHook reports whether a hook command string is our cost hook
-// (`<binary> cost hook`), so install/uninstall can find and replace just ours.
-func containsCostHook(command string) bool {
-	return strings.HasSuffix(command, "cost hook")
-}
-
-// osExecutable resolves the running binary's path (indirection kept tiny so the
-// install command reads cleanly).
-func osExecutable() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
+// renderSessionHuman prints a friendly one-screen cost summary.
+func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
+	fmt.Fprintf(out, "AI session cost — %s  (%s)\n", s.Tool, s.Source)
+	fmt.Fprintf(out, "  Total: $%.4f %s\n", s.Totals.CostTotal, s.Totals.Currency)
+	for _, m := range s.ByModel {
+		costStr := fmt.Sprintf("$%.4f", m.CostTotal)
+		if !m.ModelPriced {
+			costStr = "unpriced"
+		}
+		fmt.Fprintf(out, "    %-22s %-10s  in %d · out %d · cache-read %d · cache-write %d\n",
+			m.Model, costStr, m.Tokens.Input, m.Tokens.Output, m.Tokens.CacheRead, m.Tokens.CacheWrite)
 	}
-	return filepath.EvalSymlinks(exe)
 }
 
 func runCostHistory(cmd *cobra.Command, args []string) error {

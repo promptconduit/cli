@@ -119,9 +119,14 @@ func installClaudeCode(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Claude Code")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for Claude Code")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Realtime token-cost tracking works for Claude Code too (from local transcripts):")
+	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println()
+	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
@@ -258,9 +263,14 @@ func installCursor(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Cursor")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for Cursor")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Realtime token-cost tracking is now ON for Cursor — computed 100% locally.")
+	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println()
+	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil

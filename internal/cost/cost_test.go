@@ -295,6 +295,27 @@ func TestWatcherCursorAggregationDedup(t *testing.T) {
 	}
 }
 
+// TestLatestSummary verifies the one-shot `cost` path picks the most-recently
+// updated session and reports its total.
+func TestLatestSummary(t *testing.T) {
+	w := NewWatcher(nil, nil, nil, false) // table/out unused by apply + LatestSummary
+	w.apply(CostEvent{Kind: "cost_event", Tool: ToolCursor, SessionID: "old", RequestID: "g1", Timestamp: "2026-06-13T10:00:00Z", Model: "m", ModelPriced: true, Cost: Cost{Total: 1}})
+	w.apply(CostEvent{Kind: "cost_event", Tool: ToolCursor, SessionID: "new", RequestID: "g2", Timestamp: "2026-06-13T11:00:00Z", Model: "m", ModelPriced: true, Cost: Cost{Total: 2}})
+
+	s, ok := w.LatestSummary()
+	if !ok || s.SessionID != "new" {
+		t.Fatalf("want latest session 'new'; got ok=%v id=%q", ok, s.SessionID)
+	}
+	if s.Totals.CostTotal != 2 || len(s.ByModel) != 1 {
+		t.Fatalf("unexpected summary: total=%v models=%d", s.Totals.CostTotal, len(s.ByModel))
+	}
+
+	empty := NewWatcher(nil, nil, nil, false)
+	if _, ok := empty.LatestSummary(); ok {
+		t.Fatal("LatestSummary should report ok=false with no sessions")
+	}
+}
+
 func TestEncodeProjectPath(t *testing.T) {
 	got := encodeProjectPath("/Users/scotthavird/Documents/GitHub/scotthavird/tolken")
 	want := "-Users-scotthavird-Documents-GitHub-scotthavird-tolken"

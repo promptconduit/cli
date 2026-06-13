@@ -359,21 +359,32 @@ func (w *Watcher) emitAllSessions() {
 	}
 }
 
-// EmitLatestSession emits only the most-recently-updated session's summary.
-// Used by the one-shot `cost session` command, where a Cursor workspace feed
-// may hold many past conversations but the user wants just the current one.
-func (w *Watcher) EmitLatestSession() {
+// LatestSummary returns the most-recently-updated session's summary (with its
+// by-model breakdown populated and sorted), for the one-shot `cost`/`cost
+// session` command. A Cursor workspace feed may hold many past conversations;
+// this returns just the current one. ok is false if no session was seen.
+func (w *Watcher) LatestSummary() (SessionSummary, bool) {
 	w.mu.Lock()
-	var latest, latestTs string
+	defer w.mu.Unlock()
+	var latestID, latestTs string
 	for id, st := range w.sessions {
-		if latest == "" || st.summary.UpdatedAt > latestTs {
-			latest, latestTs = id, st.summary.UpdatedAt
+		if latestID == "" || st.summary.UpdatedAt > latestTs {
+			latestID, latestTs = id, st.summary.UpdatedAt
 		}
 	}
-	w.mu.Unlock()
-	if latest != "" {
-		w.emitSummary(latest)
+	if latestID == "" {
+		return SessionSummary{}, false
 	}
+	st := w.sessions[latestID]
+	summary := st.summary
+	summary.ByModel = make([]ModelTotal, 0, len(st.byModel))
+	for _, mt := range st.byModel {
+		summary.ByModel = append(summary.ByModel, *mt)
+	}
+	sort.Slice(summary.ByModel, func(i, j int) bool {
+		return summary.ByModel[i].CostTotal > summary.ByModel[j].CostTotal
+	})
+	return summary, true
 }
 
 // emitSummary writes the current SessionSummary for a session.
