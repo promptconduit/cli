@@ -1,11 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/promptconduit/cli/internal/cost"
 	"github.com/spf13/cobra"
@@ -27,13 +32,16 @@ a bundled rate table, and never sends any of your data to the PromptConduit
 platform or anywhere else.
 
 Subcommands:
-  watch     Stream cost events as your session runs (the editor extension's feed)
-  session   Print the current session's cost summary
-  history   Aggregate cost over the last N days
+  watch           Stream cost events as your session runs (the editor extension's feed)
+  session         Print the current session's cost summary
+  history         Aggregate cost over the last N days
+  install-hooks   Wire the local Cursor cost hook into ~/.cursor/hooks.json
+  uninstall-hooks Remove it
 
-Today this prices Claude Code sessions with exact token counts from the
-transcript. Cursor's native agent (estimate + reconcile) lands in a later
-milestone.`,
+Prices both Claude Code (exact token counts from the transcript) and Cursor
+(exact token counts from its agent hooks — run install-hooks first). Models
+not in the bundled rate table are reported with exact tokens but flagged
+unpriced rather than guessed.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 }
@@ -62,6 +70,31 @@ var costHistoryCmd = &cobra.Command{
 	RunE:          runCostHistory,
 }
 
+var costHookCmd = &cobra.Command{
+	Use:           "hook",
+	Short:         "Record a Cursor agent hook payload's cost (local-only; for ~/.cursor/hooks.json)",
+	Hidden:        true,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE:          runCostHook,
+}
+
+var costInstallHooksCmd = &cobra.Command{
+	Use:           "install-hooks",
+	Short:         "Wire the local Cursor cost hook into ~/.cursor/hooks.json",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE:          runCostInstallHooks,
+}
+
+var costUninstallHooksCmd = &cobra.Command{
+	Use:           "uninstall-hooks",
+	Short:         "Remove the Cursor cost hook from ~/.cursor/hooks.json",
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE:          runCostUninstallHooks,
+}
+
 func init() {
 	costWatchCmd.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
 	costWatchCmd.Flags().BoolVar(&costAll, "all", false, "watch every Claude Code project, not just the current workspace")
@@ -76,6 +109,9 @@ func init() {
 	costCmd.AddCommand(costWatchCmd)
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
+	costCmd.AddCommand(costHookCmd)
+	costCmd.AddCommand(costInstallHooksCmd)
+	costCmd.AddCommand(costUninstallHooksCmd)
 }
 
 // resolveCwd returns the explicit --cwd or the process working directory.
@@ -114,14 +150,16 @@ func runCostWatch(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	cursorFeeds := cost.CursorFeedPaths(resolveCwd(), costAll)
+
 	scope := "current workspace"
 	if costAll {
-		scope = "all Claude Code projects"
+		scope = "all projects"
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s — local only, Ctrl-C to stop.\n", scope)
+	fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s (Claude Code + Cursor) — local only, Ctrl-C to stop.\n", scope)
 
 	w := cost.NewWatcher(table, store, cmd.OutOrStdout(), true)
-	return w.Run(ctx, dirs)
+	return w.Run(ctx, dirs, cursorFeeds)
 }
 
 func runCostSession(cmd *cobra.Command, args []string) error {
@@ -135,7 +173,153 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 	}
 	w := cost.NewWatcher(table, nil, cmd.OutOrStdout(), false)
 	w.SeedNewest(dirs)
+	w.SeedCursorFeeds(cost.CursorFeedPaths(resolveCwd(), false))
+	w.EmitLatestSession()
 	return nil
+}
+
+func runCostHook(cmd *cobra.Command, args []string) error {
+	// Always tell the agent to continue, no matter what — a cost hook must
+	// never block or fail the editor.
+	defer fmt.Fprintln(cmd.OutOrStdout(), `{"continue": true}`)
+
+	raw, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil || len(raw) == 0 {
+		return nil
+	}
+	table, err := cost.LoadBundledPriceTable()
+	if err != nil {
+		return nil
+	}
+	ev, cwd, ok := cost.ParseCursorHookPayload(raw, table)
+	if !ok {
+		return nil // not a token-bearing Cursor event — nothing to record
+	}
+	ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	_ = cost.AppendCursorEvent(ev, cwd) // best-effort, local-only
+	return nil
+}
+
+// cursorCostHooks are the Cursor agent events the cost hook listens on. Both
+// carry identical per-generation tokens; the watcher dedups by generation_id,
+// so installing both is safe and resilient.
+var cursorCostHookEvents = []string{"afterAgentResponse", "stop"}
+
+func runCostInstallHooks(cmd *cobra.Command, args []string) error {
+	exe, err := osExecutable()
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".cursor", "hooks.json")
+
+	settings := map[string]interface{}{}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = map[string]interface{}{}
+	}
+
+	hookCmd := fmt.Sprintf("%s cost hook", exe)
+	for _, event := range cursorCostHookEvents {
+		entries, _ := hooks[event].([]interface{})
+		// Drop any prior cost-hook entry so re-install is idempotent.
+		kept := entries[:0:0]
+		for _, e := range entries {
+			if m, ok := e.(map[string]interface{}); ok {
+				if c, _ := m["command"].(string); containsCostHook(c) {
+					continue
+				}
+			}
+			kept = append(kept, e)
+		}
+		kept = append(kept, map[string]interface{}{"command": hookCmd})
+		hooks[event] = kept
+	}
+	settings["hooks"] = hooks
+	if settings["version"] == nil {
+		settings["version"] = 1
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Installed Cursor cost hooks (%v) in %s\n", cursorCostHookEvents, path)
+	fmt.Fprintln(cmd.OutOrStdout(), "Run `promptconduit cost watch` (or the editor extension) to see live cost.")
+	return nil
+}
+
+func runCostUninstallHooks(cmd *cobra.Command, args []string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(home, ".cursor", "hooks.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(cmd.OutOrStdout(), "No Cursor hooks file — nothing to remove.")
+		return nil
+	}
+	settings := map[string]interface{}{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return err
+	}
+	if hooks, ok := settings["hooks"].(map[string]interface{}); ok {
+		for event, v := range hooks {
+			entries, _ := v.([]interface{})
+			kept := entries[:0:0]
+			for _, e := range entries {
+				if m, ok := e.(map[string]interface{}); ok {
+					if c, _ := m["command"].(string); containsCostHook(c) {
+						continue
+					}
+				}
+				kept = append(kept, e)
+			}
+			if len(kept) == 0 {
+				delete(hooks, event)
+			} else {
+				hooks[event] = kept
+			}
+		}
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "Removed Cursor cost hooks from %s\n", path)
+	return nil
+}
+
+// containsCostHook reports whether a hook command string is our cost hook
+// (`<binary> cost hook`), so install/uninstall can find and replace just ours.
+func containsCostHook(command string) bool {
+	return strings.HasSuffix(command, "cost hook")
+}
+
+// osExecutable resolves the running binary's path (indirection kept tiny so the
+// install command reads cleanly).
+func osExecutable() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(exe)
 }
 
 func runCostHistory(cmd *cobra.Command, args []string) error {

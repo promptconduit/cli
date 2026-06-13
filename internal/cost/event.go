@@ -66,11 +66,15 @@ type CostEvent struct {
 	CwdBase     string `json:"cwd_base"` // basename only — never the full path or prompt
 }
 
-// ModelTotal is one model's contribution to a session.
+// ModelTotal is one model's contribution to a session. ModelPriced is false
+// when the model isn't in the rate table (e.g. Cursor's `composer-*`): tokens
+// are still exact, but the cost is 0 and the UI should say "unpriced" rather
+// than imply the work was free.
 type ModelTotal struct {
-	Model     string  `json:"model"`
-	Tokens    Tokens  `json:"tokens"`
-	CostTotal float64 `json:"cost_total"`
+	Model       string  `json:"model"`
+	ModelPriced bool    `json:"model_priced"`
+	Tokens      Tokens  `json:"tokens"`
+	CostTotal   float64 `json:"cost_total"`
 }
 
 // SessionSummary is the rolling per-session aggregate — the "session cost" the

@@ -118,6 +118,54 @@ func TestParseClaudeCodeLine(t *testing.T) {
 	}
 }
 
+// TestParseCursorHookPayload uses the real Cursor hook shape captured from the
+// M0 probe: top-level token fields, model, conversation/generation ids.
+func TestParseCursorHookPayload(t *testing.T) {
+	tbl := mustTable(t)
+
+	// composer-* is a Cursor-proprietary model not in the rate table: exact
+	// tokens, but unpriced (cost 0, flagged) rather than a guessed rate.
+	composer := []byte(`{"hook_event_name":"afterAgentResponse","model":"composer-2.5-fast","conversation_id":"conv1","generation_id":"gen1","session_id":"conv1","input_tokens":17072,"output_tokens":92,"cache_read_tokens":6048,"cache_write_tokens":0,"workspace_roots":["/Users/x/tolken"]}`)
+	ev, cwd, ok := ParseCursorHookPayload(composer, tbl)
+	if !ok {
+		t.Fatal("afterAgentResponse with tokens should parse")
+	}
+	if ev.Tool != ToolCursor || ev.SessionID != "conv1" || ev.RequestID != "gen1" {
+		t.Fatalf("unexpected cursor event: %+v", ev)
+	}
+	if ev.ModelPriced {
+		t.Fatal("composer-2.5-fast should be unpriced")
+	}
+	if ev.Cost.Total != 0 {
+		t.Fatalf("unpriced model cost should be 0, got %v", ev.Cost.Total)
+	}
+	if ev.Tokens.Input != 17072 || ev.Tokens.Output != 92 || ev.Tokens.CacheRead != 6048 {
+		t.Fatalf("tokens not read exactly: %+v", ev.Tokens)
+	}
+	if cwd != "/Users/x/tolken" || ev.CwdBase != "tolken" {
+		t.Fatalf("cwd handling wrong: cwd=%q base=%q", cwd, ev.CwdBase)
+	}
+
+	// A known passthrough model prices exactly.
+	known := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"c2","generation_id":"g2","input_tokens":1000,"output_tokens":500,"cache_read_tokens":2000,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	ev2, _, ok := ParseCursorHookPayload(known, tbl)
+	if !ok || !ev2.ModelPriced {
+		t.Fatal("known model should parse and be priced")
+	}
+	const want = 1000*5e-6 + 500*25e-6 + 2000*0.5e-6 // 0.0185
+	if math.Abs(ev2.Cost.Total-want) > 1e-9 {
+		t.Fatalf("priced cursor cost = %v, want %v", ev2.Cost.Total, want)
+	}
+
+	// Non-token events and zero-token payloads are skipped.
+	if _, _, ok := ParseCursorHookPayload([]byte(`{"hook_event_name":"beforeSubmitPrompt","prompt":"hi"}`), tbl); ok {
+		t.Fatal("non-token event should be skipped")
+	}
+	if _, _, ok := ParseCursorHookPayload([]byte(`{"hook_event_name":"stop","model":"x","input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0}`), tbl); ok {
+		t.Fatal("zero-token payload should be skipped")
+	}
+}
+
 func TestEncodeProjectPath(t *testing.T) {
 	got := encodeProjectPath("/Users/scotthavird/Documents/GitHub/scotthavird/tolken")
 	want := "-Users-scotthavird-Documents-GitHub-scotthavird-tolken"

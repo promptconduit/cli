@@ -53,10 +53,12 @@ func NewWatcher(table *PriceTable, store *Store, out io.Writer, emitEvents bool)
 	}
 }
 
-// Run seeds the newest transcript per directory (to populate session totals
-// without flooding the stream), tails it for new turns, and periodically
-// rescans for new/resumed sessions. Returns when ctx is cancelled.
-func (w *Watcher) Run(ctx context.Context, dirs []string) error {
+// Run watches two kinds of sources: Claude Code transcript directories (parsed
+// per line) and Cursor cost-feed files (pre-priced CostEvent lines written by
+// `cost hook`). It seeds each (to populate session totals without flooding the
+// stream), tails for new entries, and periodically rescans Claude Code dirs for
+// new/resumed sessions. Returns when ctx is cancelled.
+func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string) error {
 	var wg sync.WaitGroup
 	tailed := make(map[string]bool)
 	var tmu sync.Mutex
@@ -80,14 +82,49 @@ func (w *Watcher) Run(ctx context.Context, dirs []string) error {
 		}()
 	}
 
-	// Initial pass: seed + tail the newest transcript in each directory.
+	// Cursor feeds carry already-priced CostEvent JSON lines, so they tail with
+	// a different handler (unmarshal, not parse-transcript).
+	startCursorTail := func(path string) {
+		tmu.Lock()
+		if tailed[path] {
+			tmu.Unlock()
+			return
+		}
+		tailed[path] = true
+		tmu.Unlock()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for raw := range outbound.Tail(ctx, path, 0) {
+				w.streamCostEventLine(raw)
+			}
+		}()
+	}
+
+	// Seed all sources first (accumulate only — no per-turn emits), so the
+	// initial snapshot below reflects complete session totals.
+	var ccNewest []string
 	for _, dir := range dirs {
 		files := jsonlFiles(dir)
 		if len(files) == 0 {
 			continue
 		}
 		w.seedFile(files[0])
-		startTail(files[0])
+		ccNewest = append(ccNewest, files[0])
+	}
+	for _, feed := range cursorFeeds {
+		w.seedCursorFeed(feed)
+	}
+
+	// Emit one snapshot summary per known session, then start tailing for
+	// live per-turn updates.
+	w.emitAllSessions()
+	for _, p := range ccNewest {
+		startTail(p)
+	}
+	for _, feed := range cursorFeeds {
+		startCursorTail(feed)
 	}
 
 	// Rescan loop: pick up newly-created or recently-modified transcripts.
@@ -137,6 +174,15 @@ func (w *Watcher) SeedNewest(dirs []string) {
 	}
 }
 
+// SeedCursorFeeds seeds each Cursor cost feed and emits its session summaries.
+// Used by the one-shot `cost session` command so a Cursor-only workspace still
+// shows a total.
+func (w *Watcher) SeedCursorFeeds(feeds []string) {
+	for _, feed := range feeds {
+		w.seedCursorFeed(feed)
+	}
+}
+
 // seedFile fully parses one transcript, accumulating its turns into the session
 // aggregate without emitting per-turn events, then emits one SessionSummary.
 func (w *Watcher) seedFile(path string) {
@@ -150,22 +196,58 @@ func (w *Watcher) seedFile(path string) {
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 100*1024*1024)
 
-	var lastSession string
 	for scanner.Scan() {
 		ev, _, ok := parseClaudeCodeLine(scanner.Bytes(), w.table, sessionFallback)
 		if !ok {
 			continue
 		}
-		if w.apply(ev) {
-			lastSession = ev.SessionID
-			if w.store != nil {
-				_ = w.store.AppendEvent(ev)
-			}
+		if w.apply(ev) && w.store != nil {
+			_ = w.store.AppendEvent(ev)
 		}
 	}
-	if lastSession != "" {
-		w.emitSummary(lastSession)
+}
+
+// seedCursorFeed fully reads a Cursor cost feed (already-priced CostEvent
+// lines), accumulating into session aggregates without per-turn emits, then
+// emits one SessionSummary per session it touched.
+func (w *Watcher) seedCursorFeed(path string) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
 	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for scanner.Scan() {
+		var ev CostEvent
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil || ev.Kind != "cost_event" {
+			continue
+		}
+		if w.apply(ev) && w.store != nil {
+			_ = w.store.AppendEvent(ev)
+		}
+	}
+}
+
+// streamCostEventLine handles one newly-appended Cursor feed line: unmarshal a
+// pre-priced CostEvent, dedup, aggregate, persist, and emit it plus the updated
+// SessionSummary.
+func (w *Watcher) streamCostEventLine(line []byte) {
+	var ev CostEvent
+	if err := json.Unmarshal(line, &ev); err != nil || ev.Kind != "cost_event" {
+		return
+	}
+	if !w.apply(ev) {
+		return
+	}
+	if w.store != nil {
+		_ = w.store.AppendEvent(ev)
+	}
+	if w.emit {
+		w.emitJSON(ev)
+	}
+	w.emitSummary(ev.SessionID)
 }
 
 // streamLine handles one newly-appended transcript line: parse, dedup,
@@ -226,7 +308,7 @@ func (w *Watcher) apply(ev CostEvent) bool {
 
 	mt := st.byModel[ev.Model]
 	if mt == nil {
-		mt = &ModelTotal{Model: ev.Model}
+		mt = &ModelTotal{Model: ev.Model, ModelPriced: ev.ModelPriced}
 		st.byModel[ev.Model] = mt
 	}
 	mt.Tokens.Input += ev.Tokens.Input
@@ -241,6 +323,36 @@ func (w *Watcher) apply(ev CostEvent) bool {
 	st.summary.UpdatedAt = ev.Timestamp
 	st.summary.Source = worstSource(st.summary.Source, ev.Source)
 	return true
+}
+
+// emitAllSessions emits a snapshot summary for every known session.
+func (w *Watcher) emitAllSessions() {
+	w.mu.Lock()
+	ids := make([]string, 0, len(w.sessions))
+	for id := range w.sessions {
+		ids = append(ids, id)
+	}
+	w.mu.Unlock()
+	for _, id := range ids {
+		w.emitSummary(id)
+	}
+}
+
+// EmitLatestSession emits only the most-recently-updated session's summary.
+// Used by the one-shot `cost session` command, where a Cursor workspace feed
+// may hold many past conversations but the user wants just the current one.
+func (w *Watcher) EmitLatestSession() {
+	w.mu.Lock()
+	var latest, latestTs string
+	for id, st := range w.sessions {
+		if latest == "" || st.summary.UpdatedAt > latestTs {
+			latest, latestTs = id, st.summary.UpdatedAt
+		}
+	}
+	w.mu.Unlock()
+	if latest != "" {
+		w.emitSummary(latest)
+	}
 }
 
 // emitSummary writes the current SessionSummary for a session.
