@@ -1,6 +1,8 @@
 package cost
 
 import (
+	"bytes"
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -31,6 +33,23 @@ func TestResolvePrice(t *testing.T) {
 	if _, ok := tbl.ResolvePrice("claude-3-5-haiku-20241022"); !ok {
 		t.Fatal("aliased haiku id should resolve")
 	}
+	// Cursor's own models resolve, and the -fast variant must NOT collapse to
+	// the cheaper Standard rate via prefix-trim (the exact key takes priority).
+	fast, ok := tbl.ResolvePrice("composer-2.5-fast")
+	if !ok {
+		t.Fatal("composer-2.5-fast should resolve")
+	}
+	std, ok := tbl.ResolvePrice("composer-2.5")
+	if !ok {
+		t.Fatal("composer-2.5 should resolve")
+	}
+	if fast.Input != 0.000003 || std.Input != 0.0000005 {
+		t.Fatalf("composer rates wrong: fast input=%v (want 3e-6), std input=%v (want 5e-7)", fast.Input, std.Input)
+	}
+	if fast.Input == std.Input {
+		t.Fatal("composer-2.5-fast must not resolve to the Standard rate")
+	}
+
 	// Unknown model must report not-priced, not panic or guess.
 	if _, ok := tbl.ResolvePrice("some-other-llm-9"); ok {
 		t.Fatal("unknown model should not resolve")
@@ -123,8 +142,8 @@ func TestParseClaudeCodeLine(t *testing.T) {
 func TestParseCursorHookPayload(t *testing.T) {
 	tbl := mustTable(t)
 
-	// composer-* is a Cursor-proprietary model not in the rate table: exact
-	// tokens, but unpriced (cost 0, flagged) rather than a guessed rate.
+	// composer-2.5-fast is priced from Cursor's published input/output rates
+	// ($3/$15 per M); Cursor publishes no cache rate, so cache_read is priced 0.
 	composer := []byte(`{"hook_event_name":"afterAgentResponse","model":"composer-2.5-fast","conversation_id":"conv1","generation_id":"gen1","session_id":"conv1","input_tokens":17072,"output_tokens":92,"cache_read_tokens":6048,"cache_write_tokens":0,"workspace_roots":["/Users/x/tolken"]}`)
 	ev, cwd, ok := ParseCursorHookPayload(composer, tbl)
 	if !ok {
@@ -133,17 +152,29 @@ func TestParseCursorHookPayload(t *testing.T) {
 	if ev.Tool != ToolCursor || ev.SessionID != "conv1" || ev.RequestID != "gen1" {
 		t.Fatalf("unexpected cursor event: %+v", ev)
 	}
-	if ev.ModelPriced {
-		t.Fatal("composer-2.5-fast should be unpriced")
+	if !ev.ModelPriced {
+		t.Fatal("composer-2.5-fast should be priced")
 	}
-	if ev.Cost.Total != 0 {
-		t.Fatalf("unpriced model cost should be 0, got %v", ev.Cost.Total)
+	const wantComposer = 17072*3e-6 + 92*15e-6 // cache_read priced at 0 (no Cursor cache rate)
+	if math.Abs(ev.Cost.Total-wantComposer) > 1e-9 {
+		t.Fatalf("composer cost = %v, want %v", ev.Cost.Total, wantComposer)
 	}
 	if ev.Tokens.Input != 17072 || ev.Tokens.Output != 92 || ev.Tokens.CacheRead != 6048 {
 		t.Fatalf("tokens not read exactly: %+v", ev.Tokens)
 	}
 	if cwd != "/Users/x/tolken" || ev.CwdBase != "tolken" {
 		t.Fatalf("cwd handling wrong: cwd=%q base=%q", cwd, ev.CwdBase)
+	}
+
+	// A genuinely unknown model is reported with exact tokens but unpriced
+	// (cost 0, flagged) rather than guessed.
+	unknown := []byte(`{"hook_event_name":"stop","model":"totally-unknown-model","conversation_id":"c3","generation_id":"g3","input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	evU, _, ok := ParseCursorHookPayload(unknown, tbl)
+	if !ok {
+		t.Fatal("unknown-model payload should still parse")
+	}
+	if evU.ModelPriced || evU.Cost.Total != 0 {
+		t.Fatalf("unknown model should be unpriced with cost 0, got priced=%v cost=%v", evU.ModelPriced, evU.Cost.Total)
 	}
 
 	// A known passthrough model prices exactly.
@@ -163,6 +194,64 @@ func TestParseCursorHookPayload(t *testing.T) {
 	}
 	if _, _, ok := ParseCursorHookPayload([]byte(`{"hook_event_name":"stop","model":"x","input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"cache_write_tokens":0}`), tbl); ok {
 		t.Fatal("zero-token payload should be skipped")
+	}
+}
+
+// TestWatcherCursorAggregationDedup is the end-to-end check for the behavior
+// verified by hand against real payloads: a watcher ingesting Cursor cost
+// events dedups stop + afterAgentResponse (same generation_id, identical
+// tokens) to one billable unit, sums across generations, and prices composer.
+func TestWatcherCursorAggregationDedup(t *testing.T) {
+	tbl := mustTable(t)
+	var buf bytes.Buffer
+	w := NewWatcher(tbl, nil, &buf, true)
+
+	// Two generations; each fires afterAgentResponse + stop with identical
+	// tokens and the same generation_id, exactly as real Cursor does.
+	payloads := []string{
+		`{"hook_event_name":"afterAgentResponse","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g1","input_tokens":100,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`,
+		`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g1","input_tokens":100,"output_tokens":10,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`,
+		`{"hook_event_name":"afterAgentResponse","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g2","input_tokens":200,"output_tokens":20,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`,
+		`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g2","input_tokens":200,"output_tokens":20,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`,
+	}
+	for _, p := range payloads {
+		ev, _, ok := ParseCursorHookPayload([]byte(p), tbl)
+		if !ok {
+			t.Fatal("payload should parse")
+		}
+		data, _ := json.Marshal(ev)
+		w.streamCostEventLine(data)
+	}
+
+	// Parse the last session_summary emitted and assert the deduped totals.
+	var last *SessionSummary
+	for _, line := range bytes.Split(buf.Bytes(), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if json.Unmarshal(line, &probe) == nil && probe.Kind == "session_summary" {
+			var s SessionSummary
+			if json.Unmarshal(line, &s) == nil {
+				last = &s
+			}
+		}
+	}
+	if last == nil {
+		t.Fatal("expected at least one session_summary")
+	}
+	// g1 (100/10) + g2 (200/20), each counted once despite the stop duplicate.
+	if last.Totals.Input != 300 || last.Totals.Output != 30 {
+		t.Fatalf("deduped totals wrong: input=%d output=%d, want 300/30", last.Totals.Input, last.Totals.Output)
+	}
+	const wantCost = 300*3e-6 + 30*15e-6 // composer-2.5-fast: 0.0009 + 0.00045
+	if math.Abs(last.Totals.CostTotal-wantCost) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", last.Totals.CostTotal, wantCost)
+	}
+	if last.Source != SourceExact || last.Tool != ToolCursor {
+		t.Fatalf("unexpected source/tool: %s/%s", last.Source, last.Tool)
 	}
 }
 

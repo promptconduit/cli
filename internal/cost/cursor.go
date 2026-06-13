@@ -113,6 +113,12 @@ func CursorFeedPath(cwd string) string {
 
 // AppendCursorEvent appends a CostEvent to the per-workspace Cursor feed. This
 // is a local-only write — the cost feature never sends Cursor data anywhere.
+//
+// The feed stores the already-priced CostEvent (token counts + cost), never the
+// hook payload's response `text`. Two consequences: (1) no prompt/response
+// content is ever persisted, and (2) Cursor turns are priced at capture time —
+// a later pricing-table change does not retroactively reprice old feed entries
+// (unlike Claude Code, where transcripts are re-parsed and re-priced each run).
 func AppendCursorEvent(ev CostEvent, cwd string) error {
 	dir := CursorFeedDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

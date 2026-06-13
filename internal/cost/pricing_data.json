@@ -90,5 +90,14 @@
     "cache_creation_input_token_cost": 0.000001,
     "cache_creation_input_token_cost_1h": 0.0000016,
     "cache_read_input_token_cost": 0.00000008
+  },
+  "_cursor_comment": "Cursor's own Composer models, from cursor.com/changelog/composer-2-5 (input/output only — Cursor publishes no separate cache rate, so cache tokens are reported but priced at 0). The exact -fast key must precede the prefix-trim fallback so it doesn't resolve to the cheaper Standard rate.",
+  "composer-2.5-fast": {
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015
+  },
+  "composer-2.5": {
+    "input_cost_per_token": 0.0000005,
+    "output_cost_per_token": 0.0000025
   }
 }
