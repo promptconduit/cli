@@ -201,6 +201,46 @@ func TestParseCursorHookPayload(t *testing.T) {
 // verified by hand against real payloads: a watcher ingesting Cursor cost
 // events dedups stop + afterAgentResponse (same generation_id, identical
 // tokens) to one billable unit, sums across generations, and prices composer.
+// TestLoadPriceTableMerge verifies the refresh-cache layering: curated rates
+// win, the cache fills in models the curated table lacks, and free/non-chat
+// entries are skipped.
+func TestLoadPriceTableMerge(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate StoreDir() from the real config
+
+	cache := `{
+      "claude-opus-4-8": {"input_cost_per_token": 0.999, "output_cost_per_token": 0.999},
+      "gpt-5.5": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008},
+      "text-embedding-x": {"input_cost_per_token": 0, "output_cost_per_token": 0}
+    }`
+	path := CachedPricingPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(cache), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tbl, err := LoadPriceTable()
+	if err != nil {
+		t.Fatalf("LoadPriceTable: %v", err)
+	}
+
+	// Curated entry must win over the cache's bogus override.
+	opus, ok := tbl.ResolvePrice("claude-opus-4-8")
+	if !ok || opus.Input != 0.000005 {
+		t.Fatalf("curated opus rate should win; got %v ok=%v", opus.Input, ok)
+	}
+	// A model only in the cache is added.
+	gpt, ok := tbl.ResolvePrice("gpt-5.5")
+	if !ok || gpt.Input != 0.000002 {
+		t.Fatalf("cache-only model should resolve; got %v ok=%v", gpt.Input, ok)
+	}
+	// Free/non-chat entries are skipped.
+	if _, ok := tbl.ResolvePrice("text-embedding-x"); ok {
+		t.Fatal("zero-cost model should be skipped from the merge")
+	}
+}
+
 func TestWatcherCursorAggregationDedup(t *testing.T) {
 	tbl := mustTable(t)
 	var buf bytes.Buffer
@@ -252,6 +292,27 @@ func TestWatcherCursorAggregationDedup(t *testing.T) {
 	}
 	if last.Source != SourceExact || last.Tool != ToolCursor {
 		t.Fatalf("unexpected source/tool: %s/%s", last.Source, last.Tool)
+	}
+}
+
+// TestLatestSummary verifies the one-shot `cost` path picks the most-recently
+// updated session and reports its total.
+func TestLatestSummary(t *testing.T) {
+	w := NewWatcher(nil, nil, nil, false) // table/out unused by apply + LatestSummary
+	w.apply(CostEvent{Kind: "cost_event", Tool: ToolCursor, SessionID: "old", RequestID: "g1", Timestamp: "2026-06-13T10:00:00Z", Model: "m", ModelPriced: true, Cost: Cost{Total: 1}})
+	w.apply(CostEvent{Kind: "cost_event", Tool: ToolCursor, SessionID: "new", RequestID: "g2", Timestamp: "2026-06-13T11:00:00Z", Model: "m", ModelPriced: true, Cost: Cost{Total: 2}})
+
+	s, ok := w.LatestSummary()
+	if !ok || s.SessionID != "new" {
+		t.Fatalf("want latest session 'new'; got ok=%v id=%q", ok, s.SessionID)
+	}
+	if s.Totals.CostTotal != 2 || len(s.ByModel) != 1 {
+		t.Fatalf("unexpected summary: total=%v models=%d", s.Totals.CostTotal, len(s.ByModel))
+	}
+
+	empty := NewWatcher(nil, nil, nil, false)
+	if _, ok := empty.LatestSummary(); ok {
+		t.Fatal("LatestSummary should report ok=false with no sessions")
 	}
 }
 

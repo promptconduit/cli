@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/cost"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/git"
 	"github.com/promptconduit/cli/internal/logger"
@@ -87,6 +88,14 @@ func processHookEvent() error {
 		debugLog("Failed to parse JSON: %v", err)
 		logger.Error("Failed to parse JSON: %v (raw=%q)", err, string(rawInput[:previewLen]))
 		return nil
+	}
+
+	// Realtime cost tracking is local and unconditional: extract token cost from
+	// Cursor agent-hook payloads here, BEFORE the platform-send gate below, so
+	// the cost meter works for any Cursor hook install — with or without an API
+	// key, and with no separate setup step. Best-effort; never blocks the hook.
+	if _, isCursor := nativeEvent["cursor_version"]; isCursor {
+		recordCursorCost(rawInput)
 	}
 
 	if !cfg.IsConfigured() {
@@ -343,6 +352,26 @@ func sendEnvelopeFromStdin() error {
 	}
 	logger.Debug("Async subprocess: envelope sent successfully")
 	return nil
+}
+
+// recordCursorCost extracts token cost from a Cursor agent-hook payload and
+// appends it to the local cost feed. This is what makes realtime cost tracking
+// part of the standard PromptConduit setup: the `stop`/`afterAgentResponse`
+// hooks that `install cursor` already wires carry exact tokens, so the cost
+// meter "just works" with no extra command. Local-only and best-effort — it
+// reads no API key, sends nothing, and ignores all errors so the hook never
+// blocks the editor.
+func recordCursorCost(rawInput []byte) {
+	table, err := cost.LoadBundledPriceTable()
+	if err != nil {
+		return
+	}
+	ev, cwd, ok := cost.ParseCursorHookPayload(rawInput, table)
+	if !ok {
+		return // not a token-bearing Cursor event
+	}
+	ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	_ = cost.AppendCursorEvent(ev, cwd)
 }
 
 // outputContinueResponse writes the success response to stdout

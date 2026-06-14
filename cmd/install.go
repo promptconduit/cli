@@ -1,20 +1,30 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 )
 
 var installCmd = &cobra.Command{
-	Use:   "install <tool>",
-	Short: "Install PromptConduit hooks for an AI tool",
-	Long: `Install PromptConduit hooks for the specified AI coding assistant.
+	Use:   "install [tool...]",
+	Short: "Set up PromptConduit for one or more AI tools",
+	Long: `Set up PromptConduit hooks for your AI coding assistants.
+
+Run with no arguments to pick interactively, or name one or more tools:
+  promptconduit install                      # interactive multi-select
+  promptconduit install cursor               # a single tool
+  promptconduit install cursor claude-code   # several at once
+  promptconduit install all                  # every supported tool
 
 Supported tools:
   - claude-code: Claude Code CLI            (~/.claude/settings.json)
@@ -23,35 +33,55 @@ Supported tools:
   - codex:       OpenAI Codex CLI           (~/.codex/hooks.json)
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
 
-The hooks will capture events from the tool and send them to the PromptConduit API.
-
-Prerequisites:
-  1. Set your API key: promptconduit config set --api-key="your-key"
-  2. Have the target tool installed`,
-	Args: cobra.ExactArgs(1),
+The hooks capture events locally and realtime cost tracking works immediately.
+Set an API key (promptconduit config set --api-key=...) only if you also want to
+sync events to the PromptConduit platform.`,
+	Args: cobra.ArbitraryArgs,
 	RunE: runInstall,
 }
 
-func runInstall(cmd *cobra.Command, args []string) error {
-	toolName := args[0]
+// installableTools is the ordered set offered in the interactive picker.
+var installableTools = []struct{ name, label string }{
+	{"claude-code", "Claude Code"},
+	{"cursor", "Cursor"},
+	{"gemini-cli", "Gemini CLI"},
+	{"codex", "OpenAI Codex"},
+	{"copilot", "GitHub Copilot"},
+}
 
-	if !envelope.IsValidTool(toolName) {
-		return fmt.Errorf("unknown tool: %s. Supported: %v", toolName, envelope.SupportedTools())
+func runInstall(cmd *cobra.Command, args []string) error {
+	tools, err := resolveInstallTools(cmd, args)
+	if err != nil {
+		return err
+	}
+	if len(tools) == 0 {
+		fmt.Fprintln(cmd.ErrOrStderr(), "No tools selected.")
+		return nil
 	}
 
-	// Get the executable path for hook commands
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-
-	// Resolve symlinks to get actual binary path
 	exePath, err = filepath.EvalSymlinks(exePath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
 
-	switch toolName {
+	for i, tool := range tools {
+		if i > 0 {
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+		if err := installTool(tool, exePath); err != nil {
+			return fmt.Errorf("install %s: %w", tool, err)
+		}
+	}
+	return nil
+}
+
+// installTool dispatches to the per-tool installer.
+func installTool(name, exePath string) error {
+	switch name {
 	case "claude-code":
 		return installClaudeCode(exePath)
 	case "cursor":
@@ -63,8 +93,104 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	case "copilot":
 		return installCopilot(exePath)
 	default:
-		return fmt.Errorf("installation not implemented for: %s", toolName)
+		return fmt.Errorf("installation not implemented for: %s", name)
 	}
+}
+
+// resolveInstallTools turns CLI args — or an interactive prompt when none are
+// given — into a validated, de-duplicated list of tool names. "all" expands to
+// every supported tool.
+func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
+	if len(args) == 0 {
+		if !outbound.IsTerminal(os.Stdin) {
+			return nil, fmt.Errorf("name one or more tools (e.g. `install cursor claude-code` or `install all`), or run in a terminal to choose interactively.\nSupported: %s", strings.Join(toolNames(), ", "))
+		}
+		return selectToolsInteractive(cmd)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, tok := range args {
+		t := normalizeToolName(strings.ToLower(strings.TrimSpace(tok)))
+		if t == "all" {
+			return toolNames(), nil
+		}
+		if !envelope.IsValidTool(t) {
+			return nil, fmt.Errorf("unknown tool: %s. Supported: %s (or 'all')", tok, strings.Join(toolNames(), ", "))
+		}
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// selectToolsInteractive prompts the user to pick tools by number or name.
+func selectToolsInteractive(cmd *cobra.Command) ([]string, error) {
+	out := cmd.OutOrStdout()
+	fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
+	for i, t := range installableTools {
+		fmt.Fprintf(out, "  %d) %s\n", i+1, t.label)
+	}
+	fmt.Fprint(out, "Enter numbers (e.g. 1,2), names, or 'all': ")
+
+	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+	if err != nil && strings.TrimSpace(line) == "" {
+		return nil, nil
+	}
+	return parseToolSelection(line)
+}
+
+// parseToolSelection resolves a comma-separated picker response (numbers,
+// names, or "all").
+func parseToolSelection(input string) ([]string, error) {
+	input = strings.ToLower(strings.TrimSpace(input))
+	if input == "" {
+		return nil, nil
+	}
+	if input == "all" || input == "*" {
+		return toolNames(), nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, tok := range strings.Split(input, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		var name string
+		if n, err := strconv.Atoi(tok); err == nil {
+			if n < 1 || n > len(installableTools) {
+				return nil, fmt.Errorf("invalid choice: %s (pick 1-%d)", tok, len(installableTools))
+			}
+			name = installableTools[n-1].name
+		} else {
+			name = normalizeToolName(tok)
+			if !envelope.IsValidTool(name) {
+				return nil, fmt.Errorf("unknown tool: %s", tok)
+			}
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out, nil
+}
+
+func normalizeToolName(s string) string {
+	if s == "gemini" {
+		return "gemini-cli"
+	}
+	return s
+}
+
+func toolNames() []string {
+	names := make([]string, len(installableTools))
+	for i, t := range installableTools {
+		names[i] = t.name
+	}
+	return names
 }
 
 func installClaudeCode(exePath string) error {
@@ -119,9 +245,14 @@ func installClaudeCode(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Claude Code")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for Claude Code")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Realtime token-cost tracking works for Claude Code too (from local transcripts):")
+	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println()
+	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
@@ -258,9 +389,14 @@ func installCursor(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Cursor")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for Cursor")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Realtime token-cost tracking is now ON for Cursor — computed 100% locally.")
+	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println()
+	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
@@ -372,9 +508,10 @@ func installGemini(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Gemini CLI")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for Gemini CLI")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Optional — sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
@@ -502,9 +639,10 @@ func installCodex(exePath string) error {
 		return fmt.Errorf("failed to write settings: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for Codex CLI")
-	fmt.Printf("Settings file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for OpenAI Codex CLI")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Optional — sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil
@@ -602,9 +740,10 @@ func installCopilot(exePath string) error {
 		return fmt.Errorf("failed to write hooks file: %w", err)
 	}
 
-	fmt.Println("Successfully installed PromptConduit hooks for GitHub Copilot CLI")
-	fmt.Printf("Hooks file: %s\n", settingsPath)
-	fmt.Println("\nMake sure you have configured your API key:")
+	fmt.Println("✓ Installed PromptConduit hooks for GitHub Copilot CLI")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("Optional — sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
 
 	return nil

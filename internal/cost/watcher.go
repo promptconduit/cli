@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,7 +60,7 @@ func NewWatcher(table *PriceTable, store *Store, out io.Writer, emitEvents bool)
 // `cost hook`). It seeds each (to populate session totals without flooding the
 // stream), tails for new entries, and periodically rescans Claude Code dirs for
 // new/resumed sessions. Returns when ctx is cancelled.
-func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string) error {
+func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string, cursorRescanDir string) error {
 	var wg sync.WaitGroup
 	tailed := make(map[string]bool)
 	var tmu sync.Mutex
@@ -147,6 +149,25 @@ func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string) 
 					}
 					if info, err := os.Stat(path); err == nil && info.ModTime().UnixNano() >= cutoff {
 						startTail(path)
+					}
+				}
+			}
+			// Under --all, pick up Cursor feeds for workspaces that started
+			// after the watcher did. New feed files are near-empty, so tailing
+			// from the end captures everything without re-seeding.
+			if cursorRescanDir != "" {
+				if entries, err := os.ReadDir(cursorRescanDir); err == nil {
+					for _, e := range entries {
+						if e.IsDir() || !strings.HasSuffix(e.Name(), ".ndjson") {
+							continue
+						}
+						p := filepath.Join(cursorRescanDir, e.Name())
+						tmu.Lock()
+						already := tailed[p]
+						tmu.Unlock()
+						if !already {
+							startCursorTail(p)
+						}
 					}
 				}
 			}
@@ -338,21 +359,32 @@ func (w *Watcher) emitAllSessions() {
 	}
 }
 
-// EmitLatestSession emits only the most-recently-updated session's summary.
-// Used by the one-shot `cost session` command, where a Cursor workspace feed
-// may hold many past conversations but the user wants just the current one.
-func (w *Watcher) EmitLatestSession() {
+// LatestSummary returns the most-recently-updated session's summary (with its
+// by-model breakdown populated and sorted), for the one-shot `cost`/`cost
+// session` command. A Cursor workspace feed may hold many past conversations;
+// this returns just the current one. ok is false if no session was seen.
+func (w *Watcher) LatestSummary() (SessionSummary, bool) {
 	w.mu.Lock()
-	var latest, latestTs string
+	defer w.mu.Unlock()
+	var latestID, latestTs string
 	for id, st := range w.sessions {
-		if latest == "" || st.summary.UpdatedAt > latestTs {
-			latest, latestTs = id, st.summary.UpdatedAt
+		if latestID == "" || st.summary.UpdatedAt > latestTs {
+			latestID, latestTs = id, st.summary.UpdatedAt
 		}
 	}
-	w.mu.Unlock()
-	if latest != "" {
-		w.emitSummary(latest)
+	if latestID == "" {
+		return SessionSummary{}, false
 	}
+	st := w.sessions[latestID]
+	summary := st.summary
+	summary.ByModel = make([]ModelTotal, 0, len(st.byModel))
+	for _, mt := range st.byModel {
+		summary.ByModel = append(summary.ByModel, *mt)
+	}
+	sort.Slice(summary.ByModel, func(i, j int) bool {
+		return summary.ByModel[i].CostTotal > summary.ByModel[j].CostTotal
+	})
+	return summary, true
 }
 
 // emitSummary writes the current SessionSummary for a session.
