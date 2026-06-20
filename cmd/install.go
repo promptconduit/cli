@@ -63,7 +63,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-	exePath, err = filepath.EvalSymlinks(exePath)
+	exePath, err = stableExecutablePath(exePath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve executable path: %w", err)
 	}
@@ -77,6 +77,58 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// stableExecutablePath returns an absolute path to the running binary that is
+// safe to bake into AI-tool hook configs.
+//
+// It resolves symlinks to canonicalize the path, but for Homebrew installs it
+// rewrites the result back to Homebrew's version-independent symlink (e.g.
+// /opt/homebrew/opt/promptconduit/bin/promptconduit). Homebrew stores each
+// version under .../Cellar/<formula>/<version>/ and deletes the old directory
+// on `brew upgrade`, so a fully-resolved Cellar path written into a hook stops
+// working the moment the user upgrades. The opt-prefix (and linked bin)
+// symlinks always point at the current keg, so the hook survives upgrades.
+func stableExecutablePath(exePath string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return "", err
+	}
+	if stable, ok := homebrewStablePath(resolved); ok {
+		return stable, nil
+	}
+	return resolved, nil
+}
+
+// homebrewStablePath maps a fully-resolved Homebrew Cellar binary path to a
+// version-independent symlink that resolves back to it. It returns ok=false for
+// non-Homebrew paths, or when no such symlink is present (in which case callers
+// keep the resolved path — the previous behavior).
+func homebrewStablePath(resolved string) (string, bool) {
+	const marker = "/Cellar/"
+	idx := strings.Index(resolved, marker)
+	if idx < 0 {
+		return "", false
+	}
+	prefix := resolved[:idx]           // e.g. /opt/homebrew
+	rest := resolved[idx+len(marker):] // <formula>/<version>/bin/<binary>
+	formula, _, ok := strings.Cut(rest, "/")
+	if !ok || formula == "" {
+		return "", false
+	}
+	binName := filepath.Base(resolved)
+	// Prefer the opt-prefix symlink (Homebrew's canonical stable reference),
+	// then the linked bin symlink. Only accept a candidate that resolves back
+	// to the same binary, so a hook never points at a different formula.
+	for _, candidate := range []string{
+		filepath.Join(prefix, "opt", formula, "bin", binName),
+		filepath.Join(prefix, "bin", binName),
+	} {
+		if target, err := filepath.EvalSymlinks(candidate); err == nil && target == resolved {
+			return candidate, true
+		}
+	}
+	return "", false
 }
 
 // installTool dispatches to the per-tool installer.
