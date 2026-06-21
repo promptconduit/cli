@@ -44,6 +44,11 @@ var configShowCmd = &cobra.Command{
 			autoUpdate = "disabled"
 		}
 		cmd.Printf("Auto-update: %s\n", autoUpdate)
+		eventLog := "enabled"
+		if cfg.DisableEventLog {
+			eventLog = "disabled"
+		}
+		cmd.Printf("Event log:   %s\n", eventLog)
 		cmd.Println()
 		cmd.Printf("Config:      %s\n", client.ConfigPath())
 
@@ -69,6 +74,7 @@ var (
 	setAPIURL            string
 	setDebug             bool
 	setDisableAutoUpdate bool
+	setDisableEventLog   bool
 )
 
 var configSetCmd = &cobra.Command{
@@ -90,7 +96,10 @@ Examples:
   promptconduit config set --disable-auto-update=true
 
   # Re-enable automatic background upgrades
-  promptconduit config set --disable-auto-update=false`,
+  promptconduit config set --disable-auto-update=false
+
+  # Opt out of the local event log (~/.promptconduit/events.ndjson)
+  promptconduit config set --disable-event-log=true`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -119,9 +128,13 @@ Examples:
 			fc.DisableAutoUpdate = setDisableAutoUpdate
 			changed = true
 		}
+		if cmd.Flags().Changed("disable-event-log") {
+			fc.DisableEventLog = setDisableEventLog
+			changed = true
+		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, or --disable-auto-update")
+			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, or --disable-event-log")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -144,6 +157,13 @@ Examples:
 				state = "disabled"
 			}
 			cmd.Printf("  Auto-update: %s\n", state)
+		}
+		if cmd.Flags().Changed("disable-event-log") {
+			state := "enabled"
+			if fc.DisableEventLog {
+				state = "disabled"
+			}
+			cmd.Printf("  Event log:   %s\n", state)
 		}
 
 		return nil
@@ -365,6 +385,7 @@ func init() {
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
 	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
+	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)
