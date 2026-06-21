@@ -74,7 +74,8 @@ func brewLayout(t *testing.T, makeOpt, makeBin bool) (realBin, optLink, binLink 
 	if err != nil {
 		t.Fatal(err)
 	}
-	cellarBin := filepath.Join(base, "Cellar", "promptconduit", "0.4.0", "bin")
+	versionDir := filepath.Join(base, "Cellar", "promptconduit", "0.4.0")
+	cellarBin := filepath.Join(versionDir, "bin")
 	if err := os.MkdirAll(cellarBin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -84,19 +85,24 @@ func brewLayout(t *testing.T, makeOpt, makeBin bool) (realBin, optLink, binLink 
 	}
 	optLink = filepath.Join(base, "opt", "promptconduit", "bin", "promptconduit")
 	binLink = filepath.Join(base, "bin", "promptconduit")
-	link := func(p string) {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(realBin, p); err != nil {
-			t.Fatal(err)
-		}
-	}
 	if makeOpt {
-		link(optLink)
+		// Mirror real Homebrew: opt/<formula> is a directory symlink to the keg,
+		// so the binary is reached at opt/<formula>/bin/<binary> through it.
+		optDir := filepath.Join(base, "opt")
+		if err := os.MkdirAll(optDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(versionDir, filepath.Join(optDir, "promptconduit")); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if makeBin {
-		link(binLink)
+		if err := os.MkdirAll(filepath.Dir(binLink), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(realBin, binLink); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return realBin, optLink, binLink
 }
@@ -146,6 +152,37 @@ func TestHomebrewStablePath(t *testing.T) {
 		}
 		if got, ok := homebrewStablePath(real); ok {
 			t.Fatalf("expected ok=false for stale symlink, got %q", got)
+		}
+	})
+}
+
+func TestStableExecutablePath(t *testing.T) {
+	t.Run("homebrew binary maps to stable symlink", func(t *testing.T) {
+		real, optLink, _ := brewLayout(t, true, true)
+		got, err := stableExecutablePath(real)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != optLink {
+			t.Fatalf("got %q, want %q", got, optLink)
+		}
+	})
+
+	t.Run("non-homebrew binary returns the resolved path", func(t *testing.T) {
+		dir, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		bin := filepath.Join(dir, "promptconduit")
+		if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := stableExecutablePath(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != bin {
+			t.Fatalf("got %q, want %q", got, bin)
 		}
 	})
 }
