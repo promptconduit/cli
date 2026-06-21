@@ -16,9 +16,30 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/outbound"
 )
+
+// eventsEndpoint is the path every raw-event send targets. Centralized so the
+// event-log records and the request URLs can't drift apart.
+const eventsEndpoint = "/v1/events/raw"
+
+// recordEventSend writes a full-fidelity record of an outbound event send to
+// the local event log (~/.promptconduit/events.ndjson) and updates the rolling
+// status counters. Best-effort and gated by config; it never blocks or fails
+// the send. Called from every event-send chokepoint with the exact envelope
+// JSON we put on the wire plus the HTTP result.
+func recordEventSend(envJSON []byte, status int, latency time.Duration, attempt int, sendErr error) {
+	eventlog.RecordSend(eventlog.SendRecord{
+		Endpoint:  eventsEndpoint,
+		Payload:   envJSON,
+		Status:    status,
+		LatencyMs: latency.Milliseconds(),
+		Attempt:   attempt,
+		Err:       sendErr,
+	})
+}
 
 // APIResponse represents a response from the API
 type APIResponse struct {
@@ -123,8 +144,12 @@ func (c *Client) SendEnvelopeWithAttachments(env *envelope.RawEventEnvelope, att
 	req.Header.Set("Authorization", "Bearer "+c.config.APIKey)
 	req.Header.Set("User-Agent", fmt.Sprintf("PromptConduit-CLI/%s", c.version))
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// envJSON holds the logical envelope (the multipart body also carries
+		// binary attachments, but the event log records the envelope we sent).
+		recordEventSend(envJSON, 0, time.Since(start), 1, err)
 		return &APIResponse{
 			Success: false,
 			Error:   fmt.Sprintf("request failed: %v", err),
@@ -146,9 +171,12 @@ func (c *Client) SendEnvelopeWithAttachments(env *envelope.RawEventEnvelope, att
 		}
 	}
 
+	var sendErr error
 	if !result.Success {
 		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		sendErr = fmt.Errorf("API error: %d - %s", resp.StatusCode, string(respBody))
 	}
+	recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, sendErr)
 
 	return result
 }
@@ -280,29 +308,39 @@ func openLogForStderr() *os.File {
 	return f
 }
 
-// sendEnvelopeBlocking sends the envelope synchronously (fallback)
+// sendEnvelopeBlocking sends the envelope synchronously. This is the single
+// chokepoint every event send funnels through — the async subprocess
+// (SendEnvelopeDirect) and the in-process fallback in sendAsync{Unix,Windows}
+// both land here — so it's where we record the full outgoing payload and the
+// HTTP outcome to the local event log.
 func (c *Client) sendEnvelopeBlocking(envJSON []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/events/raw", bytes.NewReader(envJSON))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+eventsEndpoint, bytes.NewReader(envJSON))
 	if err != nil {
+		recordEventSend(envJSON, 0, 0, 1, err)
 		return err
 	}
 
 	c.setHeaders(req)
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		recordEventSend(envJSON, 0, time.Since(start), 1, err)
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		apiErr := fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, apiErr)
+		return apiErr
 	}
 
+	recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, nil)
 	return nil
 }
 

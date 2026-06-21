@@ -16,6 +16,7 @@ const (
 	EnvTimeout         = "PROMPTCONDUIT_TIMEOUT"
 	EnvTool            = "PROMPTCONDUIT_TOOL"
 	EnvAutoUpdate      = "PROMPTCONDUIT_AUTO_UPDATE" // "0"/"false" disables background self-upgrade
+	EnvEventLog        = "PROMPTCONDUIT_EVENT_LOG"   // "0"/"false" disables the local ~/.promptconduit event log
 	EnvXDGConfigHome   = "XDG_CONFIG_HOME"
 	ConfigDirName      = "promptconduit" // ~/.config/promptconduit/
 	ConfigFileName     = "config.json"
@@ -30,6 +31,10 @@ type Config struct {
 	// DisableAutoUpdate opts out of the background "check + self-upgrade"
 	// behaviour. Zero value (false) leaves auto-update enabled.
 	DisableAutoUpdate bool `json:"disable_auto_update,omitempty"`
+	// DisableEventLog opts out of the local full-fidelity event log written
+	// to ~/.promptconduit/ (events.ndjson, errors.log, status.json). Zero
+	// value (false) leaves the event log enabled — it's on by default.
+	DisableEventLog bool `json:"disable_event_log,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -46,6 +51,14 @@ type FileConfig struct {
 	Debug             bool   `json:"debug,omitempty"`
 	Timeout           int    `json:"timeout_seconds,omitempty"`
 	DisableAutoUpdate bool   `json:"disable_auto_update,omitempty"`
+	DisableEventLog   bool   `json:"disable_event_log,omitempty"`
+}
+
+// EventLogEnabled reports whether the local ~/.promptconduit event log should
+// be written. On by default; disabled only when explicitly opted out via
+// config (disable_event_log) or PROMPTCONDUIT_EVENT_LOG=0.
+func (c *Config) EventLogEnabled() bool {
+	return !c.DisableEventLog
 }
 
 // IsConfigured returns true if the API key is set
@@ -141,13 +154,14 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog {
 		return &Config{
 			APIKey:            fc.APIKey,
 			APIURL:            fc.APIURL,
 			Debug:             fc.Debug,
 			TimeoutSeconds:    fc.Timeout,
 			DisableAutoUpdate: fc.DisableAutoUpdate,
+			DisableEventLog:   fc.DisableEventLog,
 		}
 	}
 
@@ -182,6 +196,9 @@ func LoadConfig() *Config {
 			if fileCfg.DisableAutoUpdate {
 				cfg.DisableAutoUpdate = true
 			}
+			if fileCfg.DisableEventLog {
+				cfg.DisableEventLog = true
+			}
 		}
 	}
 
@@ -189,6 +206,12 @@ func LoadConfig() *Config {
 	// leaves whatever the file config decided.
 	if v := os.Getenv(EnvAutoUpdate); v == "0" || v == "false" || v == "no" {
 		cfg.DisableAutoUpdate = true
+	}
+
+	// PROMPTCONDUIT_EVENT_LOG=0/false/no disables the local event log;
+	// anything else (or unset) leaves whatever the file config decided.
+	if v := os.Getenv(EnvEventLog); v == "0" || v == "false" || v == "no" {
+		cfg.DisableEventLog = true
 	}
 
 	// Apply defaults

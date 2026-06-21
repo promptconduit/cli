@@ -14,6 +14,7 @@ import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/cost"
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/git"
 	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
@@ -55,10 +56,11 @@ func runHook(cmd *cobra.Command, args []string) error {
 func processHookEvent() error {
 	defer outputContinueResponse()
 
-	// Load config first so we can set the debug flag for the logger before
-	// emitting any trace lines.
+	// Load config first so we can set the debug flag for the logger and the
+	// enabled flag for the local event log before emitting any lines.
 	cfg := client.LoadConfig()
 	logger.SetDebug(cfg.Debug)
+	eventlog.SetEnabled(cfg.EventLogEnabled())
 
 	logger.Debug("Hook started")
 
@@ -67,12 +69,14 @@ func processHookEvent() error {
 	if err != nil {
 		debugLog("Failed to read stdin: %v", err)
 		logger.Error("Failed to read stdin: %v", err)
+		eventlog.RecordDrop("read_error", err.Error())
 		return nil
 	}
 
 	if len(rawInput) == 0 {
 		debugLog("Empty input, skipping")
 		logger.Debug("Empty input, skipping")
+		eventlog.RecordDrop("empty_stdin", "")
 		return nil
 	}
 
@@ -87,6 +91,7 @@ func processHookEvent() error {
 	if err := json.Unmarshal(rawInput, &nativeEvent); err != nil {
 		debugLog("Failed to parse JSON: %v", err)
 		logger.Error("Failed to parse JSON: %v (raw=%q)", err, string(rawInput[:previewLen]))
+		eventlog.RecordDrop("parse_error", err.Error())
 		return nil
 	}
 
@@ -101,6 +106,7 @@ func processHookEvent() error {
 	if !cfg.IsConfigured() {
 		debugLog("API key not configured, skipping")
 		logger.Error("API key not configured — event dropped. Run `promptconduit config set --api-key=...`")
+		eventlog.RecordDrop("not_configured", "run `promptconduit config set --api-key=...`")
 		return nil
 	}
 
@@ -327,12 +333,16 @@ func getSessionID(event map[string]interface{}) string {
 func sendEnvelopeFromStdin() error {
 	cfg := client.LoadConfig()
 	logger.SetDebug(cfg.Debug)
+	// This runs as a fresh subprocess, so the enabled flag must be set here
+	// too — it isn't inherited from the parent hook process.
+	eventlog.SetEnabled(cfg.EventLogEnabled())
 
 	logger.Debug("Async subprocess started")
 
 	inputData, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		logger.Error("Async subprocess failed to read stdin: %v", err)
+		eventlog.RecordDrop("read_error", "async subprocess: "+err.Error())
 		return fmt.Errorf("failed to read stdin: %w", err)
 	}
 
@@ -340,6 +350,7 @@ func sendEnvelopeFromStdin() error {
 
 	if !cfg.IsConfigured() {
 		logger.Error("Async subprocess: API key not configured — envelope dropped")
+		eventlog.RecordDrop("not_configured", "async subprocess")
 		return fmt.Errorf("API key not configured")
 	}
 
@@ -469,7 +480,11 @@ func retryFailedSyncs(exe string) {
 	}
 }
 
-// writeLocalEvent writes hook events to local file for macOS app status tracking
+// writeLocalEvent appends a lightweight status trace to
+// ~/.promptconduit/hook-events so the macOS menu-bar app can tell when a
+// session starts/stops. This is NOT the API payload — only {event, cwd,
+// session_id, timestamp}. The full outgoing payload is recorded separately by
+// the eventlog package (~/.promptconduit/events.ndjson) at send time.
 func writeLocalEvent(hookEvent, cwd, sessionID string) {
 	// Only write status-relevant events
 	switch hookEvent {
