@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
+	"github.com/promptconduit/cli/internal/extension"
 	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 )
@@ -47,9 +48,40 @@ the PromptConduit platform. To stay local-only even after setting a key, pass
 // captured to the local event log but never sent to the cloud.
 var installLocalOnly bool
 
+// installNoExtension skips sideloading the bundled cost status-bar extension
+// into the editor (Cursor) during install.
+var installNoExtension bool
+
 func init() {
 	installCmd.Flags().BoolVar(&installLocalOnly, "local-only", false,
 		"Free / local-only mode: capture events locally, never send to the cloud")
+	installCmd.Flags().BoolVar(&installNoExtension, "no-extension", false,
+		"Don't sideload the bundled cost status-bar editor extension (Cursor)")
+}
+
+// installCostExtension sideloads the bundled PromptConduit cost extension into
+// the given editor. Best-effort and non-fatal: the hook install has already
+// succeeded by the time this runs, so any problem only prints a hint and never
+// fails the overall install. Skipped entirely with --no-extension.
+func installCostExtension(e extension.Editor) {
+	if installNoExtension {
+		return
+	}
+	res, err := extension.Install(e)
+	switch {
+	case err != nil:
+		fmt.Printf("• Couldn't auto-install the cost extension into %s: %v\n", e.Name, err)
+		fmt.Printf("  Install it later with `promptconduit install cursor`, or use `promptconduit cost watch`.\n")
+		fmt.Println()
+	case res.Installed:
+		fmt.Printf("✓ Installed the cost status-bar extension into %s (v%s)\n", e.Name, res.Version)
+		fmt.Println("  Live request/session cost shows in the status bar — click it for the full breakdown.")
+		fmt.Println()
+	case res.SkippedReason != "":
+		fmt.Printf("• %s not detected — skipped the cost status-bar extension.\n", e.Name)
+		fmt.Printf("  In %s, run \"Shell Command: Install '%s' command in PATH\", then re-run `promptconduit install cursor`.\n", e.Name, e.Command)
+		fmt.Println()
+	}
 }
 
 // installableTools is the ordered set offered in the interactive picker.
@@ -480,8 +512,12 @@ func installCursor(exePath string) error {
 	fmt.Println("✓ Installed PromptConduit hooks for Cursor")
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
+
+	// Sideload the bundled cost status-bar extension into Cursor (best-effort).
+	installCostExtension(extension.Cursor)
+
 	fmt.Println("Realtime token-cost tracking is now ON for Cursor — computed 100% locally.")
-	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("  Live spend:    promptconduit cost watch")
 	fmt.Println("  This session:  promptconduit cost")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")

@@ -1,4 +1,4 @@
-.PHONY: build test clean install release snapshot lint
+.PHONY: build test clean install release snapshot lint refresh-extension
 
 # Build configuration
 BINARY_NAME := promptconduit
@@ -61,3 +61,17 @@ dev: build
 # Show version
 version:
 	@echo $(VERSION)
+
+# Path to the editor-extension repo (sibling checkout by default) and the
+# embedded .vsix the CLI sideloads via `install cursor`.
+EXTENSION_DIR ?= ../editor-extension
+EXTENSION_VSIX := internal/extension/embedded/promptconduit-cost.vsix
+
+# Rebuild the bundled cost extension .vsix from the editor-extension repo and
+# drop it into internal/extension/dist/ for go:embed. Run this after the
+# extension changes so the CLI ships the matching build. Requires npm and the
+# editor-extension checkout at $(EXTENSION_DIR).
+refresh-extension:
+	cd $(EXTENSION_DIR) && npm ci && npm run compile && \
+		npx --yes @vscode/vsce package --out "$(CURDIR)/$(EXTENSION_VSIX)"
+	@echo "Refreshed $(EXTENSION_VSIX)"
