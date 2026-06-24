@@ -176,3 +176,61 @@ func TestLoadConfig_AutoUpdateOptOut(t *testing.T) {
 		})
 	}
 }
+
+// Regression: in a multi-environment config, top-level opt-out flags (where
+// `config set --disable-auto-update/--disable-event-log/--local-only` writes
+// them) were ignored because GetCurrentConfig returned the active env's config
+// without merging the globals — so the toggle was a silent no-op.
+func TestGetCurrentConfig_RootOptOutsApplyToActiveEnv(t *testing.T) {
+	mk := func() *FileConfig {
+		return &FileConfig{
+			CurrentEnv: "prod",
+			Environments: map[string]*Config{
+				"prod": {APIKey: "sk_prod", APIURL: "https://api.example.com"},
+				"dev":  {APIKey: "sk_dev"},
+			},
+		}
+	}
+
+	t.Run("root globals apply to the active env", func(t *testing.T) {
+		fc := mk()
+		fc.DisableAutoUpdate = true
+		fc.DisableEventLog = true
+		fc.LocalOnly = true
+		got := fc.GetCurrentConfig()
+		if got == nil {
+			t.Fatal("GetCurrentConfig returned nil")
+		}
+		if !got.DisableAutoUpdate || !got.DisableEventLog || !got.LocalOnly {
+			t.Errorf("root globals not applied: auto=%v eventlog=%v local=%v",
+				got.DisableAutoUpdate, got.DisableEventLog, got.LocalOnly)
+		}
+		if got.APIKey != "sk_prod" {
+			t.Errorf("active env not preserved: APIKey = %q, want sk_prod", got.APIKey)
+		}
+	})
+
+	t.Run("per-env true wins even when root is false", func(t *testing.T) {
+		fc := mk()
+		fc.Environments["prod"].DisableAutoUpdate = true
+		if got := fc.GetCurrentConfig(); !got.DisableAutoUpdate {
+			t.Error("per-env DisableAutoUpdate should be honored")
+		}
+	})
+
+	t.Run("all false when neither root nor env set them", func(t *testing.T) {
+		got := mk().GetCurrentConfig()
+		if got.DisableAutoUpdate || got.DisableEventLog || got.LocalOnly {
+			t.Error("expected all opt-outs false")
+		}
+	})
+
+	t.Run("does not mutate the stored env config", func(t *testing.T) {
+		fc := mk()
+		fc.DisableAutoUpdate = true
+		_ = fc.GetCurrentConfig()
+		if fc.Environments["prod"].DisableAutoUpdate {
+			t.Error("root global leaked into the stored env Config (should return a copy)")
+		}
+	})
+}

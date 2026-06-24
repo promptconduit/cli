@@ -160,10 +160,19 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 		return nil
 	}
 
-	// If we have environments and a current env, use that
+	// If we have environments and a current env, use that. Top-level opt-out
+	// flags act as GLOBAL DEFAULTS across all environments — that's where
+	// `config set --disable-auto-update/--disable-event-log/--local-only` writes
+	// them (see cmd/config.go), so OR them into the active env's config. A per-env
+	// true still wins. We return a copy so the loaded Environments map isn't
+	// mutated (and the global isn't accidentally persisted into one env).
 	if fc.CurrentEnv != "" && fc.Environments != nil {
-		if cfg, ok := fc.Environments[fc.CurrentEnv]; ok {
-			return cfg
+		if cfg, ok := fc.Environments[fc.CurrentEnv]; ok && cfg != nil {
+			merged := *cfg
+			merged.DisableAutoUpdate = merged.DisableAutoUpdate || fc.DisableAutoUpdate
+			merged.DisableEventLog = merged.DisableEventLog || fc.DisableEventLog
+			merged.LocalOnly = merged.LocalOnly || fc.LocalOnly
+			return &merged
 		}
 	}
 
