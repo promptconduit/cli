@@ -117,7 +117,7 @@ func init() {
 
 func runCostRefreshPricing(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
-	fmt.Fprintf(cmd.ErrOrStderr(), "Fetching public price table (no data sent): %s\n", litellmPricingURL)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Fetching public price table (no data sent): %s\n", litellmPricingURL)
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, litellmPricingURL, nil)
@@ -128,7 +128,7 @@ func runCostRefreshPricing(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("fetch pricing: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetch pricing: HTTP %d", resp.StatusCode)
 	}
@@ -150,8 +150,8 @@ func runCostRefreshPricing(cmd *cobra.Command, args []string) error {
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Cached %d model prices to %s\n", n, path)
-	fmt.Fprintln(out, "Built-in curated rates still take precedence; cached rates fill gaps.")
+	_, _ = fmt.Fprintf(out, "Cached %d model prices to %s\n", n, path)
+	_, _ = fmt.Fprintln(out, "Built-in curated rates still take precedence; cached rates fill gaps.")
 	return nil
 }
 
@@ -181,11 +181,11 @@ func runCostWatch(cmd *cobra.Command, args []string) error {
 	// the live stream the extension depends on.
 	store, err := cost.OpenStore()
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "cost: local store unavailable (%v); continuing without history\n", err)
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "cost: local store unavailable (%v); continuing without history\n", err)
 		store = nil
 	}
 	if store != nil {
-		defer store.Close()
+		defer func() { _ = store.Close() }()
 	}
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -197,7 +197,7 @@ func runCostWatch(cmd *cobra.Command, args []string) error {
 	if costAll {
 		scope = "all projects"
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s (Claude Code + Cursor) — local only, Ctrl-C to stop.\n", scope)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s (Claude Code + Cursor) — local only, Ctrl-C to stop.\n", scope)
 
 	// Under --all, let the watcher rescan the Cursor feed dir for workspaces
 	// that come online after startup.
@@ -230,8 +230,8 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 	summary, ok := w.LatestSummary()
 	out := cmd.OutOrStdout()
 	if !ok {
-		fmt.Fprintln(out, "No AI session cost recorded yet for this workspace.")
-		fmt.Fprintln(out, "Use Claude Code here, or run `promptconduit install cursor` and use Cursor, then try again.")
+		_, _ = fmt.Fprintln(out, "No AI session cost recorded yet for this workspace.")
+		_, _ = fmt.Fprintln(out, "Use Claude Code here, or run `promptconduit install cursor` and use Cursor, then try again.")
 		return nil
 	}
 	if costJSON {
@@ -239,7 +239,7 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintln(out, string(data))
+		_, _ = fmt.Fprintln(out, string(data))
 		return nil
 	}
 	renderSessionHuman(out, summary)
@@ -248,14 +248,14 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 
 // renderSessionHuman prints a friendly one-screen cost summary.
 func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
-	fmt.Fprintf(out, "AI session cost — %s  (%s)\n", s.Tool, s.Source)
-	fmt.Fprintf(out, "  Total: $%.4f %s\n", s.Totals.CostTotal, s.Totals.Currency)
+	_, _ = fmt.Fprintf(out, "AI session cost — %s  (%s)\n", s.Tool, s.Source)
+	_, _ = fmt.Fprintf(out, "  Total: $%.4f %s\n", s.Totals.CostTotal, s.Totals.Currency)
 	for _, m := range s.ByModel {
 		costStr := fmt.Sprintf("$%.4f", m.CostTotal)
 		if !m.ModelPriced {
 			costStr = "unpriced"
 		}
-		fmt.Fprintf(out, "    %-22s %-10s  in %d · out %d · cache-read %d · cache-write %d\n",
+		_, _ = fmt.Fprintf(out, "    %-22s %-10s  in %d · out %d · cache-read %d · cache-write %d\n",
 			m.Model, costStr, m.Tokens.Input, m.Tokens.Output, m.Tokens.CacheRead, m.Tokens.CacheWrite)
 	}
 }
@@ -300,28 +300,28 @@ func runCostHistory(cmd *cobra.Command, args []string) error {
 
 	out := cmd.OutOrStdout()
 	if costJSON {
-		fmt.Fprint(out, "[")
+		_, _ = fmt.Fprint(out, "[")
 		for i, dt := range days {
 			if i > 0 {
-				fmt.Fprint(out, ",")
+				_, _ = fmt.Fprint(out, ",")
 			}
-			fmt.Fprintf(out, `{"day":%q,"cost_total":%.6f,"input":%d,"output":%d,"currency":%q}`,
+			_, _ = fmt.Fprintf(out, `{"day":%q,"cost_total":%.6f,"input":%d,"output":%d,"currency":%q}`,
 				dt.day, dt.cost, dt.in, dt.out, cost.Currency)
 		}
-		fmt.Fprintln(out, "]")
+		_, _ = fmt.Fprintln(out, "]")
 		return nil
 	}
 
 	if len(days) == 0 {
-		fmt.Fprintln(out, "No cost history yet. Run `promptconduit cost watch` during a session.")
+		_, _ = fmt.Fprintln(out, "No cost history yet. Run `promptconduit cost watch` during a session.")
 		return nil
 	}
-	fmt.Fprintf(out, "%-12s %12s %12s %12s\n", "DAY", "COST (USD)", "INPUT", "OUTPUT")
+	_, _ = fmt.Fprintf(out, "%-12s %12s %12s %12s\n", "DAY", "COST (USD)", "INPUT", "OUTPUT")
 	var total float64
 	for _, dt := range days {
-		fmt.Fprintf(out, "%-12s %12.4f %12d %12d\n", dt.day, dt.cost, dt.in, dt.out)
+		_, _ = fmt.Fprintf(out, "%-12s %12.4f %12d %12d\n", dt.day, dt.cost, dt.in, dt.out)
 		total += dt.cost
 	}
-	fmt.Fprintf(out, "%-12s %12.4f\n", "TOTAL", total)
+	_, _ = fmt.Fprintf(out, "%-12s %12.4f\n", "TOTAL", total)
 	return nil
 }

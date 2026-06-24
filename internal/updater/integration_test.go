@@ -138,7 +138,7 @@ func TestApply_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downloadAndHash: %v", err)
 	}
-	defer os.Remove(tmpArchive)
+	defer func() { _ = os.Remove(tmpArchive) }()
 	if !strings.EqualFold(gotSum, wantSum) {
 		t.Fatalf("checksum mismatch: got %s, want %s", gotSum, wantSum)
 	}
@@ -189,7 +189,7 @@ func TestApply_ChecksumMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("downloadAndHash: %v", err)
 	}
-	defer os.Remove(tmpArchive)
+	defer func() { _ = os.Remove(tmpArchive) }()
 	if strings.EqualFold(gotSum, wantSum) {
 		t.Fatal("expected wrong bytes to produce a different sum")
 	}

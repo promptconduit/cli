@@ -151,17 +151,17 @@ func notifyNewer(cmd *cobra.Command, latest, releaseURL string, disabled bool) {
 		hint = "downloading in background; next invocation will use the new version"
 	}
 	w := cmd.ErrOrStderr()
-	fmt.Fprintf(w, "promptconduit: %s available (you have %s) — %s\n", latest, Version, hint)
+	_, _ = fmt.Fprintf(w, "promptconduit: %s available (you have %s) — %s\n", latest, Version, hint)
 	if releaseURL != "" {
-		fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+		_, _ = fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
 	}
 }
 
 func notifyUpgraded(cmd *cobra.Command, from, to, releaseURL string) {
 	w := cmd.ErrOrStderr()
-	fmt.Fprintf(w, "promptconduit: upgraded %s → %s\n", from, to)
+	_, _ = fmt.Fprintf(w, "promptconduit: upgraded %s → %s\n", from, to)
 	if releaseURL != "" {
-		fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+		_, _ = fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
 	}
 }
 

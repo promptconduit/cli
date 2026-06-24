@@ -33,7 +33,7 @@ func NewStateManager() (*StateManager, error) {
 
 	// Load existing state if available
 	if data, err := os.ReadFile(statePath); err == nil {
-		json.Unmarshal(data, sm.state)
+		_ = json.Unmarshal(data, sm.state)
 		// Ensure maps are initialized even after loading
 		if sm.state.SyncedFiles == nil {
 			sm.state.SyncedFiles = make(map[string]SyncedFileInfo)

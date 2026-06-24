@@ -163,7 +163,7 @@ func extractAttachmentsForPrompt(transcriptPath, expectedPrompt string) (bool, [
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to open transcript: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var matchingMessage *MessageWithContent
 	scanner := bufio.NewScanner(file)
@@ -277,7 +277,7 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open transcript: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read all lines to find the LAST user message (regardless of whether it has attachments)
 	// We only extract attachments if the LAST message contains them - this prevents
@@ -392,7 +392,7 @@ func ExtractPromptText(transcriptPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open transcript: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var lastText string
 	scanner := bufio.NewScanner(file)
@@ -419,7 +419,7 @@ func ExtractPromptText(transcriptPath string) (string, error) {
 					rawContent = content.Content
 				}
 			} else if msg.Content != nil {
-				json.Unmarshal(msg.Content, &rawContent)
+				_ = json.Unmarshal(msg.Content, &rawContent)
 			}
 
 			// Only process actual user prompts (skip tool_result messages)

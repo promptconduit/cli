@@ -118,7 +118,7 @@ func (c *Client) SendEnvelopeWithAttachments(env *envelope.RawEventEnvelope, att
 		if err != nil {
 			continue
 		}
-		part.Write(att.Data)
+		_, _ = part.Write(att.Data)
 	}
 
 	if err := writer.Close(); err != nil {
@@ -155,7 +155,7 @@ func (c *Client) SendEnvelopeWithAttachments(env *envelope.RawEventEnvelope, att
 			Error:   fmt.Sprintf("request failed: %v", err),
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, _ := io.ReadAll(resp.Body)
 
@@ -260,9 +260,8 @@ func (c *Client) sendAsyncUnix(envJSON []byte) error {
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
-	if err := cmd.Process.Release(); err != nil {
-		// Process already started, ignore error
-	}
+	// Process already started, ignore error
+	_ = cmd.Process.Release()
 
 	return nil
 }
@@ -331,7 +330,7 @@ func (c *Client) sendEnvelopeBlocking(envJSON []byte) error {
 		recordEventSend(envJSON, 0, time.Since(start), 1, err)
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
@@ -374,7 +373,7 @@ func (c *Client) sendRequest(path string, payload interface{}) *APIResponse {
 			Error:   fmt.Sprintf("request failed: %v", err),
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -468,7 +467,7 @@ func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSy
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -545,7 +544,7 @@ func (c *Client) InitChunkedUpload(req *ChunkedInitRequest) (*ChunkedInitRespons
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -585,7 +584,7 @@ func (c *Client) UploadChunk(req *ChunkedUploadRequest) (*ChunkedUploadResponse,
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -625,7 +624,7 @@ func (c *Client) CompleteChunkedUpload(req *ChunkedCompleteRequest) (*Transcript
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -679,7 +678,7 @@ func (c *Client) Get(path string, query map[string]string) *APIResponse {
 			Error:   fmt.Sprintf("request failed: %v", err),
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 
@@ -798,7 +797,7 @@ func (c *Client) GenerateSkills(force bool, repoName string) *APIResponse {
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body2, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -811,7 +810,7 @@ func (c *Client) GenerateSkills(force bool, repoName string) *APIResponse {
 	}
 
 	if resp.StatusCode >= 400 {
-		errMsg := "request failed"
+		var errMsg string
 		if detail, ok := data["detail"].(string); ok {
 			errMsg = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, detail)
 		} else {
@@ -867,7 +866,7 @@ func (c *Client) GetSkillCommandFile(id string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -896,7 +895,7 @@ func (c *Client) deleteRequest(path string) *APIResponse {
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	result := &APIResponse{StatusCode: resp.StatusCode, Success: resp.StatusCode >= 200 && resp.StatusCode < 300}
@@ -932,7 +931,7 @@ func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("request failed: %v", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	result := &APIResponse{StatusCode: resp.StatusCode, Success: resp.StatusCode >= 200 && resp.StatusCode < 300}

@@ -151,7 +151,7 @@ func (s *Store) ReadSpans(limit int, traceID string) ([]SpanRow, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var rows []SpanRow
 	scanner := bufio.NewScanner(f)

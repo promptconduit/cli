@@ -97,7 +97,7 @@ func followLog(cmd *cobra.Command) error {
 		return fmt.Errorf("create log dir: %w", err)
 	}
 	if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
-		f.Close()
+		_ = f.Close()
 	}
 
 	if tailPath, err := exec.LookPath("tail"); err == nil {
@@ -131,6 +131,6 @@ func pollFollow(cmd *cobra.Command, path string) error {
 				offset += int64(len(data))
 			}
 		}
-		f.Close()
+		_ = f.Close()
 	}
 }

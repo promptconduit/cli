@@ -137,7 +137,7 @@ func write(level, format string, args ...interface{}) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	msg := fmt.Sprintf(format, args...)
 	pid := os.Getpid()
@@ -194,7 +194,7 @@ func CopyTo(w io.Writer) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, err = io.Copy(w, f)
 	return err
 }

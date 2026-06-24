@@ -516,7 +516,7 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("Anthropic API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -581,7 +581,7 @@ func callViaOpenAI(apiKey, userPrompt string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("OpenAI API request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -817,7 +817,7 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]
 
 	if len(errs) > 0 {
 		for _, e := range errs {
-			fmt.Fprintf(os.Stderr, "  warning: %s\n", e)
+			_, _ = fmt.Fprintf(os.Stderr, "  warning: %s\n", e)
 		}
 		fmt.Println()
 	}
@@ -833,7 +833,7 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]
 			successCount, total, pluralS(total), skills[0].Name)
 		fmt.Println("Review and delete ~/.claude/skills/<name>/ for any you don't want.")
 	} else {
-		fmt.Fprintln(os.Stderr, "No skills written. Check that ~/.claude/skills/ is writable.")
+		_, _ = fmt.Fprintln(os.Stderr, "No skills written. Check that ~/.claude/skills/ is writable.")
 	}
 }
 

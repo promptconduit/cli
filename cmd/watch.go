@@ -59,7 +59,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "Watching %s — Ctrl-C to stop.\n", path)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Watching %s — Ctrl-C to stop.\n", path)
 
 	lines := outbound.Tail(ctx, path, watchLines)
 	for raw := range lines {
@@ -67,10 +67,10 @@ func runWatch(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			// Best-effort: show the unparseable raw line so the user
 			// can still see something went through.
-			fmt.Fprintln(cmd.OutOrStdout(), string(raw))
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), string(raw))
 			continue
 		}
-		fmt.Fprintln(cmd.OutOrStdout(), outbound.RenderSummary(entry, watchVerbose, color))
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), outbound.RenderSummary(entry, watchVerbose, color))
 	}
 
 	// Ctrl-C / SIGTERM is the normal way to leave watch; treat as a

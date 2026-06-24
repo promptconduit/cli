@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -68,16 +67,16 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if len(tools) == 0 {
-		fmt.Fprintln(cmd.ErrOrStderr(), "No tools selected.")
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "No tools selected.")
 		return nil
 	}
 
 	if installLocalOnly {
 		if err := persistLocalOnly(true); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not save local-only setting: %v\n", err)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not save local-only setting: %v\n", err)
 		} else {
-			fmt.Fprintln(cmd.OutOrStdout(), "Free / local-only mode enabled — events are captured locally and never sent.")
-			fmt.Fprintln(cmd.OutOrStdout())
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Free / local-only mode enabled — events are captured locally and never sent.")
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
 		}
 	}
 
@@ -92,7 +91,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 
 	for i, tool := range tools {
 		if i > 0 {
-			fmt.Fprintln(cmd.OutOrStdout())
+			_, _ = fmt.Fprintln(cmd.OutOrStdout())
 		}
 		if err := installTool(tool, exePath); err != nil {
 			return fmt.Errorf("install %s: %w", tool, err)
@@ -217,11 +216,11 @@ func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 // selectToolsInteractive prompts the user to pick tools by number or name.
 func selectToolsInteractive(cmd *cobra.Command) ([]string, error) {
 	out := cmd.OutOrStdout()
-	fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
+	_, _ = fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
 	for i, t := range installableTools {
-		fmt.Fprintf(out, "  %d) %s\n", i+1, t.label)
+		_, _ = fmt.Fprintf(out, "  %d) %s\n", i+1, t.label)
 	}
-	fmt.Fprint(out, "Enter numbers (e.g. 1,2), names, or 'all': ")
+	_, _ = fmt.Fprint(out, "Enter numbers (e.g. 1,2), names, or 'all': ")
 
 	line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
 	if err != nil && strings.TrimSpace(line) == "" {
@@ -660,12 +659,6 @@ func buildGeminiHooks(hookCmd string) map[string]interface{} {
 		// System alerts
 		"Notification": plainEvent(),
 	}
-}
-
-// isCommandAvailable checks if a command exists in PATH
-func isCommandAvailable(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
 }
 
 // installCodex registers our hook handler with OpenAI Codex CLI.
