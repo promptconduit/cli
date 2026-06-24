@@ -17,6 +17,7 @@ const (
 	EnvTool            = "PROMPTCONDUIT_TOOL"
 	EnvAutoUpdate      = "PROMPTCONDUIT_AUTO_UPDATE" // "0"/"false" disables background self-upgrade
 	EnvEventLog        = "PROMPTCONDUIT_EVENT_LOG"   // "0"/"false" disables the local ~/.promptconduit event log
+	EnvLocalOnly       = "PROMPTCONDUIT_LOCAL_ONLY"  // "1"/"true" forces Free / local-only mode (never send to the cloud)
 	EnvXDGConfigHome   = "XDG_CONFIG_HOME"
 	ConfigDirName      = "promptconduit" // ~/.config/promptconduit/
 	ConfigFileName     = "config.json"
@@ -35,6 +36,10 @@ type Config struct {
 	// to ~/.promptconduit/ (events.ndjson, errors.log, status.json). Zero
 	// value (false) leaves the event log enabled — it's on by default.
 	DisableEventLog bool `json:"disable_event_log,omitempty"`
+	// LocalOnly is the Free tier: events are captured to the local event log
+	// but NEVER sent to the cloud, regardless of whether an API key is set.
+	// Zero value (false) leaves cloud sync enabled (when an API key exists).
+	LocalOnly bool `json:"local_only,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -52,6 +57,7 @@ type FileConfig struct {
 	Timeout           int    `json:"timeout_seconds,omitempty"`
 	DisableAutoUpdate bool   `json:"disable_auto_update,omitempty"`
 	DisableEventLog   bool   `json:"disable_event_log,omitempty"`
+	LocalOnly         bool   `json:"local_only,omitempty"`
 }
 
 // EventLogEnabled reports whether the local ~/.promptconduit event log should
@@ -64,6 +70,14 @@ func (c *Config) EventLogEnabled() bool {
 // IsConfigured returns true if the API key is set
 func (c *Config) IsConfigured() bool {
 	return c.APIKey != ""
+}
+
+// ShouldSend reports whether captured events should be sent to the cloud. It is
+// the single send gate: events go to the platform only when an API key is set
+// AND local-only mode is off. A missing API key OR LocalOnly both mean Free /
+// local-only — events are still captured locally, just never transmitted.
+func (c *Config) ShouldSend() bool {
+	return c.IsConfigured() && !c.LocalOnly
 }
 
 // ConfigPath returns the path to the config file (XDG standard)
@@ -154,7 +168,7 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog || fc.LocalOnly {
 		return &Config{
 			APIKey:            fc.APIKey,
 			APIURL:            fc.APIURL,
@@ -162,6 +176,7 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 			TimeoutSeconds:    fc.Timeout,
 			DisableAutoUpdate: fc.DisableAutoUpdate,
 			DisableEventLog:   fc.DisableEventLog,
+			LocalOnly:         fc.LocalOnly,
 		}
 	}
 
@@ -199,6 +214,9 @@ func LoadConfig() *Config {
 			if fileCfg.DisableEventLog {
 				cfg.DisableEventLog = true
 			}
+			if fileCfg.LocalOnly {
+				cfg.LocalOnly = true
+			}
 		}
 	}
 
@@ -212,6 +230,12 @@ func LoadConfig() *Config {
 	// anything else (or unset) leaves whatever the file config decided.
 	if v := os.Getenv(EnvEventLog); v == "0" || v == "false" || v == "no" {
 		cfg.DisableEventLog = true
+	}
+
+	// PROMPTCONDUIT_LOCAL_ONLY=1/true/yes forces Free / local-only mode;
+	// anything else (or unset) leaves whatever the file config decided.
+	if v := os.Getenv(EnvLocalOnly); v == "1" || v == "true" || v == "yes" {
+		cfg.LocalOnly = true
 	}
 
 	// Apply defaults
