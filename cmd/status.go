@@ -23,13 +23,24 @@ var statusCmd = &cobra.Command{
 func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("PromptConduit CLI v%s\n\n", Version)
 
-	// Check API key configuration
+	// Mode + API key. Free / local-only is a first-class mode, not an error:
+	// events are captured locally and nothing is sent. Cloud sync requires an
+	// API key and local_only off.
 	cfg := client.LoadConfig()
-	if cfg.IsConfigured() {
+	if cfg.ShouldSend() {
+		fmt.Println("Mode:    Cloud sync — events sent to the platform")
 		fmt.Printf("API Key: %s (configured)\n", client.MaskAPIKey(cfg.APIKey))
 	} else {
-		fmt.Println("API Key: Not configured")
-		fmt.Println("  Set with: promptconduit config set --api-key=\"your-api-key\"")
+		fmt.Println("Mode:    Free (local-only) — events captured locally, nothing sent")
+		if cfg.LocalOnly {
+			fmt.Println("  local_only is on. Enable cloud sync with: promptconduit config set --local-only=false")
+		}
+		if cfg.IsConfigured() {
+			fmt.Printf("API Key: %s (configured, unused in local-only mode)\n", client.MaskAPIKey(cfg.APIKey))
+		} else {
+			fmt.Println("API Key: Not set — add one to enable cloud sync:")
+			fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+		}
 	}
 
 	fmt.Printf("API URL: %s\n", cfg.APIURL)
@@ -67,7 +78,14 @@ func printEventLogStatus(cfg *client.Config) {
 	if st.LastError != "" {
 		fmt.Printf("  Last error:   %s — %s\n", localTime(st.LastErrorAt), st.LastError)
 	}
-	fmt.Printf("  Payloads:     %s\n", eventlog.EventsPath())
+	// Captured events: the send-independent local stream (events.jsonl), written
+	// for every event even in Free / local-only mode.
+	fmt.Printf("  Captured:     %s", eventlog.EventsJSONLPath())
+	if n, ok := eventlog.CountCaptured(); ok {
+		fmt.Printf(" (%d events)", n)
+	}
+	fmt.Println()
+	fmt.Printf("  Sent log:     %s\n", eventlog.EventsPath())
 	fmt.Println("  Inspect with: promptconduit events")
 	fmt.Println()
 }

@@ -88,6 +88,28 @@ promptconduit sync --limit 10   # Sync only N most recent
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
 - **Config file over env vars**: Prefer `~/.config/promptconduit/config.json` for multi-environment setups
 - **Async sending**: Events are sent asynchronously to avoid blocking the AI tool
+- **Capture is decoupled from sending**: `processHookEvent` always builds the
+  envelope and writes it to the local capture log (`eventlog.RecordCapture` →
+  `~/.promptconduit/events.jsonl`) *before* deciding whether to send. The single
+  send gate is `cfg.ShouldSend()` (`internal/client/config.go`) = API key set
+  AND not local-only. This is what makes the Free tier work.
+
+## Free / local-only tier
+
+The **Free tier** is enforced entirely client-side: when `cfg.ShouldSend()` is
+false — i.e. no API key, or `local_only` is set (config `local_only`, flag
+`--local-only`, or `PROMPTCONDUIT_LOCAL_ONLY=1`) — events are captured to
+`~/.promptconduit/events.jsonl` and **never POSTed**. No platform change is
+required. A missing API key is a normal Free state, not an error (the old
+`not_configured` drop/error path was removed).
+
+Two distinct local logs under `~/.promptconduit/`:
+- `events.jsonl` — raw event envelopes, one per line, written at capture time
+  (before send) for *every* event. The stable substrate external tools read.
+- `events.ndjson` — send-outcome diagnostics (status/latency), written only when
+  an event is actually sent. Surfaced by `promptconduit status` / `events`.
+
+Both are gated by the same `PROMPTCONDUIT_EVENT_LOG` knob (on by default).
 
 ## Branch Naming
 
