@@ -263,6 +263,51 @@ func TestCostEventGroupingKeys(t *testing.T) {
 	}
 }
 
+// TestWatchStreamCarriesGroupingKeys is the end-to-end guard for issue #72's
+// acceptance criterion: the extension does not read CostEvent structs, it reads
+// `cost watch --json` lines off the watcher's stream. So drive a Cursor event
+// through the same emit path `cost watch` uses (streamCostEventLine -> emitJSON)
+// and assert the emitted cost_event line carries conversation_id, session_id,
+// and request_id with the exact JSON field names.
+func TestWatchStreamCarriesGroupingKeys(t *testing.T) {
+	tbl := mustTable(t)
+	var buf bytes.Buffer
+	w := NewWatcher(tbl, nil, &buf, true) // emit per-turn cost events, as `cost watch` does
+
+	raw := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"conv_42","generation_id":"gen_99","session_id":"sess_7","input_tokens":100,"output_tokens":50,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	ev, _, ok := ParseCursorHookPayload(raw, tbl)
+	if !ok {
+		t.Fatal("cursor payload should parse")
+	}
+	data, _ := json.Marshal(ev)
+	w.streamCostEventLine(data) // exactly what the Cursor feed tail does
+
+	// Find the emitted cost_event line and assert its grouping keys, parsing it
+	// the way the extension would (raw JSON, exact field names).
+	var found bool
+	for _, line := range bytes.Split(buf.Bytes(), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			Kind           string `json:"kind"`
+			ConversationID string `json:"conversation_id"`
+			SessionID      string `json:"session_id"`
+			RequestID      string `json:"request_id"`
+		}
+		if json.Unmarshal(line, &probe) != nil || probe.Kind != "cost_event" {
+			continue
+		}
+		found = true
+		if probe.ConversationID != "conv_42" || probe.SessionID != "sess_7" || probe.RequestID != "gen_99" {
+			t.Fatalf("emitted cost_event line missing grouping keys: %s", line)
+		}
+	}
+	if !found {
+		t.Fatalf("no cost_event line emitted on the watch stream; got:\n%s", buf.Bytes())
+	}
+}
+
 // assertGroupingJSON marshals an event and checks the grouping keys round-trip
 // with the exact JSON field names the extension reads.
 func assertGroupingJSON(t *testing.T, ev CostEvent, wantConv, wantSess, wantReq string) {
