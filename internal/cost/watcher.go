@@ -40,6 +40,11 @@ type Watcher struct {
 type sessionState struct {
 	summary SessionSummary
 	byModel map[string]*ModelTotal
+	// cost accumulates the per-component dollar breakdown across the session.
+	// SessionTotal only keeps a flat CostTotal, but the session-level Signals
+	// (cache-miss cost share) need the Input/CacheWrite components, so we sum
+	// them here as turns are applied.
+	cost Cost
 }
 
 // NewWatcher builds a watcher. Pass emitEvents=false for one-shot summaries
@@ -327,6 +332,14 @@ func (w *Watcher) apply(ev CostEvent) bool {
 	t.CostTotal += ev.Cost.Total
 	t.Currency = Currency
 
+	// Sum the per-component cost so session Signals can derive cache-miss cost
+	// share (which needs the input + cache-write components, not just the total).
+	st.cost.Input += ev.Cost.Input
+	st.cost.Output += ev.Cost.Output
+	st.cost.CacheRead += ev.Cost.CacheRead
+	st.cost.CacheWrite += ev.Cost.CacheWrite
+	st.cost.Total += ev.Cost.Total
+
 	st.summary.Tools.add(ev.Tools)
 
 	mt := st.byModel[ev.Model]
@@ -386,7 +399,28 @@ func (w *Watcher) LatestSummary() (SessionSummary, bool) {
 	sort.Slice(summary.ByModel, func(i, j int) bool {
 		return summary.ByModel[i].CostTotal > summary.ByModel[j].CostTotal
 	})
+	summary.Signals = sessionSignals(summary, st.cost)
 	return summary, true
+}
+
+// sessionSignals derives the session-level Signals from accumulated totals (not
+// by averaging per-turn signals): the cache/input rates are recomputed from the
+// summed token counts, and cache-miss cost share from the summed cost
+// components. Tier follows the dominant (costliest) model, which is ByModel[0]
+// after the caller sorts. accCost is the per-component cost sum kept in
+// sessionState. Must be called after ByModel is populated and sorted.
+func sessionSignals(s SessionSummary, accCost Cost) Signals {
+	tok := Tokens{
+		Input:      s.Totals.Input,
+		Output:     s.Totals.Output,
+		CacheRead:  s.Totals.CacheRead,
+		CacheWrite: s.Totals.CacheWrite,
+	}
+	model, priced := "", false
+	if len(s.ByModel) > 0 {
+		model, priced = s.ByModel[0].Model, s.ByModel[0].ModelPriced
+	}
+	return computeSignals(tok, accCost, model, priced, s.Tools.Total)
 }
 
 // emitSummary writes the current SessionSummary for a session.
@@ -402,11 +436,13 @@ func (w *Watcher) emitSummary(sessionID string) {
 	for _, mt := range st.byModel {
 		summary.ByModel = append(summary.ByModel, *mt)
 	}
+	accCost := st.cost
 	w.mu.Unlock()
 
 	sort.Slice(summary.ByModel, func(i, j int) bool {
 		return summary.ByModel[i].CostTotal > summary.ByModel[j].CostTotal
 	})
+	summary.Signals = sessionSignals(summary, accCost)
 	w.emitJSON(summary)
 }
 

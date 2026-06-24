@@ -3,6 +3,7 @@ package cost
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -547,6 +548,154 @@ func TestEncodeProjectPath(t *testing.T) {
 	// Dots in repo names also become dashes (e.g. havoptic.com).
 	if got := encodeProjectPath("/a/havoptic.com"); got != "-a-havoptic-com" {
 		t.Fatalf("dot encoding = %q, want -a-havoptic-com", got)
+	}
+}
+
+// approx is a small float tolerance helper for the signal-ratio assertions.
+func approx(got, want float64) bool { return math.Abs(got-want) < 1e-9 }
+
+// TestSignalFormulas pins the three derived ratios against hand-computed values
+// and exercises the divide-by-zero guards. The cache-hit formula is the one
+// called out in #71: cache_read / (cache_read + cache_creation + input).
+func TestSignalFormulas(t *testing.T) {
+	// input 100, cache_read 700, cache_creation 200 -> denom 1000.
+	if got := cacheHitRate(100, 700, 200); !approx(got, 0.7) {
+		t.Fatalf("cacheHitRate = %v, want 0.7", got)
+	}
+	if got := inputTokenShare(100, 700, 200); !approx(got, 0.1) {
+		t.Fatalf("inputTokenShare = %v, want 0.1", got)
+	}
+	// No input-side tokens at all -> 0, not NaN/panic.
+	if got := cacheHitRate(0, 0, 0); got != 0 {
+		t.Fatalf("cacheHitRate(0,0,0) = %v, want 0", got)
+	}
+	if got := inputTokenShare(0, 0, 0); got != 0 {
+		t.Fatalf("inputTokenShare(0,0,0) = %v, want 0", got)
+	}
+
+	// cache-miss cost share = (input + cache_write) / total.
+	c := Cost{Input: 2, Output: 1, CacheRead: 1, CacheWrite: 3, Total: 7}
+	if got := cacheMissCostShare(c); !approx(got, 5.0/7.0) {
+		t.Fatalf("cacheMissCostShare = %v, want %v", got, 5.0/7.0)
+	}
+	if got := cacheMissCostShare(Cost{Total: 0}); got != 0 {
+		t.Fatalf("cacheMissCostShare with zero total = %v, want 0", got)
+	}
+}
+
+// TestModelTier covers the coarse, names-only tier buckets, including the
+// unpriced override (an unpriced model is always TierUnknown).
+func TestModelTier(t *testing.T) {
+	cases := []struct {
+		model  string
+		priced bool
+		want   string
+	}{
+		{"claude-opus-4-8", true, TierPremium},
+		{"gpt-5.5", true, TierPremium},
+		{"claude-sonnet-4-5", true, TierStandard},
+		{"composer-2.5-fast", true, TierStandard},
+		{"claude-3-5-haiku", true, TierEconomy},
+		{"gemini-2.0-flash", true, TierEconomy},
+		{"gpt-4o-mini", true, TierEconomy},      // economy markers win over premium gpt-4
+		{"claude-opus-4-8", false, TierUnknown}, // unpriced overrides everything
+		{"", true, TierUnknown},
+	}
+	for _, tc := range cases {
+		if got := modelTier(tc.model, tc.priced); got != tc.want {
+			t.Errorf("modelTier(%q, priced=%v) = %q, want %q", tc.model, tc.priced, got, tc.want)
+		}
+	}
+}
+
+// TestParseClaudeCodeLine_Signals checks the per-request signals are wired onto
+// the CostEvent from the same transcript line, with the exact ratios for a real
+// usage block (input 72, cache_read 132405, cache_creation 19640).
+func TestParseClaudeCodeLine_Signals(t *testing.T) {
+	tbl := mustTable(t)
+	line := []byte(`{"type":"assistant","requestId":"req_sig","sessionId":"s","timestamp":"2026-06-24T00:00:00Z","cwd":"/p","message":{"model":"claude-opus-4-8","content":[{"type":"tool_use","id":"t1","name":"Bash"}],"usage":{"input_tokens":72,"output_tokens":3674,"cache_read_input_tokens":132405,"cache_creation_input_tokens":19640,"cache_creation":{"ephemeral_1h_input_tokens":19640,"ephemeral_5m_input_tokens":0}}}}`)
+	ev, _, ok := parseClaudeCodeLine(line, tbl, "fallback")
+	if !ok {
+		t.Fatal("assistant line should parse")
+	}
+	denom := float64(72 + 132405 + 19640)
+	wantHit := 132405.0 / denom
+	wantInShare := 72.0 / denom
+	if !approx(ev.Signals.CacheHitRate, wantHit) {
+		t.Fatalf("cache_hit_rate = %v, want %v", ev.Signals.CacheHitRate, wantHit)
+	}
+	if !approx(ev.Signals.InputTokenShare, wantInShare) {
+		t.Fatalf("input_token_share = %v, want %v", ev.Signals.InputTokenShare, wantInShare)
+	}
+	if ev.Signals.Tier != TierPremium || !ev.Signals.ModelPriced {
+		t.Fatalf("tier/priced wrong: %q priced=%v", ev.Signals.Tier, ev.Signals.ModelPriced)
+	}
+	if ev.Signals.ToolCalls != 1 {
+		t.Fatalf("tool_calls signal = %d, want 1 (mirrors Tools.Total)", ev.Signals.ToolCalls)
+	}
+	// cache-miss cost share must be in (0,1) for this priced, cache-heavy turn.
+	if ev.Signals.CacheMissCostShare <= 0 || ev.Signals.CacheMissCostShare >= 1 {
+		t.Fatalf("cache_miss_cost_share = %v, want in (0,1)", ev.Signals.CacheMissCostShare)
+	}
+}
+
+// TestParseCursorHookPayload_Signals confirms Cursor events also carry signals
+// (derived from the exact usage block) even though their tool summary is empty.
+func TestParseCursorHookPayload_Signals(t *testing.T) {
+	tbl := mustTable(t)
+	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":300,"output_tokens":50,"cache_read_tokens":700,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	ev, _, ok := ParseCursorHookPayload(payload, tbl)
+	if !ok {
+		t.Fatal("cursor payload should parse")
+	}
+	// denom = 300 + 700 + 0 = 1000 -> hit 0.7, input share 0.3.
+	if !approx(ev.Signals.CacheHitRate, 0.7) {
+		t.Fatalf("cursor cache_hit_rate = %v, want 0.7", ev.Signals.CacheHitRate)
+	}
+	if !approx(ev.Signals.InputTokenShare, 0.3) {
+		t.Fatalf("cursor input_token_share = %v, want 0.3", ev.Signals.InputTokenShare)
+	}
+	if ev.Signals.Tier != TierStandard {
+		t.Fatalf("composer tier = %q, want standard", ev.Signals.Tier)
+	}
+	if ev.Signals.ToolCalls != 0 {
+		t.Fatalf("cursor tool_calls = %d, want 0 (no tool summary)", ev.Signals.ToolCalls)
+	}
+}
+
+// TestSessionSignalsFromTotals verifies the session-level Signals are recomputed
+// from the accumulated totals (not averaged per turn). Two turns with very
+// different cache profiles must yield a signal derived from their SUM.
+func TestSessionSignalsFromTotals(t *testing.T) {
+	tbl := mustTable(t)
+	w := NewWatcher(tbl, nil, io.Discard, false)
+
+	// Turn 1: cache-cold (all input). Turn 2: cache-hot (all cache_read).
+	cold, _, ok := parseClaudeCodeLine([]byte(`{"type":"assistant","requestId":"c1","sessionId":"s","timestamp":"2026-06-24T00:00:00Z","cwd":"/p","message":{"model":"claude-opus-4-8","usage":{"input_tokens":1000,"output_tokens":10}}}`), tbl, "s")
+	if !ok {
+		t.Fatal("cold turn should parse")
+	}
+	hot, _, ok := parseClaudeCodeLine([]byte(`{"type":"assistant","requestId":"c2","sessionId":"s","timestamp":"2026-06-24T00:00:01Z","cwd":"/p","message":{"model":"claude-opus-4-8","usage":{"input_tokens":0,"output_tokens":10,"cache_read_input_tokens":3000}}}`), tbl, "s")
+	if !ok {
+		t.Fatal("hot turn should parse")
+	}
+	w.apply(cold)
+	w.apply(hot)
+
+	s, ok := w.LatestSummary()
+	if !ok {
+		t.Fatal("expected a session summary")
+	}
+	// Session cache_read 3000, input 1000, cache_creation 0 -> denom 4000.
+	wantHit := 3000.0 / 4000.0
+	if !approx(s.Signals.CacheHitRate, wantHit) {
+		t.Fatalf("session cache_hit_rate = %v, want %v (from summed totals)", s.Signals.CacheHitRate, wantHit)
+	}
+	if !approx(s.Signals.InputTokenShare, 0.25) {
+		t.Fatalf("session input_token_share = %v, want 0.25", s.Signals.InputTokenShare)
+	}
+	if s.Signals.Tier != TierPremium {
+		t.Fatalf("session tier = %q, want premium (dominant model)", s.Signals.Tier)
 	}
 }
 

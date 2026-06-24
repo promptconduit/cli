@@ -262,6 +262,18 @@ func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
 	if s.Tools.Total > 0 {
 		fmt.Fprintf(out, "  Tools: %d call(s)%s\n", s.Tools.Total, formatToolBreakdown(s.Tools.ByName))
 	}
+	renderSignalsHuman(out, s.Signals)
+}
+
+// renderSignalsHuman prints the derived cost-reduction signals as percentages.
+// Numbers only — no prompt content. Skipped entirely for an unpriced session,
+// where the cost-share signal would be a meaningless 0.
+func renderSignalsHuman(out io.Writer, sig cost.Signals) {
+	fmt.Fprintf(out, "  Signals: cache-hit %.0f%% · input-share %.0f%% · tier %s\n",
+		sig.CacheHitRate*100, sig.InputTokenShare*100, sig.Tier)
+	if sig.ModelPriced {
+		fmt.Fprintf(out, "           cache-miss cost share %.0f%%\n", sig.CacheMissCostShare*100)
+	}
 }
 
 // formatToolBreakdown renders a per-tool count like "  (Read ×3, Bash ×1)",

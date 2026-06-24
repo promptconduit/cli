@@ -241,6 +241,14 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		}
 	}
 
+	tokens := Tokens{
+		Input:      u.InputTokens,
+		Output:     u.OutputTokens,
+		CacheRead:  u.CacheReadInputTokens,
+		CacheWrite: cacheWriteTokens,
+	}
+	tools := summarizeToolNames(toolNames)
+
 	ev = CostEvent{
 		V:           SchemaVersion,
 		Kind:        "cost_event",
@@ -251,15 +259,11 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		Model:       l.Message.Model,
 		ModelPriced: priced,
 		Source:      SourceExact,
-		Tokens: Tokens{
-			Input:      u.InputTokens,
-			Output:     u.OutputTokens,
-			CacheRead:  u.CacheReadInputTokens,
-			CacheWrite: cacheWriteTokens,
-		},
-		Cost:    c,
-		CwdBase: filepath.Base(l.Cwd),
-		Tools:   summarizeToolNames(toolNames),
+		Tokens:      tokens,
+		Cost:        c,
+		CwdBase:     filepath.Base(l.Cwd),
+		Tools:       tools,
+		Signals:     computeSignals(tokens, c, l.Message.Model, priced, tools.Total),
 	}
 	return ev, dedupKey, true
 }
