@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -258,6 +259,37 @@ func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
 		fmt.Fprintf(out, "    %-22s %-10s  in %d · out %d · cache-read %d · cache-write %d\n",
 			m.Model, costStr, m.Tokens.Input, m.Tokens.Output, m.Tokens.CacheRead, m.Tokens.CacheWrite)
 	}
+	if s.Tools.Total > 0 {
+		fmt.Fprintf(out, "  Tools: %d call(s)%s\n", s.Tools.Total, formatToolBreakdown(s.Tools.ByName))
+	}
+}
+
+// formatToolBreakdown renders a per-tool count like "  (Read ×3, Bash ×1)",
+// sorted by count desc then name. Names only — no inputs are ever shown.
+// Returns "" when there's no breakdown.
+func formatToolBreakdown(byName map[string]int) string {
+	if len(byName) == 0 {
+		return ""
+	}
+	type tc struct {
+		name  string
+		count int
+	}
+	tcs := make([]tc, 0, len(byName))
+	for n, c := range byName {
+		tcs = append(tcs, tc{n, c})
+	}
+	sort.Slice(tcs, func(i, j int) bool {
+		if tcs[i].count != tcs[j].count {
+			return tcs[i].count > tcs[j].count
+		}
+		return tcs[i].name < tcs[j].name
+	})
+	parts := make([]string, len(tcs))
+	for i, t := range tcs {
+		parts[i] = fmt.Sprintf("%s ×%d", t.name, t.count)
+	}
+	return "  (" + strings.Join(parts, ", ") + ")"
 }
 
 func runCostHistory(cmd *cobra.Command, args []string) error {

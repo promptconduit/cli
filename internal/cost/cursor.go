@@ -76,6 +76,14 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 	mp, priced := table.ResolvePrice(p.Model)
 	c, cacheWriteTokens := CostForUsage(usage, mp)
 
+	// Tool-call summary (schema v2): left empty for Cursor. The cost event is
+	// derived solely from the `stop` / `afterAgentResponse` payload, which
+	// carries token counts but no tool names. Cursor's per-tool hooks
+	// (`preToolUse`, `afterFileEdit`, `beforeShellExecution`, …) fire in
+	// separate processes earlier in the turn, and Cursor does not guarantee a
+	// stable `generation_id` on them to join back to this final event. Rather
+	// than emit a wrong or partial count, we leave Tools zero-valued
+	// (Total: 0, ByName omitted) — correctness over completeness (see issue #70).
 	ev = CostEvent{
 		V:           SchemaVersion,
 		Kind:        "cost_event",
