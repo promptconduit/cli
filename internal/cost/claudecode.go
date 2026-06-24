@@ -166,7 +166,11 @@ type ccLine struct {
 	Cwd       string `json:"cwd"`
 	Message   struct {
 		Model string `json:"model"`
-		Usage struct {
+		// Content holds the assistant turn's blocks. We read only the `type`
+		// and (for tool_use) the `name` of each — never the `input`, which
+		// carries file paths / commands / prompt text. See ccContentBlock.
+		Content []ccContentBlock `json:"content"`
+		Usage   struct {
 			InputTokens              int64 `json:"input_tokens"`
 			OutputTokens             int64 `json:"output_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
@@ -177,6 +181,15 @@ type ccLine struct {
 			} `json:"cache_creation"`
 		} `json:"usage"`
 	} `json:"message"`
+}
+
+// ccContentBlock is the privacy-narrowed view of one assistant content block.
+// It deliberately omits `input` (and `text`/`thinking`) so a tool call's
+// arguments can never leak into a cost event — only the tool's Name is read,
+// and only for tool_use blocks.
+type ccContentBlock struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
 // parseClaudeCodeLine turns one transcript line into a priced CostEvent. The
@@ -218,6 +231,16 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		sessionID = sessionFallback
 	}
 
+	// Collect the names of any tool_use blocks in this assistant turn. The
+	// transcript is the same source the cost event already parses, so no extra
+	// I/O or join is needed. Names only — inputs are never read.
+	var toolNames []string
+	for _, b := range l.Message.Content {
+		if b.Type == "tool_use" {
+			toolNames = append(toolNames, b.Name)
+		}
+	}
+
 	ev = CostEvent{
 		V:           SchemaVersion,
 		Kind:        "cost_event",
@@ -236,6 +259,7 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		},
 		Cost:    c,
 		CwdBase: filepath.Base(l.Cwd),
+		Tools:   summarizeToolNames(toolNames),
 	}
 	return ev, dedupKey, true
 }

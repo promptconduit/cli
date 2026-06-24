@@ -137,6 +137,96 @@ func TestParseClaudeCodeLine(t *testing.T) {
 	}
 }
 
+// TestSummarizeToolNames covers the names-only roll-up helper: counts, the
+// per-name map, empty-name skipping, and the empty input case.
+func TestSummarizeToolNames(t *testing.T) {
+	s := summarizeToolNames([]string{"Read", "Bash", "Read", ""})
+	if s.Total != 3 {
+		t.Fatalf("total = %d, want 3 (empty name skipped)", s.Total)
+	}
+	if s.ByName["Read"] != 2 || s.ByName["Bash"] != 1 {
+		t.Fatalf("by_name = %v, want Read:2 Bash:1", s.ByName)
+	}
+	if _, ok := s.ByName[""]; ok {
+		t.Fatal("empty tool name must never be recorded")
+	}
+
+	empty := summarizeToolNames(nil)
+	if empty.Total != 0 || empty.ByName != nil {
+		t.Fatalf("no tools should yield zero summary, got %+v", empty)
+	}
+}
+
+// TestParseClaudeCodeLine_ToolSummary verifies the per-request tool-call
+// summary is derived from the assistant turn's tool_use blocks (names only),
+// from the same transcript line the cost event already parses.
+func TestParseClaudeCodeLine_ToolSummary(t *testing.T) {
+	tbl := mustTable(t)
+
+	// Two tool_use blocks (Read twice) plus a text block, all in one turn.
+	line := []byte(`{"type":"assistant","requestId":"req_tools","sessionId":"s","timestamp":"2026-06-24T00:00:00Z","cwd":"/p","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"on it"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/etc/passwd"}},{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/secret"}}],"usage":{"input_tokens":10,"output_tokens":20}}}`)
+	ev, _, ok := parseClaudeCodeLine(line, tbl, "fallback")
+	if !ok {
+		t.Fatal("assistant line with usage should parse")
+	}
+	if ev.Tools.Total != 2 {
+		t.Fatalf("tools total = %d, want 2", ev.Tools.Total)
+	}
+	if ev.Tools.ByName["Read"] != 2 {
+		t.Fatalf("Read count = %d, want 2", ev.Tools.ByName["Read"])
+	}
+
+	// Privacy invariant: serialized event must not leak any tool input. The
+	// token-count fields legitimately use the key "input", so we assert on the
+	// tool-input KEY ("file_path") and its VALUES (the actual paths) instead.
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, leak := range []string{"file_path", "/etc/passwd", "/secret"} {
+		if bytes.Contains(data, []byte(leak)) {
+			t.Fatalf("serialized cost event leaked tool content %q: %s", leak, data)
+		}
+	}
+
+	// A turn with no tool_use blocks yields an empty (omitted) summary.
+	noTools := []byte(`{"type":"assistant","requestId":"req_none","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1,"output_tokens":1}}}`)
+	evN, _, ok := parseClaudeCodeLine(noTools, tbl, "fallback")
+	if !ok {
+		t.Fatal("text-only assistant line should still parse for cost")
+	}
+	if evN.Tools.Total != 0 || evN.Tools.ByName != nil {
+		t.Fatalf("no-tool turn should have empty summary, got %+v", evN.Tools)
+	}
+}
+
+// TestSessionSummaryToolAggregation verifies per-request tool summaries roll
+// up into the session-level SessionSummary.Tools the watcher emits.
+func TestSessionSummaryToolAggregation(t *testing.T) {
+	w := NewWatcher(nil, nil, nil, false)
+	w.apply(CostEvent{
+		Kind: "cost_event", Tool: ToolClaudeCode, SessionID: "s", RequestID: "r1",
+		Timestamp: "2026-06-24T00:00:00Z", Model: "m",
+		Tools: summarizeToolNames([]string{"Read", "Bash"}),
+	})
+	w.apply(CostEvent{
+		Kind: "cost_event", Tool: ToolClaudeCode, SessionID: "s", RequestID: "r2",
+		Timestamp: "2026-06-24T00:00:01Z", Model: "m",
+		Tools: summarizeToolNames([]string{"Read"}),
+	})
+
+	s, ok := w.LatestSummary()
+	if !ok {
+		t.Fatal("expected a session summary")
+	}
+	if s.Tools.Total != 3 {
+		t.Fatalf("session tool total = %d, want 3", s.Tools.Total)
+	}
+	if s.Tools.ByName["Read"] != 2 || s.Tools.ByName["Bash"] != 1 {
+		t.Fatalf("aggregated by_name = %v, want Read:2 Bash:1", s.Tools.ByName)
+	}
+}
+
 // TestParseCursorHookPayload uses the real Cursor hook shape captured from the
 // M0 probe: top-level token fields, model, conversation/generation ids.
 func TestParseCursorHookPayload(t *testing.T) {
