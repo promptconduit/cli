@@ -197,6 +197,93 @@ func TestParseCursorHookPayload(t *testing.T) {
 	}
 }
 
+// TestCostEventGroupingKeys is a regression guard for issue #72: the editor
+// extension groups cost by "agent tab" using (session_id, conversation_id) and
+// dedups turns by request_id, so every emitted CostEvent must carry the keys
+// its source provides — and they must survive JSON serialization, since the
+// extension reads `cost watch --json` lines, not Go structs.
+func TestCostEventGroupingKeys(t *testing.T) {
+	tbl := mustTable(t)
+
+	// Cursor sends distinct conversation_id, generation_id, and session_id.
+	// All three must land on the event as distinct keys (conversation_id must
+	// NOT be conflated into session_id).
+	cursorRaw := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"conv_42","generation_id":"gen_99","session_id":"sess_7","input_tokens":100,"output_tokens":50,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	cur, _, ok := ParseCursorHookPayload(cursorRaw, tbl)
+	if !ok {
+		t.Fatal("cursor payload should parse")
+	}
+	if cur.SessionID != "sess_7" {
+		t.Fatalf("cursor session_id = %q, want sess_7", cur.SessionID)
+	}
+	if cur.ConversationID != "conv_42" {
+		t.Fatalf("cursor conversation_id = %q, want conv_42", cur.ConversationID)
+	}
+	if cur.RequestID != "gen_99" {
+		t.Fatalf("cursor request_id = %q, want gen_99 (generation_id)", cur.RequestID)
+	}
+	// conversation_id and session_id must be carried separately, not aliased.
+	if cur.ConversationID == cur.SessionID {
+		t.Fatal("cursor conversation_id and session_id must be distinct keys")
+	}
+
+	// The JSON the extension consumes must expose the grouping keys.
+	assertGroupingJSON(t, cur, "conv_42", "sess_7", "gen_99")
+
+	// When Cursor omits session_id, fall back to conversation_id so the
+	// session grouping key is never empty.
+	noSess := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"conv_only","generation_id":"gen_x","input_tokens":10,"output_tokens":5,"cache_read_tokens":0,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	curNS, _, ok := ParseCursorHookPayload(noSess, tbl)
+	if !ok {
+		t.Fatal("cursor payload without session_id should still parse")
+	}
+	if curNS.SessionID != "conv_only" || curNS.ConversationID != "conv_only" {
+		t.Fatalf("missing session_id should fall back to conversation_id: %+v", curNS)
+	}
+
+	// Claude Code carries session_id and request_id; it has no separate
+	// conversation id, so conversation_id is empty and omitted from JSON.
+	ccRaw := []byte(`{"type":"assistant","requestId":"req_abc","sessionId":"sess_cc","timestamp":"2026-06-13T12:00:00Z","cwd":"/Users/x/tolken","message":{"model":"claude-opus-4-8","usage":{"input_tokens":72,"output_tokens":3674,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}`)
+	cc, _, ok := parseClaudeCodeLine(ccRaw, tbl, "fallback")
+	if !ok {
+		t.Fatal("claude code line should parse")
+	}
+	if cc.SessionID != "sess_cc" || cc.RequestID != "req_abc" {
+		t.Fatalf("claude code grouping keys wrong: session=%q request=%q", cc.SessionID, cc.RequestID)
+	}
+	if cc.ConversationID != "" {
+		t.Fatalf("claude code has no conversation id; got %q", cc.ConversationID)
+	}
+	data, err := json.Marshal(cc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(data), "conversation_id") {
+		t.Fatalf("empty conversation_id must be omitted from JSON: %s", data)
+	}
+}
+
+// assertGroupingJSON marshals an event and checks the grouping keys round-trip
+// with the exact JSON field names the extension reads.
+func assertGroupingJSON(t *testing.T, ev CostEvent, wantConv, wantSess, wantReq string) {
+	t.Helper()
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got struct {
+		ConversationID string `json:"conversation_id"`
+		SessionID      string `json:"session_id"`
+		RequestID      string `json:"request_id"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.ConversationID != wantConv || got.SessionID != wantSess || got.RequestID != wantReq {
+		t.Fatalf("grouping keys in JSON = %+v; want conv=%q sess=%q req=%q", got, wantConv, wantSess, wantReq)
+	}
+}
+
 // TestWatcherCursorAggregationDedup is the end-to-end check for the behavior
 // verified by hand against real payloads: a watcher ingesting Cursor cost
 // events dedups stop + afterAgentResponse (same generation_id, identical
