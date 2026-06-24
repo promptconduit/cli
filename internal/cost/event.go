@@ -7,13 +7,18 @@
 // events the editor extension renders in the status bar.
 package cost
 
+import "strings"
+
 const (
 	// SchemaVersion is stamped on every emitted record so the extension can
 	// reject shapes it doesn't understand rather than mis-render them.
 	//
-	// v2 adds CostEvent.Tools (a content-free per-request tool-call summary).
-	// The editor extension's SCHEMA_VERSION (src/types.ts, tracked in #4) MUST
-	// be bumped to 2 to match before it reads the new field.
+	// v2 is the cost drill-down revision. It adds, together:
+	//   - CostEvent.Tools   — a content-free per-request tool-call summary (#70)
+	//   - CostEvent.Signals — derived cost-reduction metrics (#71)
+	// Both ship under the SAME version bump (1 -> 2); #71 deliberately does NOT
+	// bump again. The editor extension's SCHEMA_VERSION (src/types.ts, tracked in
+	// extension issue 1.3) MUST be bumped to 2 to match before it reads either.
 	SchemaVersion = 2
 
 	// Currency is the only currency v1 prices in; the pricing table is in USD.
@@ -50,6 +55,149 @@ type Cost struct {
 	CacheWrite float64 `json:"cache_write"`
 	Total      float64 `json:"total"`
 	Currency   string  `json:"currency"`
+}
+
+// Model tier labels (the `tier` signal). A coarse, content-free bucket derived
+// from the model name so the UI can group spend without a price lookup and so
+// cost-reduction tips can say "you're on a premium model" without the extension
+// re-deriving it. Unpriced/unknown models get TierUnknown.
+const (
+	TierPremium  = "premium"  // top-end frontier models (e.g. Opus, GPT-5/4.x flagship)
+	TierStandard = "standard" // mid-tier workhorse models (e.g. Sonnet, Composer)
+	TierEconomy  = "economy"  // small/cheap models (e.g. Haiku, mini/nano/flash)
+	TierUnknown  = "unknown"  // not priced / model name not recognized
+)
+
+// Signals is a content-free bundle of DERIVED cost-reduction metrics computed
+// from a turn's token counts and dollar costs. It exists so cost-saving tips in
+// the UI are driven by structured numbers the CLI emits, not re-derived (and
+// possibly diverging) inside the editor extension. Like every other field in
+// this package it carries NUMBERS ONLY — no prompt content, inputs, or paths.
+//
+// On a CostEvent these describe a single request; on a SessionSummary they are
+// recomputed from the session's accumulated totals (not averaged), so a session
+// signal is the same formula applied to summed tokens/costs.
+type Signals struct {
+	// CacheHitRate is the share of input-side tokens served from the prompt
+	// cache: cache_read / (cache_read + cache_creation + input). Range [0,1].
+	// Higher is cheaper — cached reads are ~10x cheaper than fresh input. A low
+	// rate on a long session is the headline "you could cache more" signal.
+	// 0 when there are no input-side tokens at all. Formula is implemented
+	// locally here (see cacheHitRate); it is not imported from any other code.
+	CacheHitRate float64 `json:"cache_hit_rate"`
+
+	// CacheMissCostShare is the fraction of this turn's TOTAL dollar cost spent
+	// on tokens that were NOT cache hits — i.e. fresh input plus cache-creation
+	// (cache_write) cost, over total cost. Range [0,1]. High share + low
+	// CacheHitRate together point at re-sending uncached context. 0 when total
+	// cost is 0 (unpriced model or no spend).
+	CacheMissCostShare float64 `json:"cache_miss_cost_share"`
+
+	// InputTokenShare is fresh input tokens as a fraction of all input-side
+	// tokens: input / (input + cache_read + cache_creation). Range [0,1]. It is
+	// the token-count complement to CacheHitRate (it ignores cache-creation vs
+	// read weighting) and answers "how much of what I fed the model was new?".
+	// 0 when there are no input-side tokens.
+	InputTokenShare float64 `json:"input_token_share"`
+
+	// Tier is the coarse model-cost bucket (premium/standard/economy/unknown).
+	// Paired with ModelPriced below so the UI can say "premium, priced" vs
+	// "unknown, unpriced" without its own model table.
+	Tier string `json:"tier"`
+
+	// ModelPriced mirrors CostEvent.ModelPriced into the signal bundle so a
+	// consumer reading only `signals` still knows whether the costs are real
+	// (true) or zero-because-unknown (false).
+	ModelPriced bool `json:"model_priced"`
+
+	// ToolCalls is the number of tool calls in this turn (== Tools.Total), lifted
+	// into the signal bundle as the "tool-call volume" reduction signal. Names
+	// live in CostEvent.Tools; this is the count only.
+	ToolCalls int `json:"tool_calls"`
+}
+
+// cacheHitRate implements the issue's formula locally:
+//
+//	cache_read / (cache_read + cache_creation + input)
+//
+// `cache_creation` is the total cache-write tokens (our Tokens.CacheWrite).
+// Output tokens are deliberately excluded — this measures input-side cache
+// effectiveness only. Returns 0 when the denominator is 0 (no input-side
+// tokens), avoiding a divide-by-zero. Implemented from the formula in #71; not
+// copied from any platform code.
+func cacheHitRate(input, cacheRead, cacheCreation int64) float64 {
+	denom := cacheRead + cacheCreation + input
+	if denom <= 0 {
+		return 0
+	}
+	return float64(cacheRead) / float64(denom)
+}
+
+// inputTokenShare is fresh input over all input-side tokens:
+//
+//	input / (input + cache_read + cache_creation)
+//
+// Same denominator as cacheHitRate; returns 0 when there are no input-side
+// tokens.
+func inputTokenShare(input, cacheRead, cacheCreation int64) float64 {
+	denom := input + cacheRead + cacheCreation
+	if denom <= 0 {
+		return 0
+	}
+	return float64(input) / float64(denom)
+}
+
+// cacheMissCostShare is the dollar share of a turn spent on non-cache-hit
+// tokens: (input cost + cache-write cost) / total cost. Returns 0 when total
+// cost is 0 (unpriced model or no spend).
+func cacheMissCostShare(c Cost) float64 {
+	if c.Total <= 0 {
+		return 0
+	}
+	return (c.Input + c.CacheWrite) / c.Total
+}
+
+// modelTier buckets a model name into a coarse cost tier (names only — no
+// pricing lookup). Unpriced models are always TierUnknown so the UI never
+// implies a tier for a model whose cost we couldn't compute. The match is a
+// lowercase substring check against well-known family markers; anything
+// unrecognized but priced falls through to TierStandard.
+func modelTier(model string, priced bool) string {
+	if !priced || model == "" {
+		return TierUnknown
+	}
+	m := strings.ToLower(model)
+	switch {
+	case strings.Contains(m, "haiku"),
+		strings.Contains(m, "mini"),
+		strings.Contains(m, "nano"),
+		strings.Contains(m, "flash"):
+		return TierEconomy
+	case strings.Contains(m, "opus"),
+		strings.Contains(m, "gpt-5"),
+		strings.Contains(m, "gpt-4"),
+		strings.Contains(m, "ultra"),
+		strings.Contains(m, "-pro"):
+		return TierPremium
+	default:
+		// Sonnet, Composer, and other recognized-but-mid models land here.
+		return TierStandard
+	}
+}
+
+// computeSignals derives the cost-reduction signal bundle from a turn's token
+// counts, dollar costs, model, priced-flag, and tool-call count. It is the
+// single source of the signal math, used for both per-request CostEvents and
+// (re-applied to session totals) the SessionSummary.
+func computeSignals(tok Tokens, c Cost, model string, priced bool, toolCalls int) Signals {
+	return Signals{
+		CacheHitRate:       cacheHitRate(tok.Input, tok.CacheRead, tok.CacheWrite),
+		CacheMissCostShare: cacheMissCostShare(c),
+		InputTokenShare:    inputTokenShare(tok.Input, tok.CacheRead, tok.CacheWrite),
+		Tier:               modelTier(model, priced),
+		ModelPriced:        priced,
+		ToolCalls:          toolCalls,
+	}
 }
 
 // ToolSummary is a content-free per-request tool-call summary: how many tool
@@ -98,6 +246,7 @@ type CostEvent struct {
 	Cost        Cost        `json:"cost"`
 	CwdBase     string      `json:"cwd_base"` // basename only — never the full path or prompt
 	Tools       ToolSummary `json:"tools"`    // names-only tool-call summary (schema v2+)
+	Signals     Signals     `json:"signals"`  // derived cost-reduction signals, numbers only (schema v2+)
 }
 
 // summarizeToolNames builds a ToolSummary from a flat list of tool-call names
@@ -162,6 +311,12 @@ type SessionSummary struct {
 	// events (names only; schema v2+). Empty for Cursor sessions, whose cost
 	// events don't carry tool names — see cursor.go.
 	Tools ToolSummary `json:"tools"`
+	// Signals is the session-level cost-reduction signal bundle (schema v2+),
+	// recomputed from the session's accumulated totals (not averaged across
+	// turns) so e.g. CacheHitRate reflects whole-session cache effectiveness.
+	// Tier here is the dominant model's tier (the costliest in ByModel). Numbers
+	// only — see Signals.
+	Signals Signals `json:"signals"`
 }
 
 // SessionTotal is the flattened token+cost total for a session.

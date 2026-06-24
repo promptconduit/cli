@@ -89,6 +89,18 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 	// stable `generation_id` on them to join back to this final event. Rather
 	// than emit a wrong or partial count, we leave Tools zero-valued
 	// (Total: 0, ByName omitted) — correctness over completeness (see issue #70).
+	tokens := Tokens{
+		Input:      p.InputTokens,
+		Output:     p.OutputTokens,
+		CacheRead:  p.CacheReadTokens,
+		CacheWrite: cacheWriteTokens,
+	}
+
+	// Signals (schema v2) are derived from the token counts + costs this payload
+	// already carries, so Cursor gets them even though its tool summary is empty:
+	// CacheHitRate, cost shares, input share, and tier are all computable from
+	// the exact usage block. ToolCalls is 0 here (Tools is empty for Cursor —
+	// see the note above).
 	ev = CostEvent{
 		V:              SchemaVersion,
 		Kind:           "cost_event",
@@ -99,14 +111,10 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 		Model:          p.Model,
 		ModelPriced:    priced,
 		Source:         SourceExact,
-		Tokens: Tokens{
-			Input:      p.InputTokens,
-			Output:     p.OutputTokens,
-			CacheRead:  p.CacheReadTokens,
-			CacheWrite: cacheWriteTokens,
-		},
-		Cost:    c,
-		CwdBase: filepath.Base(cwd),
+		Tokens:         tokens,
+		Cost:           c,
+		CwdBase:        filepath.Base(cwd),
+		Signals:        computeSignals(tokens, c, p.Model, priced, 0),
 	}
 	return ev, cwd, true
 }
