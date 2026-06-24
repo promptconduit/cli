@@ -104,7 +104,7 @@ func firstLineCwd(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, 8192)
 	n, _ := f.Read(buf)
 	line := buf[:n]

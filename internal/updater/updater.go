@@ -164,7 +164,7 @@ func CheckLatest(ctx context.Context, currentVersion string) (*Release, bool, er
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, false, fmt.Errorf("github releases API returned %s", resp.Status)
@@ -202,10 +202,10 @@ func AssetForCurrent(rel *Release) (*Asset, *Asset, error) {
 	var archive, checksums *Asset
 	for i := range rel.Assets {
 		a := &rel.Assets[i]
-		switch {
-		case a.Name == wantArchive:
+		switch a.Name {
+		case wantArchive:
 			archive = a
-		case a.Name == "checksums.txt":
+		case "checksums.txt":
 			checksums = a
 		}
 	}
@@ -248,7 +248,7 @@ func Apply(ctx context.Context, archive, checksums *Asset) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("download archive: %w", err)
 	}
-	defer os.Remove(tmpArchive)
+	defer func() { _ = os.Remove(tmpArchive) }()
 
 	if !strings.EqualFold(gotSum, wantSum) {
 		return "", fmt.Errorf("checksum mismatch: got %s, want %s", gotSum, wantSum)
@@ -266,7 +266,7 @@ func Apply(ctx context.Context, archive, checksums *Asset) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("extract binary: %w", err)
 	}
-	defer os.Remove(tmpBinary)
+	defer func() { _ = os.Remove(tmpBinary) }()
 
 	if err := os.Chmod(tmpBinary, 0o755); err != nil {
 		return "", fmt.Errorf("chmod new binary: %w", err)
@@ -350,7 +350,7 @@ func fetchChecksum(ctx context.Context, c *http.Client, url, assetName string) (
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("status %s", resp.Status)
 	}
@@ -383,7 +383,7 @@ func downloadAndHash(ctx context.Context, c *http.Client, url string) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", "", fmt.Errorf("status %s", resp.Status)
 	}
@@ -392,11 +392,11 @@ func downloadAndHash(ctx context.Context, c *http.Client, url string) (string, s
 	if err != nil {
 		return "", "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hash := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(f, hash), resp.Body); err != nil {
-		os.Remove(f.Name())
+		_ = os.Remove(f.Name())
 		return "", "", err
 	}
 	return f.Name(), hex.EncodeToString(hash.Sum(nil)), nil
@@ -414,7 +414,7 @@ func isZip(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var sig [4]byte
 	if _, err := io.ReadFull(f, sig[:]); err != nil {
 		return false
@@ -427,13 +427,13 @@ func extractTarGzBinary(archivePath, binaryName, targetDir string) (string, erro
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gzr, err := gzip.NewReader(f)
 	if err != nil {
 		return "", err
 	}
-	defer gzr.Close()
+	defer func() { _ = gzr.Close() }()
 
 	tr := tar.NewReader(gzr)
 	for {
@@ -452,12 +452,12 @@ func extractTarGzBinary(archivePath, binaryName, targetDir string) (string, erro
 			return "", err
 		}
 		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
-			os.Remove(out.Name())
+			_ = out.Close()
+			_ = os.Remove(out.Name())
 			return "", err
 		}
 		if err := out.Close(); err != nil {
-			os.Remove(out.Name())
+			_ = os.Remove(out.Name())
 			return "", err
 		}
 		return out.Name(), nil
@@ -470,7 +470,7 @@ func extractZipBinary(archivePath, binaryName, targetDir string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	defer zr.Close()
+	defer func() { _ = zr.Close() }()
 
 	for _, file := range zr.File {
 		if filepath.Base(file.Name) != binaryName {
@@ -482,18 +482,18 @@ func extractZipBinary(archivePath, binaryName, targetDir string) (string, error)
 		}
 		out, err := os.CreateTemp(targetDir, BinaryName+"-new-*")
 		if err != nil {
-			rc.Close()
+			_ = rc.Close()
 			return "", err
 		}
 		if _, err := io.Copy(out, rc); err != nil {
-			rc.Close()
-			out.Close()
-			os.Remove(out.Name())
+			_ = rc.Close()
+			_ = out.Close()
+			_ = os.Remove(out.Name())
 			return "", err
 		}
-		rc.Close()
+		_ = rc.Close()
 		if err := out.Close(); err != nil {
-			os.Remove(out.Name())
+			_ = os.Remove(out.Name())
 			return "", err
 		}
 		return out.Name(), nil

@@ -35,7 +35,7 @@ func Tail(ctx context.Context, path string, backfill int) <-chan []byte {
 		if err != nil {
 			return
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 
 		offset := int64(0)
 		if backfill > 0 {

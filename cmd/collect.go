@@ -64,10 +64,10 @@ func runCollect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("init collector: %w", err)
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "OTLP receiver:  http://%s/v1/traces\n", collectOTLPAddr)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Dashboard:      http://%s\n", collectDashboardAddr)
-	fmt.Fprintf(cmd.ErrOrStderr(), "Store:          %s\n", srv.StoreDir())
-	fmt.Fprintln(cmd.ErrOrStderr(), "Ctrl-C to stop.")
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "OTLP receiver:  http://%s/v1/traces\n", collectOTLPAddr)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Dashboard:      http://%s\n", collectDashboardAddr)
+	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Store:          %s\n", srv.StoreDir())
+	_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "Ctrl-C to stop.")
 
 	return srv.Run(ctx)
 }

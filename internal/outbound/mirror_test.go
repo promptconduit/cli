@@ -36,7 +36,7 @@ func TestMirror_RoundTrip(t *testing.T) {
 		t.Fatalf("Do: %v", err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if string(body) != `{"ok":true}` {
 		t.Errorf("downstream caller saw wrong body: %q", body)
 	}

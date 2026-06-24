@@ -64,7 +64,7 @@ func (p *CodexParser) ParseFile(path string) (*ParsedConversation, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hash, err := calculateFileHash(path)
 	if err != nil {

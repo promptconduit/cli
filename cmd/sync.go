@@ -108,8 +108,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// Create API client
 	apiClient := client.NewClient(config, Version)
 
-	// Track results
-	var results []sync.SyncResult
 	totalSynced := 0
 	totalSkipped := 0
 	totalErrors := 0
@@ -150,11 +148,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 					displayName = "..." + displayName[len(displayName)-57:]
 				}
 				fmt.Printf("  ❌ Parse error: %s: %v\n", displayName, err)
-				results = append(results, sync.SyncResult{
-					FilePath: filePath,
-					Status:   "error",
-					Error:    err,
-				})
 				totalErrors++
 				continue
 			}
@@ -207,11 +200,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 					chunkInfo = fmt.Sprintf(" [chunked: %d chunks, %s]", numChunks, reason)
 				}
 				fmt.Printf("  [dry-run] Would sync: %s (%d messages)%s\n", displayName, len(conversation.Messages), chunkInfo)
-				results = append(results, sync.SyncResult{
-					FilePath:     filePath,
-					MessageCount: len(conversation.Messages),
-					Status:       "dry-run",
-				})
 				totalSynced++
 				continue
 			}
@@ -234,11 +222,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 			if err != nil {
 				fmt.Printf("  ❌ %s: %v\n", displayName, err)
-				results = append(results, sync.SyncResult{
-					FilePath: filePath,
-					Status:   "error",
-					Error:    err,
-				})
 				totalErrors++
 				continue
 			}
@@ -256,12 +239,6 @@ func runSync(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Printf("  %s %s: %s (%d messages)\n", statusIcon, resp.Status, displayName, resp.MessageCount)
 
-			results = append(results, sync.SyncResult{
-				FilePath:       filePath,
-				ConversationID: resp.ConversationID,
-				MessageCount:   resp.MessageCount,
-				Status:         resp.Status,
-			})
 			totalSynced++
 			syncedThisRun++
 		}
@@ -362,7 +339,7 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 			ChunksUploaded: 0,
 		})
 		// Save state immediately so we can resume if interrupted
-		stateManager.Save()
+		_ = stateManager.Save()
 	}
 
 	// Step 2: Upload chunks (starting from where we left off)
@@ -393,7 +370,7 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 		if err != nil {
 			// Save progress before returning error so we can resume later
 			stateManager.UpdatePendingUploadProgress(filePath, chunkIndex)
-			stateManager.Save()
+			_ = stateManager.Save()
 			return nil, fmt.Errorf("failed to upload chunk %d/%d: %w", chunkIndex+1, numChunks, err)
 		}
 
@@ -405,7 +382,7 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 	}
 
 	// Save final chunk progress before completing
-	stateManager.Save()
+	_ = stateManager.Save()
 
 	// Step 3: Complete upload
 	completeReq := &client.ChunkedCompleteRequest{
@@ -451,7 +428,7 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 	conversation, err := parser.ParseFile(filePath)
 	if err != nil {
 		stateManager.AddFailedSync(filepath.Base(filePath), filePath, err.Error())
-		stateManager.Save()
+		_ = stateManager.Save()
 		return fmt.Errorf("failed to parse transcript: %w", err)
 	}
 
@@ -484,7 +461,7 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 	if err != nil {
 		// Track failure for retry
 		stateManager.AddFailedSync(conversation.SessionID, filePath, err.Error())
-		stateManager.Save()
+		_ = stateManager.Save()
 		return fmt.Errorf("failed to sync: %w", err)
 	}
 
@@ -495,7 +472,7 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 		MessageCount:   resp.MessageCount,
 	})
 	stateManager.ClearFailedSync(conversation.SessionID)
-	stateManager.Save()
+	_ = stateManager.Save()
 
 	return nil
 }

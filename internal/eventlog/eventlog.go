@@ -133,7 +133,7 @@ func appendLine(path string, line []byte, rotateAt int64) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	_, _ = f.Write(line)
 	_, _ = f.Write([]byte{'\n'})

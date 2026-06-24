@@ -40,13 +40,13 @@ func TestOTLPTracesHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	store, err := OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	handler := newOTLPHandler(store, signalTraces)
 	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte(sampleTraces)))
@@ -105,9 +105,9 @@ func TestOTLPTracesHandler(t *testing.T) {
 
 func TestOTLPRejectsNonJSON(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "collect-test-*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	store, _ := OpenStore(dir)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	handler := newOTLPHandler(store, signalTraces)
 	req := httptest.NewRequest(http.MethodPost, "/v1/traces", bytes.NewReader([]byte{0x08, 0x01}))
@@ -121,9 +121,9 @@ func TestOTLPRejectsNonJSON(t *testing.T) {
 
 func TestOTLPRejectsGET(t *testing.T) {
 	dir, _ := os.MkdirTemp("", "collect-test-*")
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	store, _ := OpenStore(dir)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	handler := newOTLPHandler(store, signalTraces)
 	req := httptest.NewRequest(http.MethodGet, "/v1/traces", nil)

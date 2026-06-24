@@ -171,9 +171,10 @@ func runSkillsList(cmd *cobra.Command, args []string) error {
 		wantNullOnly = true
 	case "all", "":
 		// honor legacy --approved when --filter is "all" (its default)
-		if skillsApproved == "true" {
+		switch skillsApproved {
+		case "true":
 			approvedFilter = "true"
-		} else if skillsApproved == "false" || skillsApproved == "pending" {
+		case "false", "pending":
 			approvedFilter = "false"
 		}
 	default:
@@ -318,11 +319,7 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 
 		id, _ := skill["id"].(string)
 		name, _ := skill["name"].(string)
-		displayName, _ := skill["display_name"].(string)
 		repoName, _ := skill["repo_name"].(string)
-		if displayName == "" {
-			displayName = name
-		}
 
 		if id == "" || name == "" {
 			continue

@@ -74,7 +74,7 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Calculate file hash
 	hash, err := calculateFileHash(path)
@@ -117,13 +117,13 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 		// Get type
 		var msgType string
 		if typeRaw, ok := raw["type"]; ok {
-			json.Unmarshal(typeRaw, &msgType)
+			_ = json.Unmarshal(typeRaw, &msgType)
 		}
 
 		// Get timestamp
 		var timestamp string
 		if tsRaw, ok := raw["timestamp"]; ok {
-			json.Unmarshal(tsRaw, &timestamp)
+			_ = json.Unmarshal(tsRaw, &timestamp)
 		}
 		if timestamp == "" {
 			timestamp = time.Now().UTC().Format(time.RFC3339)
@@ -139,10 +139,10 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 		switch msgType {
 		case "summary":
 			if summaryRaw, ok := raw["summary"]; ok {
-				json.Unmarshal(summaryRaw, &summary)
+				_ = json.Unmarshal(summaryRaw, &summary)
 			}
 			if leafRaw, ok := raw["leafTitle"]; ok {
-				json.Unmarshal(leafRaw, &title)
+				_ = json.Unmarshal(leafRaw, &title)
 			}
 			continue // Don't add summary as a message
 
@@ -182,10 +182,10 @@ func (p *ClaudeCodeParser) ParseFile(path string) (*ParsedConversation, error) {
 
 		// Extract context from any message that has it
 		if cwdRaw, ok := raw["cwd"]; ok && workingDirectory == "" {
-			json.Unmarshal(cwdRaw, &workingDirectory)
+			_ = json.Unmarshal(cwdRaw, &workingDirectory)
 		}
 		if versionRaw, ok := raw["cliVersion"]; ok && cliVersion == "" {
-			json.Unmarshal(versionRaw, &cliVersion)
+			_ = json.Unmarshal(versionRaw, &cliVersion)
 		}
 	}
 
@@ -249,13 +249,13 @@ func parseUserMessage(raw map[string]json.RawMessage, sequence int, timestamp st
 	isToolResult := false
 
 	if uuidRaw, ok := raw["uuid"]; ok {
-		json.Unmarshal(uuidRaw, &uuid)
+		_ = json.Unmarshal(uuidRaw, &uuid)
 	}
 	if parentRaw, ok := raw["parentUuid"]; ok {
-		json.Unmarshal(parentRaw, &parentUUID)
+		_ = json.Unmarshal(parentRaw, &parentUUID)
 	}
 	if cwdRaw, ok := raw["cwd"]; ok {
-		json.Unmarshal(cwdRaw, &cwd)
+		_ = json.Unmarshal(cwdRaw, &cwd)
 	}
 
 	// Try to extract content from message.content
@@ -379,10 +379,10 @@ func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timesta
 	var toolInput string
 
 	if uuidRaw, ok := raw["uuid"]; ok {
-		json.Unmarshal(uuidRaw, &uuid)
+		_ = json.Unmarshal(uuidRaw, &uuid)
 	}
 	if parentRaw, ok := raw["parentUuid"]; ok {
-		json.Unmarshal(parentRaw, &parentUUID)
+		_ = json.Unmarshal(parentRaw, &parentUUID)
 	}
 
 	// Get model from message or costUSD.modelId
@@ -398,11 +398,11 @@ func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timesta
 			// Parse content
 			for _, c := range msg.Content {
 				var contentItem struct {
-					Type     string `json:"type"`
-					Text     string `json:"text"`
-					Thinking string `json:"thinking"`
-					Name     string `json:"name"`
-					ID       string `json:"id"`
+					Type     string          `json:"type"`
+					Text     string          `json:"text"`
+					Thinking string          `json:"thinking"`
+					Name     string          `json:"name"`
+					ID       string          `json:"id"`
 					Input    json.RawMessage `json:"input"`
 				}
 				if err := json.Unmarshal(c, &contentItem); err == nil {
@@ -447,7 +447,7 @@ func parseAssistantMessage(raw map[string]json.RawMessage, sequence int, timesta
 func parseFileSnapshot(raw map[string]json.RawMessage, sequence int, timestamp string, rawJSON string) *ParsedMessage {
 	var uuid string
 	if uuidRaw, ok := raw["uuid"]; ok {
-		json.Unmarshal(uuidRaw, &uuid)
+		_ = json.Unmarshal(uuidRaw, &uuid)
 	}
 	if uuid == "" {
 		uuid = fmt.Sprintf("snapshot-%d", sequence)
@@ -467,7 +467,7 @@ func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequenc
 	var content string
 
 	if uuidRaw, ok := raw["uuid"]; ok {
-		json.Unmarshal(uuidRaw, &uuid)
+		_ = json.Unmarshal(uuidRaw, &uuid)
 	}
 	if uuid == "" {
 		uuid = fmt.Sprintf("%s-%d", msgType, sequence)
@@ -475,7 +475,7 @@ func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequenc
 
 	// Try to get any text content
 	if contentRaw, ok := raw["content"]; ok {
-		json.Unmarshal(contentRaw, &content)
+		_ = json.Unmarshal(contentRaw, &content)
 	}
 
 	return &ParsedMessage{
@@ -537,7 +537,7 @@ func calculateFileHash(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {

@@ -431,7 +431,7 @@ func outputContinueResponse() {
 func debugLog(format string, args ...interface{}) {
 	cfg := client.LoadConfig()
 	if cfg.Debug {
-		fmt.Fprintf(os.Stderr, "[promptconduit] "+format+"\n", args...)
+		_, _ = fmt.Fprintf(os.Stderr, "[promptconduit] "+format+"\n", args...)
 	}
 }
 
@@ -547,6 +547,6 @@ func writeLocalEvent(hookEvent, cwd, sessionID string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	f.WriteString(event + "\n")
+	defer func() { _ = f.Close() }()
+	_, _ = f.WriteString(event + "\n")
 }

@@ -211,7 +211,7 @@ func (w *Watcher) seedFile(path string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sessionFallback := sessionIDFromPath(path)
 	scanner := bufio.NewScanner(f)
@@ -236,7 +236,7 @@ func (w *Watcher) seedCursorFeed(path string) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)

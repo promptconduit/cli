@@ -133,7 +133,7 @@ func ReadEvents() ([]CostEvent, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Dedup by request id: separate `cost watch` runs each re-seed and re-append
 	// a session's turns, so the same request can appear many times on disk.

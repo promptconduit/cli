@@ -121,9 +121,9 @@ func (s *Store) LoadOrCreateTrace(sessionID string) (*TraceRecord, error) {
 		return nil, fmt.Errorf("correlation: tempfile: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return nil, fmt.Errorf("correlation: write tempfile: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -341,12 +341,12 @@ func writeJSONAtomic(path string, v interface{}) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	return os.Rename(tmpName, path)

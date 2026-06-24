@@ -9,10 +9,10 @@ import (
 func TestConfigPath(t *testing.T) {
 	// Save original env vars
 	origXDG := os.Getenv(EnvXDGConfigHome)
-	defer os.Setenv(EnvXDGConfigHome, origXDG)
+	defer func() { _ = os.Setenv(EnvXDGConfigHome, origXDG) }()
 
 	// Test 1: No XDG_CONFIG_HOME set - should return ~/.config/promptconduit/config.json
-	os.Unsetenv(EnvXDGConfigHome)
+	_ = os.Unsetenv(EnvXDGConfigHome)
 	path := ConfigPath()
 	home, _ := os.UserHomeDir()
 	expectedDefault := filepath.Join(home, ".config", ConfigDirName, ConfigFileName)
@@ -23,7 +23,7 @@ func TestConfigPath(t *testing.T) {
 	// Test 2: XDG_CONFIG_HOME set - should use custom location
 	tmpDir := t.TempDir()
 	xdgDir := filepath.Join(tmpDir, "xdg-config")
-	os.Setenv(EnvXDGConfigHome, xdgDir)
+	_ = os.Setenv(EnvXDGConfigHome, xdgDir)
 
 	path = ConfigPath()
 	expectedCustom := filepath.Join(xdgDir, ConfigDirName, ConfigFileName)
@@ -64,15 +64,15 @@ func withIsolatedConfig(t *testing.T) string {
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
 		saved[k] = os.Getenv(k)
-		os.Unsetenv(k)
+		_ = os.Unsetenv(k)
 	}
-	os.Setenv(EnvXDGConfigHome, dir)
+	_ = os.Setenv(EnvXDGConfigHome, dir)
 	t.Cleanup(func() {
 		for k, v := range saved {
 			if v == "" {
-				os.Unsetenv(k)
+				_ = os.Unsetenv(k)
 			} else {
-				os.Setenv(k, v)
+				_ = os.Setenv(k, v)
 			}
 		}
 	})
@@ -81,7 +81,7 @@ func withIsolatedConfig(t *testing.T) string {
 
 func TestLoadConfigLocalOnlyFromEnv(t *testing.T) {
 	withIsolatedConfig(t)
-	os.Setenv(EnvLocalOnly, "1")
+	_ = os.Setenv(EnvLocalOnly, "1")
 
 	if cfg := LoadConfig(); !cfg.LocalOnly {
 		t.Error("LocalOnly should be true when PROMPTCONDUIT_LOCAL_ONLY=1")
@@ -111,9 +111,9 @@ func TestLoadConfigDefaultsToCloudMode(t *testing.T) {
 func TestAllConfigPaths(t *testing.T) {
 	// Save original env vars
 	origXDG := os.Getenv(EnvXDGConfigHome)
-	defer os.Setenv(EnvXDGConfigHome, origXDG)
+	defer func() { _ = os.Setenv(EnvXDGConfigHome, origXDG) }()
 
-	os.Unsetenv(EnvXDGConfigHome)
+	_ = os.Unsetenv(EnvXDGConfigHome)
 
 	paths := AllConfigPaths()
 	if len(paths) != 1 {

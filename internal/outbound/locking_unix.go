@@ -29,7 +29,7 @@ func appendLine(path string, line []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	needFlock := len(line)+1 > 4096
 	if needFlock {
@@ -37,7 +37,7 @@ func appendLine(path string, line []byte) error {
 			return err
 		}
 		// LOCK_UN is implicit on file close, but be explicit for clarity.
-		defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 	}
 
 	// One Write call so the kernel sees the line+newline as a unit.
