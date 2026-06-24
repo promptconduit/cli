@@ -103,11 +103,14 @@ func processHookEvent() error {
 		recordCursorCost(rawInput)
 	}
 
-	if !cfg.IsConfigured() {
-		debugLog("API key not configured, skipping")
-		logger.Error("API key not configured — event dropped. Run `promptconduit config set --api-key=...`")
-		eventlog.RecordDrop("not_configured", "run `promptconduit config set --api-key=...`")
-		return nil
+	// Free / local-only mode: when no API key is set (or local_only is on) we
+	// still build and capture every event to the local event log below — we just
+	// never send it to the cloud. This is the legitimate Free experience, not an
+	// error, so no drop is recorded and no error is logged.
+	shouldSend := cfg.ShouldSend()
+	if !shouldSend {
+		debugLog("local-only mode — capturing locally, not sending")
+		logger.Debug("local-only mode — events captured to %s, nothing sent", eventlog.EventsJSONLPath())
 	}
 
 	// Detect tool (simple heuristics)
@@ -136,7 +139,9 @@ func processHookEvent() error {
 	// Stop: Fires after each Claude response - gives us incremental sync opportunities
 	// The sync logic deduplicates via hash checking, so frequent triggers are safe
 	// NOTE: Called directly (not in goroutine) since it spawns a subprocess and returns quickly
-	if hookEvent == "SessionEnd" || hookEvent == "Stop" {
+	// Auto-sync uploads transcripts to the platform, so it only runs in cloud
+	// mode — in Free / local-only mode there is nothing to upload.
+	if shouldSend && (hookEvent == "SessionEnd" || hookEvent == "Stop") {
 		if sessionID != "" {
 			triggerAutoSync(sessionID)
 		}
@@ -150,8 +155,6 @@ func processHookEvent() error {
 	}
 
 	enr := buildEnrichment(gitCtx, corr)
-
-	apiClient := client.NewClient(cfg, Version)
 
 	// For UserPromptSubmit events, check if the user's message includes attachments
 	// We extract from the transcript which should have the message by now
@@ -190,13 +193,20 @@ func processHookEvent() error {
 				// Create envelope with attachment metadata
 				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, enr, envAttachments)
 
-				// Send via multipart with binary attachments
-				if err := apiClient.SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
-					logger.Error("Failed to send envelope with attachments (event=%s, tool=%s): %v", hookEvent, tool, err)
+				// Always record the captured event locally, before any send.
+				captureEnvelope(env)
+
+				if shouldSend {
+					// Send via multipart with binary attachments
+					if err := client.NewClient(cfg, Version).SendEnvelopeWithAttachmentsAsync(env, attachmentData); err != nil {
+						logger.Error("Failed to send envelope with attachments (event=%s, tool=%s): %v", hookEvent, tool, err)
+					} else {
+						logger.Debug("UserPromptSubmit with %d attachments sent successfully", len(attachments))
+					}
 				} else {
-					logger.Debug("UserPromptSubmit with %d attachments sent successfully", len(attachments))
+					logger.Debug("local-only: captured UserPromptSubmit with %d attachments, not sent", len(attachments))
 				}
-				// Return here - we've sent the event with attachments, don't send again below
+				// Return here - we've handled the event with attachments, don't process again below
 				return nil
 			}
 		}
@@ -207,14 +217,35 @@ func processHookEvent() error {
 
 	logger.Debug("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
+	// Always record the captured event locally, before any send.
+	captureEnvelope(env)
+
+	if !shouldSend {
+		return nil
+	}
+
 	// Send async
-	if err := apiClient.SendEnvelopeAsync(env); err != nil {
+	if err := client.NewClient(cfg, Version).SendEnvelopeAsync(env); err != nil {
 		debugLog("Failed to send envelope async: %v", err)
 		logger.Error("Failed to spawn async sender (event=%s, tool=%s): %v", hookEvent, tool, err)
 	}
 
 	logger.Debug("Envelope queued for async send")
 	return nil
+}
+
+// captureEnvelope writes the exact envelope JSON we would POST to the local
+// capture log (~/.promptconduit/events.jsonl) before any network send. This is
+// the unconditional local record of the event — it runs for both cloud and
+// Free / local-only installs. Best-effort: serialization failure is logged at
+// debug and the line is dropped rather than disturbing the hook.
+func captureEnvelope(env *envelope.RawEventEnvelope) {
+	data, err := env.ToJSON()
+	if err != nil {
+		logger.Debug("capture: failed to serialize envelope: %v", err)
+		return
+	}
+	eventlog.RecordCapture(data)
 }
 
 // buildEnrichment assembles the enrichment block: CLI-computed context that

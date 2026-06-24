@@ -49,6 +49,16 @@ var configShowCmd = &cobra.Command{
 			eventLog = "disabled"
 		}
 		cmd.Printf("Event log:   %s\n", eventLog)
+		// Effective mode: Free / local-only (nothing sent) vs cloud sync. This
+		// reflects ShouldSend, so "no API key" also reads as local-only.
+		mode := "cloud sync"
+		if !cfg.ShouldSend() {
+			mode = "local-only (Free)"
+		}
+		cmd.Printf("Mode:        %s\n", mode)
+		if cfg.LocalOnly {
+			cmd.Printf("Local-only:  on\n")
+		}
 		cmd.Println()
 		cmd.Printf("Config:      %s\n", client.ConfigPath())
 
@@ -75,6 +85,7 @@ var (
 	setDebug             bool
 	setDisableAutoUpdate bool
 	setDisableEventLog   bool
+	setLocalOnly         bool
 )
 
 var configSetCmd = &cobra.Command{
@@ -99,7 +110,13 @@ Examples:
   promptconduit config set --disable-auto-update=false
 
   # Opt out of the local event log (~/.promptconduit/events.ndjson)
-  promptconduit config set --disable-event-log=true`,
+  promptconduit config set --disable-event-log=true
+
+  # Free / local-only mode: capture events locally, never send to the cloud
+  promptconduit config set --local-only=true
+
+  # Re-enable cloud sync (events sent when an API key is set)
+  promptconduit config set --local-only=false`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -132,9 +149,13 @@ Examples:
 			fc.DisableEventLog = setDisableEventLog
 			changed = true
 		}
+		if cmd.Flags().Changed("local-only") {
+			fc.LocalOnly = setLocalOnly
+			changed = true
+		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, or --disable-event-log")
+			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-event-log, or --local-only")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -164,6 +185,13 @@ Examples:
 				state = "disabled"
 			}
 			cmd.Printf("  Event log:   %s\n", state)
+		}
+		if cmd.Flags().Changed("local-only") {
+			if fc.LocalOnly {
+				cmd.Printf("  Mode:        local-only (Free) — events captured locally, nothing sent\n")
+			} else {
+				cmd.Printf("  Mode:        cloud sync — events sent when an API key is set\n")
+			}
 		}
 
 		return nil
@@ -386,6 +414,7 @@ func init() {
 	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
+	configSetCmd.Flags().BoolVar(&setLocalOnly, "local-only", false, "Free / local-only mode: capture events locally, never send to the cloud")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)

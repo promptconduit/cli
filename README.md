@@ -305,6 +305,59 @@ Detected 3 skills:
 3 skills written. Use them with /ci-monitor, etc.
 ```
 
+## Free Tier — Local-Only Mode
+
+PromptConduit has a **Free tier that is 100% local**: every event is captured to
+a file on your machine and **nothing is ever sent to the cloud**. You register
+for free, but no telemetry leaves your computer.
+
+Local-only mode is the default whenever no API key is configured — installing
+hooks and capturing events works with no account at all. You can also opt in
+explicitly (useful if you have a key but want to stay local):
+
+```bash
+# Capture locally, never send — even if an API key is set
+promptconduit config set --local-only=true
+
+# Or enable it at install time
+promptconduit install claude-code --local-only
+
+# Or per-invocation via environment variable
+PROMPTCONDUIT_LOCAL_ONLY=1 ...
+```
+
+`promptconduit status` shows whether you're in **Free (local-only)** or
+**Cloud sync** mode. To enable cloud sync later, set an API key and turn
+local-only off (`promptconduit config set --local-only=false`).
+
+### The local event capture log (`events.jsonl`)
+
+Every captured event is written — **before any network send** — to:
+
+```
+~/.promptconduit/events.jsonl
+```
+
+This file is the durable, send-independent record of your events. It is written
+in **both** Free and Cloud modes (in Cloud mode the same envelope is then also
+sent to the platform). Each line is exactly one event envelope — the same JSON
+the CLI would POST to `/v1/events/raw`:
+
+```json
+{"envelope_version":"1.2","tool":"claude-code","hook_event":"UserPromptSubmit","captured_at":"2026-06-23T21:11:57Z","native_payload":{ ... },"enrichment":{ ... }}
+```
+
+This format is a stable contract for local tooling (e.g. an editor extension
+that reads `events.jsonl` to show a live cost estimator). Secrets matching
+well-known patterns (API keys, bearer tokens) are redacted before write; the
+file rotates to `events.jsonl.1` at 50MB. Disable all local logging — including
+this file — with `PROMPTCONDUIT_EVENT_LOG=0` or
+`promptconduit config set --disable-event-log=true`.
+
+> Note: `events.jsonl` (raw events, captured before send) is distinct from
+> `events.ndjson` (the send-outcome diagnostics log, written only when an event
+> is actually sent).
+
 ## Configuration
 
 The CLI supports multiple configuration methods with the following priority:
@@ -590,6 +643,12 @@ make snapshot
 - **Minimal**: Only captures events needed for analysis
 - **Secure**: HTTPS with API key authentication
 - **Non-blocking**: Never interferes with your workflow
+- **Free / local-only tier**: With no API key (or `--local-only`), events are
+  captured to `~/.promptconduit/events.jsonl` and **nothing is sent to the
+  cloud**. See [Free Tier — Local-Only Mode](#free-tier--local-only-mode).
+- **Local event capture log**: Every event is written to
+  `~/.promptconduit/events.jsonl` (mode `0644`) before any send, with secrets
+  redacted; rotates at 50MB. Disable with `PROMPTCONDUIT_EVENT_LOG=0`.
 - **Local outbound mirror**: Every HTTP request the CLI makes is also
   written to `~/.config/promptconduit/outbound.ndjson` (mode `0600`,
   owner-only) so you can tail it with `promptconduit watch`.

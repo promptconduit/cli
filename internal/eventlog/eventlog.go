@@ -102,6 +102,13 @@ func Dir() string {
 // EventsPath is the absolute path of the full-payload event log.
 func EventsPath() string { return filepath.Join(Dir(), "events.ndjson") }
 
+// EventsJSONLPath is the absolute path of the capture log: one raw envelope per
+// line, written at capture time BEFORE any network send. Unlike events.ndjson
+// (which is keyed on send outcome), this file is the durable local substrate of
+// the events themselves — it is written even when nothing is sent (Free /
+// local-only mode), and is the file external local tooling reads.
+func EventsJSONLPath() string { return filepath.Join(Dir(), "events.jsonl") }
+
 // ErrorsPath is the absolute path of the human-readable error log.
 func ErrorsPath() string { return filepath.Join(Dir(), "errors.log") }
 

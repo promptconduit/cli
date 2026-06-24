@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
@@ -34,10 +35,22 @@ Supported tools:
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
 
 The hooks capture events locally and realtime cost tracking works immediately.
-Set an API key (promptconduit config set --api-key=...) only if you also want to
-sync events to the PromptConduit platform.`,
+This is the Free tier: 100% local — every event is captured to
+~/.promptconduit/events.jsonl and nothing is sent anywhere. Set an API key
+(promptconduit config set --api-key=...) only if you also want to sync events to
+the PromptConduit platform. To stay local-only even after setting a key, pass
+--local-only.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runInstall,
+}
+
+// installLocalOnly opts the install into Free / local-only mode: events are
+// captured to the local event log but never sent to the cloud.
+var installLocalOnly bool
+
+func init() {
+	installCmd.Flags().BoolVar(&installLocalOnly, "local-only", false,
+		"Free / local-only mode: capture events locally, never send to the cloud")
 }
 
 // installableTools is the ordered set offered in the interactive picker.
@@ -59,6 +72,15 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	if installLocalOnly {
+		if err := persistLocalOnly(true); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not save local-only setting: %v\n", err)
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "Free / local-only mode enabled — events are captured locally and never sent.")
+			fmt.Fprintln(cmd.OutOrStdout())
+		}
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -77,6 +99,21 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// persistLocalOnly writes the local_only flag into the config file so the Free
+// tier survives across hook invocations. Mirrors how `config set --local-only`
+// persists the same setting.
+func persistLocalOnly(v bool) error {
+	fc, err := client.LoadFileConfig()
+	if err != nil {
+		return err
+	}
+	if fc == nil {
+		fc = &client.FileConfig{}
+	}
+	fc.LocalOnly = v
+	return client.SaveFileConfig(fc)
 }
 
 // stableExecutablePath returns an absolute path to the running binary that is

@@ -10,7 +10,11 @@ package cost
 const (
 	// SchemaVersion is stamped on every emitted record so the extension can
 	// reject shapes it doesn't understand rather than mis-render them.
-	SchemaVersion = 1
+	//
+	// v2 adds CostEvent.Tools (a content-free per-request tool-call summary).
+	// The editor extension's SCHEMA_VERSION (src/types.ts, tracked in #4) MUST
+	// be bumped to 2 to match before it reads the new field.
+	SchemaVersion = 2
 
 	// Currency is the only currency v1 prices in; the pricing table is in USD.
 	Currency = "USD"
@@ -48,6 +52,20 @@ type Cost struct {
 	Currency   string  `json:"currency"`
 }
 
+// ToolSummary is a content-free per-request tool-call summary: how many tool
+// calls the assistant made in this turn and a per-tool-name count. It carries
+// TOOL NAMES ONLY — never tool inputs, file paths, commands, prompt text, or
+// any other content. This is a privacy-first feature in a public/MIT repo, so
+// the no-content invariant is load-bearing (see TestPrivacy_* in cost_test.go).
+type ToolSummary struct {
+	// Total is the number of tool calls in the request (sum of ByName).
+	Total int `json:"total"`
+	// ByName maps each tool name to how many times it was called this turn,
+	// e.g. {"Read": 2, "Bash": 1}. Empty/omitted when no tools were called or
+	// when names aren't derivable for the source (see Cursor note in cursor.go).
+	ByName map[string]int `json:"by_name,omitempty"`
+}
+
 // CostEvent is emitted once per priced assistant turn — the "request cost" the
 // status bar shows. It carries only counts, costs, and identifiers; the
 // transcript text that produced the counts is never included.
@@ -71,14 +89,49 @@ type CostEvent struct {
 	// RequestID is the per-turn dedup key: Cursor's `generation_id` or Claude
 	// Code's `requestId` (UUID fallback). Two hook events for one generation
 	// share it, so deduping by RequestID collapses them to one billable turn.
-	RequestID   string `json:"request_id"`
-	Timestamp   string `json:"ts"`
-	Model       string `json:"model"`
-	ModelPriced bool   `json:"model_priced"` // false => unknown model, cost is 0
-	Source      string `json:"source"`
-	Tokens      Tokens `json:"tokens"`
-	Cost        Cost   `json:"cost"`
-	CwdBase     string `json:"cwd_base"` // basename only — never the full path or prompt
+	RequestID   string      `json:"request_id"`
+	Timestamp   string      `json:"ts"`
+	Model       string      `json:"model"`
+	ModelPriced bool        `json:"model_priced"` // false => unknown model, cost is 0
+	Source      string      `json:"source"`
+	Tokens      Tokens      `json:"tokens"`
+	Cost        Cost        `json:"cost"`
+	CwdBase     string      `json:"cwd_base"` // basename only — never the full path or prompt
+	Tools       ToolSummary `json:"tools"`    // names-only tool-call summary (schema v2+)
+}
+
+// summarizeToolNames builds a ToolSummary from a flat list of tool-call names
+// (e.g. the `name` of each tool_use block in a Claude Code assistant turn).
+// Empty names are ignored. The result holds counts only — by construction it
+// can never carry tool inputs or any other content.
+func summarizeToolNames(names []string) ToolSummary {
+	var s ToolSummary
+	for _, n := range names {
+		if n == "" {
+			continue
+		}
+		if s.ByName == nil {
+			s.ByName = make(map[string]int)
+		}
+		s.ByName[n]++
+		s.Total++
+	}
+	return s
+}
+
+// add folds src into the receiver, summing Total and per-name counts. Used to
+// roll per-request tool summaries up into a session aggregate.
+func (s *ToolSummary) add(src ToolSummary) {
+	if src.Total == 0 && len(src.ByName) == 0 {
+		return
+	}
+	s.Total += src.Total
+	for name, n := range src.ByName {
+		if s.ByName == nil {
+			s.ByName = make(map[string]int)
+		}
+		s.ByName[name] += n
+	}
 }
 
 // ModelTotal is one model's contribution to a session. ModelPriced is false
@@ -105,6 +158,10 @@ type SessionSummary struct {
 	UpdatedAt string       `json:"updated_at"`
 	Totals    SessionTotal `json:"totals"`
 	ByModel   []ModelTotal `json:"by_model"`
+	// Tools is the session's running tool-call total, summed across its cost
+	// events (names only; schema v2+). Empty for Cursor sessions, whose cost
+	// events don't carry tool names — see cursor.go.
+	Tools ToolSummary `json:"tools"`
 }
 
 // SessionTotal is the flattened token+cost total for a session.

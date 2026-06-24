@@ -327,6 +327,8 @@ func (w *Watcher) apply(ev CostEvent) bool {
 	t.CostTotal += ev.Cost.Total
 	t.Currency = Currency
 
+	st.summary.Tools.add(ev.Tools)
+
 	mt := st.byModel[ev.Model]
 	if mt == nil {
 		mt = &ModelTotal{Model: ev.Model, ModelPriced: ev.ModelPriced}
