@@ -20,8 +20,18 @@ Prerequisites:
 func runTest(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 
+	// Free / local-only mode sends nothing, so there's no cloud connection to
+	// test. Report it plainly rather than failing on a missing key.
+	if cfg.LocalOnly {
+		fmt.Println("Local-only mode: events are captured locally and never sent, so there's nothing to test.")
+		fmt.Println("Enable cloud sync with: promptconduit config set --local-only=false (and set an API key).")
+		return nil
+	}
+
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Set PROMPTCONDUIT_API_KEY environment variable")
+		fmt.Println("Local-only mode: no API key is set, so events are captured locally and nothing is sent.")
+		fmt.Println("Enable cloud sync with: promptconduit config set --api-key=\"your-api-key\"")
+		return nil
 	}
 
 	fmt.Printf("Testing connection to %s...\n", cfg.APIURL)
