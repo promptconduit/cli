@@ -59,9 +59,14 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 	if dedupKey == "" {
 		dedupKey = p.ConversationID
 	}
-	sessionID := p.ConversationID
+	// Grouping keys the extension needs (see CostEvent): conversation_id is the
+	// per-tab key, session_id the per-session key. Cursor sends both. Prefer the
+	// genuine session_id; fall back to conversation_id so the watcher always has
+	// a stable, non-empty session to group by even on payloads that omit
+	// session_id.
+	sessionID := p.SessionID
 	if sessionID == "" {
-		sessionID = p.SessionID
+		sessionID = p.ConversationID
 	}
 	if len(p.WorkspaceRoots) > 0 {
 		cwd = p.WorkspaceRoots[0]
@@ -85,14 +90,15 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 	// than emit a wrong or partial count, we leave Tools zero-valued
 	// (Total: 0, ByName omitted) — correctness over completeness (see issue #70).
 	ev = CostEvent{
-		V:           SchemaVersion,
-		Kind:        "cost_event",
-		Tool:        ToolCursor,
-		SessionID:   sessionID,
-		RequestID:   dedupKey,
-		Model:       p.Model,
-		ModelPriced: priced,
-		Source:      SourceExact,
+		V:              SchemaVersion,
+		Kind:           "cost_event",
+		Tool:           ToolCursor,
+		SessionID:      sessionID,
+		ConversationID: p.ConversationID,
+		RequestID:      dedupKey,
+		Model:          p.Model,
+		ModelPriced:    priced,
+		Source:         SourceExact,
 		Tokens: Tokens{
 			Input:      p.InputTokens,
 			Output:     p.OutputTokens,

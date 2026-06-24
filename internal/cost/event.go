@@ -69,12 +69,27 @@ type ToolSummary struct {
 // CostEvent is emitted once per priced assistant turn — the "request cost" the
 // status bar shows. It carries only counts, costs, and identifiers; the
 // transcript text that produced the counts is never included.
+//
+// Grouping keys: the editor extension groups cost by "agent tab" using a
+// (SessionID, ConversationID) pair and dedups individual turns by RequestID.
+// All three are populated from the source's native identifiers where they
+// exist (see SessionID/ConversationID/RequestID below); they are the stable
+// keys the extension relies on, so do not repurpose or conflate them.
 type CostEvent struct {
-	V           int         `json:"v"`
-	Kind        string      `json:"kind"` // always "cost_event"
-	Tool        string      `json:"tool"`
-	SessionID   string      `json:"session_id"`
-	RequestID   string      `json:"request_id"` // dedup key (Claude Code requestId)
+	V    int    `json:"v"`
+	Kind string `json:"kind"` // always "cost_event"
+	Tool string `json:"tool"`
+	// SessionID is the per-session grouping key: Claude Code's `sessionId`
+	// (transcript filename fallback) or Cursor's `session_id`.
+	SessionID string `json:"session_id"`
+	// ConversationID is Cursor's `conversation_id` — the per-tab grouping key
+	// the extension uses alongside SessionID. Claude Code has no separate
+	// conversation id, so it is empty there (hence omitempty).
+	ConversationID string `json:"conversation_id,omitempty"`
+	// RequestID is the per-turn dedup key: Cursor's `generation_id` or Claude
+	// Code's `requestId` (UUID fallback). Two hook events for one generation
+	// share it, so deduping by RequestID collapses them to one billable turn.
+	RequestID   string      `json:"request_id"`
 	Timestamp   string      `json:"ts"`
 	Model       string      `json:"model"`
 	ModelPriced bool        `json:"model_priced"` // false => unknown model, cost is 0
