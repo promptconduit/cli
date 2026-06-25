@@ -1,0 +1,85 @@
+name: Refresh bundled extension
+
+# Rebuilds the embedded cost editor extension (internal/extension/embedded/
+# promptconduit-cost.vsix) from promptconduit/editor-extension main and opens a
+# PR when it changed — so the bundled .vsix doesn't drift from the extension
+# repo without anyone running `make refresh-extension` by hand.
+#
+# Triggers:
+#   - workflow_dispatch  : run it on demand from the Actions tab.
+#   - schedule (weekly)  : safety net so drift is caught even if nobody dispatches.
+#   - repository_dispatch: optional auto-trigger; have editor-extension POST a
+#     `extension-released` dispatch on release (needs a cross-repo PAT there).
+#
+# Opening the PR uses the default GITHUB_TOKEN, which requires the repo setting
+# "Allow GitHub Actions to create and approve pull requests" to be enabled. If
+# it's off, the branch is still pushed and the run prints how to finish manually.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  repository_dispatch:
+    types: [extension-released]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v7
+
+      - name: Checkout editor-extension
+        uses: actions/checkout@v7
+        with:
+          repository: promptconduit/editor-extension
+          ref: main
+          path: editor-extension
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.21"
+
+      - name: Refresh bundled .vsix
+        run: make refresh-extension EXTENSION_DIR=editor-extension
+
+      - name: Verify CLI still builds with the new .vsix
+        run: |
+          make build
+          go test ./internal/extension/...
+
+      - name: Open PR if the bundled extension changed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          vsix="internal/extension/embedded/promptconduit-cost.vsix"
+          if git diff --quiet -- "$vsix"; then
+            echo "Bundled extension is already up to date — nothing to do."
+            exit 0
+          fi
+          ver=$(unzip -p "$vsix" extension/package.json | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
+          branch="chore/refresh-bundled-extension-v${ver}-${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add "$vsix"
+          git commit -m "chore(extension): refresh bundled cost extension to v${ver}"
+          git push origin "$branch"
+          if gh pr create --base main --head "$branch" \
+              --title "chore(extension): refresh bundled cost extension to v${ver}" \
+              --body "Automated refresh of the embedded cost extension \`.vsix\` from \`promptconduit/editor-extension\` main (v${ver}), opened by the **Refresh bundled extension** workflow. CLI build + extension tests passed on this artifact."; then
+            echo "Opened PR for v${ver}."
+          else
+            echo "::warning::Could not open the PR automatically (enable 'Allow GitHub Actions to create and approve pull requests', or open one from branch ${branch})."
+          fi

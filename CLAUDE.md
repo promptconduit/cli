@@ -101,6 +101,12 @@ make refresh-extension EXTENSION_DIR=/path   # or point at a checkout
 The `.vsix` lives in `internal/extension/embedded/` (deliberately NOT a `dist/` dir, which the
 repo `.gitignore` excludes) and is a committed build artifact that `go:embed` requires.
 
+Instead of refreshing locally, the **Refresh bundled extension** workflow
+(`.github/workflows/refresh-extension.yml`) rebuilds the `.vsix` from `editor-extension` main and
+opens a PR when it changed — run it from the Actions tab (`workflow_dispatch`), weekly via schedule,
+or via a `repository_dispatch` from the extension repo. (Opening the PR needs the repo's "Allow
+GitHub Actions to create and approve pull requests" setting.)
+
 ## Key Design Decisions
 
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
