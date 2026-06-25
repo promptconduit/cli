@@ -50,36 +50,60 @@ jobs:
         with:
           go-version: "1.21"
 
+      # Change-detection is by extension VERSION, not by diffing the rebuilt
+      # .vsix bytes: `vsce package` is non-deterministic (zip embeds mtimes), so
+      # a byte diff would fire on every run. So: bump the extension's version
+      # whenever you change it — that's the signal this workflow keys on.
+      - name: Compare bundled vs. upstream extension version
+        id: check
+        run: |
+          set -euo pipefail
+          new_ver=$(python3 -c "import json;print(json.load(open('editor-extension/package.json'))['version'])")
+          cur_ver=$(unzip -p internal/extension/embedded/promptconduit-cost.vsix extension/package.json \
+                    | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
+          echo "upstream=$new_ver bundled=$cur_ver"
+          echo "new_ver=$new_ver" >> "$GITHUB_OUTPUT"
+          if [ "$new_ver" = "$cur_ver" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Bundled extension is already v$cur_ver — nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Refresh bundled .vsix
+        if: steps.check.outputs.changed == 'true'
         run: make refresh-extension EXTENSION_DIR=editor-extension
 
       - name: Verify CLI still builds with the new .vsix
+        if: steps.check.outputs.changed == 'true'
         run: |
           make build
           go test ./internal/extension/...
 
-      - name: Open PR if the bundled extension changed
+      - name: Open refresh PR
+        if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VER: ${{ steps.check.outputs.new_ver }}
         run: |
           set -euo pipefail
           vsix="internal/extension/embedded/promptconduit-cost.vsix"
+          # Defensive: only commit if the artifact actually changed on disk.
           if git diff --quiet -- "$vsix"; then
-            echo "Bundled extension is already up to date — nothing to do."
+            echo "::warning::Version changed to v${NEW_VER} but the .vsix did not — skipping."
             exit 0
           fi
-          ver=$(unzip -p "$vsix" extension/package.json | python3 -c "import sys,json;print(json.load(sys.stdin)['version'])")
-          branch="chore/refresh-bundled-extension-v${ver}-${GITHUB_RUN_ID}"
+          branch="chore/refresh-bundled-extension-v${NEW_VER}-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add "$vsix"
-          git commit -m "chore(extension): refresh bundled cost extension to v${ver}"
+          git commit -m "chore(extension): refresh bundled cost extension to v${NEW_VER}"
           git push origin "$branch"
           if gh pr create --base main --head "$branch" \
-              --title "chore(extension): refresh bundled cost extension to v${ver}" \
-              --body "Automated refresh of the embedded cost extension \`.vsix\` from \`promptconduit/editor-extension\` main (v${ver}), opened by the **Refresh bundled extension** workflow. CLI build + extension tests passed on this artifact."; then
-            echo "Opened PR for v${ver}."
+              --title "chore(extension): refresh bundled cost extension to v${NEW_VER}" \
+              --body "Automated refresh of the embedded cost extension \`.vsix\` from \`promptconduit/editor-extension\` main (v${NEW_VER}), opened by the **Refresh bundled extension** workflow. CLI build + extension tests passed on this artifact."; then
+            echo "Opened PR for v${NEW_VER}."
           else
             echo "::warning::Could not open the PR automatically (enable 'Allow GitHub Actions to create and approve pull requests', or open one from branch ${branch})."
           fi
