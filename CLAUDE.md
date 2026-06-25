@@ -29,6 +29,7 @@ cli/
 │   ├── client/       # HTTP client, config loading
 │   ├── correlation/  # W3C trace_id/span_id generation and per-session persistence
 │   ├── envelope/     # Raw event envelope types
+│   ├── extension/    # Bundled cost editor extension (.vsix go:embed) + sideload into Cursor
 │   ├── git/          # Git context extraction
 │   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
 │   ├── sync/         # Transcript sync and parsing (Claude Code parser, state management)
@@ -82,6 +83,23 @@ promptconduit sync --limit 10   # Sync only N most recent
 
 - **Hooks** capture events in **real-time** during AI tool usage (no manual action needed)
 - **Sync** uploads **historical transcripts** (must be run manually)
+
+## Bundled cost editor extension
+
+`internal/extension/` embeds the PromptConduit cost extension
+(`embedded/promptconduit-cost.vsix`, built from the separate
+`promptconduit/editor-extension` repo) into the CLI binary via `go:embed`.
+`promptconduit install cursor` sideloads it with `cursor --install-extension`
+(best-effort; `--no-extension` to skip). No marketplace/tokens — the extension version is
+locked to the CLI's cost-feed schema, which is why it's distributed this way.
+
+Refresh the bundled `.vsix` after the extension changes:
+```bash
+make refresh-extension                       # uses ../editor-extension by default
+make refresh-extension EXTENSION_DIR=/path   # or point at a checkout
+```
+The `.vsix` lives in `internal/extension/embedded/` (deliberately NOT a `dist/` dir, which the
+repo `.gitignore` excludes) and is a committed build artifact that `go:embed` requires.
 
 ## Key Design Decisions
 

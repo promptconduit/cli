@@ -358,6 +358,29 @@ this file — with `PROMPTCONDUIT_EVENT_LOG=0` or
 > `events.ndjson` (the send-outcome diagnostics log, written only when an event
 > is actually sent).
 
+## Cost status-bar extension (Cursor)
+
+The CLI **bundles** the PromptConduit cost editor extension and sideloads it into
+Cursor automatically when you install hooks:
+
+```bash
+promptconduit install cursor   # wires hooks AND installs the cost status-bar extension
+```
+
+The extension is embedded in the CLI binary (no marketplace, no separate
+download) and installed via Cursor's `cursor --install-extension` CLI, so its
+version is always locked to the CLI's cost-feed schema. It reads the same local
+cost feed `promptconduit cost` produces and shows live request/session cost — and
+the cost-reduction signals — right in the status bar.
+
+- **Skip it:** `promptconduit install cursor --no-extension`
+- **Cursor CLI not found?** The install step is skipped with a hint — open Cursor
+  and run *“Shell Command: Install 'cursor' command in PATH”*, then re-run
+  `promptconduit install cursor`. The hooks are installed either way.
+- The extension source lives in
+  [promptconduit/editor-extension](https://github.com/promptconduit/editor-extension);
+  the bundled `.vsix` is refreshed with `make refresh-extension`.
+
 ## Configuration
 
 The CLI supports multiple configuration methods with the following priority:
