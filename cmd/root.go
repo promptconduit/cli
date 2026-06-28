@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/extension"
 	"github.com/promptconduit/cli/internal/updater"
 	"github.com/spf13/cobra"
 )
@@ -104,6 +105,13 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 		notifyUpgraded(cmd, cached.CurrentVersion, Version, cached.ReleaseURL)
 		cached.CurrentVersion = Version
 		_ = updater.SaveCache(cachePath, cached)
+		// The binary just changed (self-replace or brew), so the embedded
+		// extension .vsix may be newer than what's installed in the editor.
+		// This is the one moment we know they can differ — reconcile now,
+		// unless the user opted out of auto-update.
+		if !cfg.DisableAutoUpdate {
+			reconcileCostExtension(cmd)
+		}
 	}
 
 	if !updater.ShouldCheck(cachePath, Version, updater.CheckTTL) {
@@ -154,6 +162,25 @@ func notifyNewer(cmd *cobra.Command, latest, releaseURL string, disabled bool) {
 	_, _ = fmt.Fprintf(w, "promptconduit: %s available (you have %s) — %s\n", latest, Version, hint)
 	if releaseURL != "" {
 		_, _ = fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+	}
+}
+
+// reconcileCostExtension brings the editor's installed cost extension up to the
+// version bundled in this (freshly upgraded) binary. It runs once — right after
+// a CLI upgrade is first detected — because that's the only moment the embedded
+// .vsix is known to differ from what's installed. Best-effort and quiet: it
+// only prints when it actually updated something, and never blocks or fails the
+// user's command (Reconcile no-ops when the editor or extension isn't present).
+func reconcileCostExtension(cmd *cobra.Command) {
+	for _, e := range []extension.Editor{extension.Cursor, extension.VSCode} {
+		res, err := extension.Reconcile(e)
+		if err != nil {
+			continue
+		}
+		if res.Updated {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+				"promptconduit: updated the %s cost extension to v%s\n", res.Editor, res.Bundled)
+		}
 	}
 }
 

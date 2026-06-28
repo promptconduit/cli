@@ -21,15 +21,16 @@ var (
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrade promptconduit to the latest release",
-	Long: `Check GitHub for a newer release and atomically replace the running binary.
+	Long: `Check GitHub for a newer release and upgrade in place.
 
 Examples:
   promptconduit upgrade           # upgrade to the latest release (if newer)
   promptconduit upgrade --check   # only check; do not download or replace
   promptconduit upgrade --force   # download and replace even if up to date
 
-Homebrew users should run "brew upgrade promptconduit" instead — this command
-will refuse to replace a binary it can't write to.`,
+Homebrew-managed installs are detected automatically and upgraded via
+"brew upgrade promptconduit" so Homebrew's metadata stays in sync; all other
+installs are upgraded by atomically replacing the running binary.`,
 	RunE: runUpgrade,
 }
 
@@ -74,15 +75,9 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Make sure the destination is writable before pulling a release down.
-	if err := canReplaceSelf(); err != nil {
-		cmd.Printf("Cannot self-upgrade: %v\n", err)
-		cmd.Println("If you installed via Homebrew, run: brew upgrade promptconduit")
-		return err
-	}
-
-	// Take an advisory lock so two concurrent invocations don't race on
-	// the same binary swap.
+	// Take an advisory lock so two concurrent invocations (e.g. a manual run and
+	// the detached background upgrade) don't both upgrade at once. Covers the
+	// brew and self-replace paths alike.
 	lockPath := filepath.Join(client.ConfigDir(), updater.LockFileName)
 	release, err := updater.Lock(lockPath)
 	defer release()
@@ -92,6 +87,30 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		return fmt.Errorf("acquire upgrade lock: %w", err)
+	}
+
+	// Homebrew-managed installs must upgrade via brew, not by self-replacing the
+	// Cellar binary (which would desync brew's metadata from the file on disk).
+	if exe, err := os.Executable(); err == nil && updater.IsHomebrewManaged(exe) {
+		cmd.Println("Homebrew-managed install detected — upgrading via `brew upgrade promptconduit`...")
+		bctx, bcancel := context.WithTimeout(cmd.Context(), updater.DownloadTimeout)
+		defer bcancel()
+		out, err := updater.BrewUpgrade(bctx, updater.HomebrewFormula)
+		if out != "" {
+			cmd.Println(out)
+		}
+		if err != nil {
+			return fmt.Errorf("brew upgrade failed: %w", err)
+		}
+		cmd.Printf("Upgraded via Homebrew (target %s). The bundled editor extension updates on next run.\n", rel.TagName)
+		return nil
+	}
+
+	// Make sure the destination is writable before pulling a release down.
+	if err := canReplaceSelf(); err != nil {
+		cmd.Printf("Cannot self-upgrade: %v\n", err)
+		cmd.Println("If you installed via Homebrew, run: brew upgrade promptconduit")
+		return err
 	}
 
 	archive, checksums, err := updater.AssetForCurrent(rel)
