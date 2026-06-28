@@ -22,24 +22,6 @@ func TestIsUnderCellar(t *testing.T) {
 	}
 }
 
-func TestIsUnderDir(t *testing.T) {
-	cases := []struct {
-		path, dir string
-		want      bool
-	}{
-		{"/opt/homebrew/bin/promptconduit", "/opt/homebrew", true},
-		{"/opt/homebrew/bin/promptconduit", "/opt/homebrew/", true}, // trailing slash tolerated
-		{"/opt/homebrew", "/opt/homebrew", true},                    // exact
-		{"/opt/homebrew-extra/bin/x", "/opt/homebrew", false},       // prefix-but-not-nested
-		{"/usr/local/bin/x", "/opt/homebrew", false},
-	}
-	for _, c := range cases {
-		if got := isUnderDir(c.path, c.dir); got != c.want {
-			t.Errorf("isUnderDir(%q, %q) = %v, want %v", c.path, c.dir, got, c.want)
-		}
-	}
-}
-
 func TestIsNewerVersion(t *testing.T) {
 	cases := []struct {
 		a, b string

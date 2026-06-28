@@ -75,6 +75,20 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Take an advisory lock so two concurrent invocations (e.g. a manual run and
+	// the detached background upgrade) don't both upgrade at once. Covers the
+	// brew and self-replace paths alike.
+	lockPath := filepath.Join(client.ConfigDir(), updater.LockFileName)
+	release, err := updater.Lock(lockPath)
+	defer release()
+	if err != nil {
+		if errors.Is(err, updater.ErrLocked) {
+			cmd.Println("Another upgrade is already in progress; skipping.")
+			return nil
+		}
+		return fmt.Errorf("acquire upgrade lock: %w", err)
+	}
+
 	// Homebrew-managed installs must upgrade via brew, not by self-replacing the
 	// Cellar binary (which would desync brew's metadata from the file on disk).
 	if exe, err := os.Executable(); err == nil && updater.IsHomebrewManaged(exe) {
@@ -97,19 +111,6 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 		cmd.Printf("Cannot self-upgrade: %v\n", err)
 		cmd.Println("If you installed via Homebrew, run: brew upgrade promptconduit")
 		return err
-	}
-
-	// Take an advisory lock so two concurrent invocations don't race on
-	// the same binary swap.
-	lockPath := filepath.Join(client.ConfigDir(), updater.LockFileName)
-	release, err := updater.Lock(lockPath)
-	defer release()
-	if err != nil {
-		if errors.Is(err, updater.ErrLocked) {
-			cmd.Println("Another upgrade is already in progress; skipping.")
-			return nil
-		}
-		return fmt.Errorf("acquire upgrade lock: %w", err)
 	}
 
 	archive, checksums, err := updater.AssetForCurrent(rel)

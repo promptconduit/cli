@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -81,6 +82,17 @@ func (e Editor) Available() bool { return e.resolveCLI() != "" }
 // the hook setup. A non-nil error means the CLI was found but the install
 // command itself failed.
 func Install(e Editor) (InstallResult, error) {
+	// The interactive `install` command is user-driven and shouldn't impose an
+	// arbitrary deadline, so it runs unbounded. The background reconcile path
+	// uses InstallContext with a timeout instead.
+	return InstallContext(context.Background(), e)
+}
+
+// InstallContext is Install with a caller-supplied context, so callers that run
+// outside an interactive command (e.g. the post-upgrade reconcile in
+// PersistentPreRun) can bound the editor subprocess and never hang the user's
+// command if the editor CLI stalls.
+func InstallContext(ctx context.Context, e Editor) (InstallResult, error) {
 	res := InstallResult{Editor: e.Name}
 	if v, err := Version(); err == nil {
 		res.Version = v
@@ -99,7 +111,7 @@ func Install(e Editor) (InstallResult, error) {
 	}
 	defer cleanup()
 
-	out, err := exec.Command(cli, "--install-extension", vsixPath, "--force").CombinedOutput()
+	out, err := exec.CommandContext(ctx, cli, "--install-extension", vsixPath, "--force").CombinedOutput()
 	if err != nil {
 		return res, fmt.Errorf("%s --install-extension failed: %w: %s",
 			e.Command, err, strings.TrimSpace(string(out)))
