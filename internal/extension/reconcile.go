@@ -12,7 +12,7 @@ import (
 
 // ExtensionID is the editor extension identifier (<publisher>.<name>), used to
 // read the installed version from `--list-extensions --show-versions`.
-const ExtensionID = "promptconduit.promptconduit-cost"
+const ExtensionID = "promptconduit.promptconduit"
 
 // Editor subprocesses (Cursor/VS Code CLIs) can be slow to spawn or hang, and
 // reconcile runs inside PersistentPreRun, so every call is bounded — a stalled

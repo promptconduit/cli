@@ -28,7 +28,7 @@ func TestDecideReconcile(t *testing.T) {
 }
 
 func TestParseInstalledVersion(t *testing.T) {
-	const id = "promptconduit.promptconduit-cost"
+	const id = "promptconduit.promptconduit"
 	cases := []struct {
 		name   string
 		output string
@@ -36,17 +36,17 @@ func TestParseInstalledVersion(t *testing.T) {
 	}{
 		{
 			name:   "present among others",
-			output: "ms-python.python@2024.1.0\npromptconduit.promptconduit-cost@0.4.0\nesbenp.prettier-vscode@10.1.0\n",
+			output: "ms-python.python@2024.1.0\npromptconduit.promptconduit@0.4.0\nesbenp.prettier-vscode@10.1.0\n",
 			want:   "0.4.0",
 		},
 		{
 			name:   "only entry",
-			output: "promptconduit.promptconduit-cost@0.3.0\n",
+			output: "promptconduit.promptconduit@0.3.0\n",
 			want:   "0.3.0",
 		},
 		{
 			name:   "with surrounding whitespace",
-			output: "  promptconduit.promptconduit-cost@1.0.0  \n",
+			output: "  promptconduit.promptconduit@1.0.0  \n",
 			want:   "1.0.0",
 		},
 		{
@@ -56,7 +56,15 @@ func TestParseInstalledVersion(t *testing.T) {
 		},
 		{
 			name:   "id without version (no --show-versions) is ignored",
-			output: "promptconduit.promptconduit-cost\n",
+			output: "promptconduit.promptconduit\n",
+			want:   "",
+		},
+		{
+			// Guard the rebrand: the legacy id is a prefix of the new id, but the
+			// trailing "@" in the match prefix must keep them distinct so a lingering
+			// promptconduit-cost install is never mistaken for the new extension.
+			name:   "legacy -cost id is not matched",
+			output: "promptconduit.promptconduit-cost@0.5.0\n",
 			want:   "",
 		},
 		{
