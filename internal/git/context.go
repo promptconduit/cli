@@ -67,10 +67,11 @@ func ExtractContext(workingDir string) *envelope.GitContext {
 
 	// Worktree detection: a linked worktree has a per-worktree git dir that
 	// differs from the shared common dir. This catches sessions started *inside*
-	// an existing worktree, which the WorktreeCreate hook never reports.
-	if isWorktree, path := detectWorktree(workingDir); isWorktree {
+	// an existing worktree, which the WorktreeCreate hook never reports. Reuse
+	// repoRoot (already the worktree's top-level) for the path — no extra call.
+	if detectWorktree(workingDir) {
 		ctx.IsWorktree = true
-		ctx.WorktreePath = path
+		ctx.WorktreePath = repoRoot
 	}
 
 	// Ahead/behind counts
@@ -83,22 +84,35 @@ func ExtractContext(workingDir string) *envelope.GitContext {
 	return ctx
 }
 
-// detectWorktree reports whether workingDir is a linked git worktree and, if so,
-// the worktree's top-level path. A linked worktree's `--git-dir` (e.g.
-// .git/worktrees/<name>) differs from its `--git-common-dir` (the main .git);
-// in the main checkout the two resolve to the same directory.
-func detectWorktree(workingDir string) (bool, string) {
-	gitDir := runGitCmd(workingDir, "rev-parse", "--absolute-git-dir")
-	commonDir := runGitCmd(workingDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+// detectWorktree reports whether workingDir is a linked git worktree (not the
+// main checkout). A linked worktree's per-worktree git dir
+// (.git/worktrees/<name>) differs from the shared common dir; in the main
+// checkout the two are identical.
+//
+// Both paths come from a SINGLE `git rev-parse --git-dir --git-common-dir`
+// invocation so they're resolved with identical semantics — this avoids
+// false positives from symlink/case differences between two separate
+// subcommands, needs no `--path-format` (so it works on git >= 2.5), and adds
+// just one subprocess to the latency-sensitive hook path.
+func detectWorktree(workingDir string) bool {
+	out := runGitCmd(workingDir, "rev-parse", "--git-dir", "--git-common-dir")
+	lines := strings.Split(out, "\n")
+	if len(lines) < 2 {
+		return false
+	}
+	gitDir, commonDir := strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])
 	if gitDir == "" || commonDir == "" {
-		return false, ""
+		return false
 	}
-	if filepath.Clean(gitDir) == filepath.Clean(commonDir) {
-		return false, ""
+	// Resolve both relative to workingDir for a stable comparison (git may emit
+	// either path relative to the cwd).
+	abs := func(p string) string {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(workingDir, p)
+		}
+		return filepath.Clean(p)
 	}
-	// Linked worktree. Its top-level dir is the most useful path to report.
-	top := runGitCmd(workingDir, "rev-parse", "--show-toplevel")
-	return true, top
+	return abs(gitDir) != abs(commonDir)
 }
 
 // runGitCmd executes a git command with timeout and returns trimmed stdout
