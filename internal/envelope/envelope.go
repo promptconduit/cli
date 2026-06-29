@@ -115,6 +115,12 @@ type GitContext struct {
 	RemoteURL        string `json:"remote_url,omitempty"`
 	WorkingDirectory string `json:"working_directory,omitempty"`
 	IsDetachedHead   bool   `json:"is_detached_head,omitempty"`
+	// IsWorktree is true when the working directory is a linked git worktree
+	// (not the main checkout). This is the robust worktree signal for coaching:
+	// the WorktreeCreate hook only fires when the agent creates one, missing
+	// sessions started inside an existing worktree.
+	IsWorktree   bool   `json:"is_worktree,omitempty"`
+	WorktreePath string `json:"worktree_path,omitempty"`
 }
 
 // New creates a new RawEventEnvelope with the given enrichment block.
