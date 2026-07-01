@@ -227,7 +227,10 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "upgrade", "watch", "collect", "cost":
+	case "hook", "upgrade", "watch", "collect", "cost", "sessions", "resume":
+		// sessions/resume are called programmatically (the editor extension's
+		// auto-restore) and resume execs straight into claude — keep them quiet
+		// and fast, no update banner.
 		return true
 	}
 	return false
