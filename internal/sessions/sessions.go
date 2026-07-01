@@ -16,9 +16,15 @@ import (
 )
 
 // Session is a resumable session reconstructed from the event log. It carries
-// everything needed to reopen it: the exact working directory it ran in
-// (worktree-aware — this is the real cwd, so a worktree session points at the
-// worktree path) and the session id to hand to `claude --resume`.
+// everything needed to reopen it: the directory `claude --resume` must run from
+// and the session id to hand to it.
+//
+// Cwd is the session's *launch* directory — the one Claude Code stored the
+// transcript under and scopes --resume to (worktree-aware: a session launched in
+// a worktree points at the worktree path). ReadRecent resolves it from the
+// transcript via EnrichLaunchDirs; only when no transcript is found does it fall
+// back to the tool cwd from the event log, which can differ (e.g. an --add-dir
+// subdirectory) and would make --resume fail.
 type Session struct {
 	SessionID  string    `json:"session_id"`
 	Tool       string    `json:"tool"`
@@ -138,7 +144,15 @@ const defaultMaxBytes int64 = 16 * 1024 * 1024
 // slice, not an error (Free/local-only users with logging on still have it; a
 // user who disabled logging simply has nothing to restore).
 func ReadRecent(since time.Duration, now time.Time) ([]Session, error) {
-	return readRecentFrom(eventlog.EventsJSONLPath(), since, now, defaultMaxBytes)
+	list, err := readRecentFrom(eventlog.EventsJSONLPath(), since, now, defaultMaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	// Correct each Cwd from the event's tool cwd to the session's launch dir,
+	// so `resume` cd's where --resume actually works and MarkAlive matches the
+	// live process's real cwd.
+	EnrichLaunchDirs(list)
+	return list, nil
 }
 
 func readRecentFrom(path string, since time.Duration, now time.Time, maxBytes int64) ([]Session, error) {
