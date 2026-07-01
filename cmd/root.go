@@ -178,8 +178,15 @@ func reconcileCostExtension(cmd *cobra.Command) {
 			continue
 		}
 		if res.Updated {
+			// Drop a marker the running extension watches so it can offer a
+			// one-click reload. Best-effort — the terminal notice below is the
+			// fallback for anyone who doesn't see the in-editor toast.
+			_ = extension.WriteUpdateMarker(res.Bundled, res.Editor)
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
-				"promptconduit: updated the %s cost extension to v%s\n", res.Editor, res.Bundled)
+				"promptconduit: updated the %s cost extension to v%s\n"+
+					"  → Reload %s to apply: press Cmd/Ctrl+R, or run \"Developer: Reload Window\".\n"+
+					"    A full restart isn't needed — and would close terminals running Claude Code.\n",
+				res.Editor, res.Bundled, res.Editor)
 		}
 	}
 }
