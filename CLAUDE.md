@@ -109,6 +109,13 @@ Detection is version-based (not a byte diff) because `vsce package` output isn't
 **bump the extension's `package.json` version whenever you change it**. (Opening the PR needs the
 repo's "Allow GitHub Actions to create and approve pull requests" setting.)
 
+After a successful post-upgrade reconcile, the CLI writes an update marker
+(`internal/extension/marker.go` → `~/.promptconduit/extension-update.json`) recording the newly
+installed version. The running extension watches that file and, when it names a newer version than
+the one it's running, offers a one-click **Reload Window** — a reload (not a restart) so the editor's
+pty host survives and terminals running Claude Code keep their sessions. Keep the JSON field names in
+sync with `editor-extension/src/updatePrompt.ts`.
+
 ## Key Design Decisions
 
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
