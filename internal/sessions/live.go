@@ -3,6 +3,7 @@ package sessions
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -38,16 +39,38 @@ func MarkAlive(list []Session, liveCwds map[string]bool) {
 	}
 }
 
+// claudePIDs lists the pids of running Claude Code processes. We enumerate with
+// `ps` rather than `pgrep` deliberately: pgrep does not report the probe's own
+// ancestor process, so when `sessions` runs from *inside* a Claude Code terminal
+// (the extension's normal path is safe, but `promptconduit sessions` by hand is
+// not) pgrep silently drops that very session and reports it as interrupted.
+// `ps -axo` sees every process, ancestors included.
 func claudePIDs(ctx context.Context) []string {
-	// -x: match the exact process name, so we don't catch "claude-something".
-	out, err := exec.CommandContext(ctx, "pgrep", "-x", "claude").Output()
+	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,comm=").Output()
 	if err != nil {
 		return nil
 	}
+	return parseClaudePIDs(string(out))
+}
+
+// parseClaudePIDs extracts the pids of `claude` processes from `ps -axo
+// pid=,comm=` output. A line is "<pid> <comm>", where comm may itself be a path
+// with spaces (the Claude *desktop app* is
+// /Applications/Claude.app/…/Claude); we match on the executable basename being
+// exactly "claude" so the CLI is kept and the desktop app ("Claude") is not.
+func parseClaudePIDs(psOutput string) []string {
 	var pids []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if p := strings.TrimSpace(line); p != "" {
-			pids = append(pids, p)
+	for _, line := range strings.Split(psOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		pid, comm, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		if filepath.Base(strings.TrimSpace(comm)) == "claude" {
+			pids = append(pids, pid)
 		}
 	}
 	return pids
