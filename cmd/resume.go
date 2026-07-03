@@ -57,16 +57,22 @@ for shell integration).`,
 			return fmt.Errorf("the `claude` CLI wasn't found on PATH — install Claude Code, then retry")
 		}
 
+		claudeArgs := resumeArgs(target)
+
 		if resumePrintOnly {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cd %s && claude --resume %s\n",
-				shellQuote(target.Cwd), target.SessionID)
+			quoted := make([]string, len(claudeArgs))
+			for i, a := range claudeArgs {
+				quoted[i] = shellQuote(a)
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "cd %s && claude %s\n",
+				shellQuote(target.Cwd), strings.Join(quoted, " "))
 			return nil
 		}
 
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Resuming %s in %s …\n",
 			shortID(target.SessionID), prettyDir(target.Cwd))
 
-		child := exec.Command(claude, "--resume", target.SessionID)
+		child := exec.Command(claude, claudeArgs...)
 		child.Dir = target.Cwd
 		child.Stdin = os.Stdin
 		child.Stdout = os.Stdout
@@ -80,6 +86,18 @@ for shell integration).`,
 		}
 		return nil
 	},
+}
+
+// resumeArgs builds the argv for `claude` that reopens a session: --resume with
+// its id, plus a --add-dir for each directory it worked in outside its launch
+// dir, so a session that reached across repos comes back with the same working
+// set.
+func resumeArgs(s sessions.Session) []string {
+	args := []string{"--resume", s.SessionID}
+	for _, d := range s.AddDirs {
+		args = append(args, "--add-dir", d)
+	}
+	return args
 }
 
 // pickSession resolves a user-supplied id (exact or unambiguous prefix) to a

@@ -8,6 +8,7 @@ package sessions
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,16 @@ type Session struct {
 	LastActive time.Time `json:"last_active"`
 	EventCount int       `json:"event_count"`
 	Alive      bool      `json:"alive"` // a live process is already running in Cwd
+	// AddDirs are extra directories the session worked in that live *outside*
+	// its launch dir (Cwd) — the `--add-dir` set to re-attach on resume so a
+	// session that reached across repos comes back with the same working set.
+	// Dirs already under Cwd are omitted (resuming from Cwd already covers them).
+	AddDirs []string `json:"add_dirs,omitempty"`
+
+	// touched collects every distinct tool cwd seen for this session, in
+	// first-seen order. It's the raw material for AddDirs, computed once the
+	// launch dir is known; unexported so it never reaches JSON.
+	touched []string
 }
 
 // resumableTools are the CLI tools whose sessions can be reopened with a resume
@@ -88,6 +99,7 @@ func Aggregate(lines []string) []Session {
 			bySession[sid] = s
 		}
 		s.EventCount++
+		s.addTouched(e.Native.Cwd)
 		// Keep the fields from the latest event so cwd/branch reflect where the
 		// session ended up (it can move between worktrees mid-session).
 		if !t.IsZero() && !t.Before(s.LastActive) {
@@ -152,6 +164,12 @@ func ReadRecent(since time.Duration, now time.Time) ([]Session, error) {
 	// so `resume` cd's where --resume actually works and MarkAlive matches the
 	// live process's real cwd.
 	EnrichLaunchDirs(list)
+	// With the launch dir settled, derive the --add-dir set (dirs the session
+	// touched that live outside it).
+	for i := range list {
+		list[i].AddDirs = additionalDirs(list[i].Cwd, list[i].touched)
+		list[i].touched = nil
+	}
 	return list, nil
 }
 
@@ -198,6 +216,47 @@ func tailLines(path string, maxBytes int64) ([]string, error) {
 		parts = parts[1:] // drop the leading partial line
 	}
 	return parts, nil
+}
+
+// addTouched records a distinct tool cwd (first-seen order preserved).
+func (s *Session) addTouched(cwd string) {
+	if cwd == "" {
+		return
+	}
+	for _, d := range s.touched {
+		if d == cwd {
+			return
+		}
+	}
+	s.touched = append(s.touched, cwd)
+}
+
+// additionalDirs returns the subset of touched dirs that live outside launch —
+// the `--add-dir` set to re-attach on resume. A dir equal to launch, or nested
+// under it, is dropped: resuming from launch already grants access to it, so
+// re-adding it would only clutter the command. Order follows first-seen.
+func additionalDirs(launch string, touched []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, d := range touched {
+		if d == "" || seen[d] || d == launch || isSubpath(launch, d) {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out
+}
+
+// isSubpath reports whether child is base or nested beneath it. Both are assumed
+// absolute (they come from process/tool cwds); a non-absolute or escaping
+// relation yields false.
+func isSubpath(base, child string) bool {
+	rel, err := filepath.Rel(base, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel))
 }
 
 func truncate(s string, n int) string {
