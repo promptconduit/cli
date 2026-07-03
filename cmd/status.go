@@ -85,7 +85,6 @@ func printEventLogStatus(cfg *client.Config) {
 		fmt.Printf(" (%d events)", n)
 	}
 	fmt.Println()
-	fmt.Printf("  Sent log:     %s\n", eventlog.EventsPath())
 	fmt.Println("  Inspect with: promptconduit events")
 	fmt.Println()
 }

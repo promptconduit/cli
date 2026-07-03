@@ -126,6 +126,25 @@ func (sm *StateManager) ClearPendingUpload(path string) {
 	delete(sm.state.PendingUploads, path)
 }
 
+// IsPlanSynced checks whether a plan file with the given hash has been synced.
+func (sm *StateManager) IsPlanSynced(path, hash string) bool {
+	if info, ok := sm.state.SyncedPlans[path]; ok {
+		return info.Hash == hash
+	}
+	return false
+}
+
+// MarkPlanSynced records a plan file as synced.
+func (sm *StateManager) MarkPlanSynced(path string, info SyncedPlanInfo) {
+	if sm.state.SyncedPlans == nil {
+		sm.state.SyncedPlans = make(map[string]SyncedPlanInfo)
+	}
+	if info.SyncedAt == "" {
+		info.SyncedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	sm.state.SyncedPlans[path] = info
+}
+
 // AddFailedSync tracks a failed sync for retry
 func (sm *StateManager) AddFailedSync(sessionID, filePath, errorMsg string) {
 	if sm.state.FailedSyncs == nil {

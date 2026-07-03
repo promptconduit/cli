@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// line builds one events.jsonl envelope line for the fields Aggregate reads.
+// line builds one v2 events.jsonl envelope line for the fields Aggregate reads.
 func line(tool, sid, cwd, branch, repo, at, prompt string) string {
 	var b strings.Builder
-	b.WriteString(`{"tool":"` + tool + `","captured_at":"` + at + `","native_payload":{"session_id":"` + sid + `","cwd":"` + cwd + `"`)
+	b.WriteString(`{"schema":2,"tool":"` + tool + `","captured_at":"` + at + `","session_id":"` + sid + `","raw_event":{"cwd":"` + cwd + `"`)
 	if prompt != "" {
 		b.WriteString(`,"prompt":"` + prompt + `"`)
 	}
-	b.WriteString(`},"git":{"repo_name":"` + repo + `","branch":"` + branch + `"}}`)
+	b.WriteString(`},"enrichments":{"vcs":{"repo":"` + repo + `","branch":"` + branch + `"}}}`)
 	return b.String()
 }
 

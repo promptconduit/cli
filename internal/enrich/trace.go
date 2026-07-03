@@ -1,48 +1,54 @@
-package cmd
+package enrich
 
 import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/correlation"
-	"github.com/promptconduit/cli/internal/envelope"
 )
 
-// buildCorrelation populates trace/span IDs for an outgoing envelope and
-// records the new span for future parent lookups. Failures are silent —
-// correlation is best-effort and must never block the hook.
-//
-// hookEvent is the tool-native event name (Claude Code uses PreToolUse,
-// PostToolUse, etc.). nativeEvent is the parsed payload; sessionID has
-// already been pulled out by the caller.
-func buildCorrelation(tool, hookEvent, sessionID string, nativeEvent map[string]interface{}) *envelope.Correlation {
+// TraceEnrichment is the "trace" slug: W3C Trace Context-compatible IDs so
+// events can be stitched into a single per-session trace. Generated locally;
+// not OTEL-SDK backed.
+type TraceEnrichment struct {
+	// TraceID is 32 lowercase hex chars (16 bytes), stable per session.
+	TraceID string `json:"trace_id"`
+	// SpanID is 16 lowercase hex chars (8 bytes), unique per event.
+	SpanID string `json:"span_id"`
+	// ParentSpanID is set when this event has a known parent in a defined
+	// event chain (tool_post -> tool_pre, Stop -> UserPromptSubmit, etc.).
+	ParentSpanID string `json:"parent_span_id,omitempty"`
+}
+
+type traceEnricher struct{}
+
+func init() { Register(traceEnricher{}) }
+
+func (traceEnricher) Slug() string              { return "trace" }
+func (traceEnricher) Applies(ctx *Context) bool { return true }
+
+func (traceEnricher) Enrich(ctx *Context) (any, error) {
 	store := correlation.NewStore(client.ConfigDir())
 	store.MaybeGC()
 
 	spanID := correlation.NewSpanID()
 
 	// No session ID: emit an orphan trace for this event only.
-	if sessionID == "" {
-		return &envelope.Correlation{
-			TraceID: correlation.NewTraceID(),
-			SpanID:  spanID,
-		}
+	if ctx.SessionID == "" {
+		return TraceEnrichment{TraceID: correlation.NewTraceID(), SpanID: spanID}, nil
 	}
 
-	rec, err := store.LoadOrCreateTrace(sessionID)
+	rec, err := store.LoadOrCreateTrace(ctx.SessionID)
 	if err != nil || rec == nil {
-		return &envelope.Correlation{
-			TraceID: correlation.NewTraceID(),
-			SpanID:  spanID,
-		}
+		return TraceEnrichment{TraceID: correlation.NewTraceID(), SpanID: spanID}, nil
 	}
 
-	parentSpanID := lookupParentSpan(store, tool, hookEvent, sessionID, nativeEvent)
-	recordSpan(store, tool, hookEvent, sessionID, spanID, nativeEvent)
+	parentSpanID := lookupParentSpan(store, ctx)
+	recordSpan(store, ctx, spanID)
 
-	return &envelope.Correlation{
+	return TraceEnrichment{
 		TraceID:      rec.TraceID,
 		SpanID:       spanID,
 		ParentSpanID: parentSpanID,
-	}
+	}, nil
 }
 
 // lookupParentSpan resolves parent_span_id for known event chains.
@@ -51,20 +57,16 @@ func buildCorrelation(tool, hookEvent, sessionID string, nativeEvent map[string]
 // Note: Claude Code's hook payloads do NOT currently carry tool_use_id /
 // task_id / elicitation_id directly — those fields only appear in the
 // transcript JSONL referenced by transcript_path. The chain-keying below
-// remains a no-op for those events in real traffic; server-side adapters
+// remains a no-op for those events in real traffic; server-side processing
 // can enrich linkage by parsing transcript_path. SubagentStart/Stop do
 // carry agent_id and will resolve. session_id-keyed chains (PreCompact,
 // SessionEnd, Stop) work everywhere.
-func lookupParentSpan(store *correlation.Store, tool, hookEvent, sessionID string, e map[string]interface{}) string {
-	switch tool {
-	case "claude-code":
-		return lookupParentClaudeCode(store, hookEvent, sessionID, e)
+func lookupParentSpan(store *correlation.Store, ctx *Context) string {
+	if ctx.Tool != "claude-code" {
+		return ""
 	}
-	return ""
-}
-
-func lookupParentClaudeCode(store *correlation.Store, hookEvent, sessionID string, e map[string]interface{}) string {
-	switch hookEvent {
+	e, sessionID := ctx.RawEvent, ctx.SessionID
+	switch ctx.HookEvent {
 	case "PostToolUse", "PostToolUseFailure":
 		if id := stringField(e, "tool_use_id"); id != "" {
 			return store.LookupParent(sessionID, correlation.SpanKindToolUse, id)
@@ -93,15 +95,12 @@ func lookupParentClaudeCode(store *correlation.Store, hookEvent, sessionID strin
 }
 
 // recordSpan persists span IDs that may become future parents.
-func recordSpan(store *correlation.Store, tool, hookEvent, sessionID, spanID string, e map[string]interface{}) {
-	switch tool {
-	case "claude-code":
-		recordSpanClaudeCode(store, hookEvent, sessionID, spanID, e)
+func recordSpan(store *correlation.Store, ctx *Context, spanID string) {
+	if ctx.Tool != "claude-code" {
+		return
 	}
-}
-
-func recordSpanClaudeCode(store *correlation.Store, hookEvent, sessionID, spanID string, e map[string]interface{}) {
-	switch hookEvent {
+	e, sessionID := ctx.RawEvent, ctx.SessionID
+	switch ctx.HookEvent {
 	case "SessionStart":
 		_ = store.RecordRootSpan(sessionID, spanID)
 	case "UserPromptSubmit":

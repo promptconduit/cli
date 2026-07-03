@@ -178,6 +178,18 @@ func parseAheadBehind(counts string) (ahead, behind int) {
 	return ahead, behind
 }
 
+// DefaultBranch returns origin's HEAD branch name (e.g. "main"), or "" when
+// unknown. Reads the local ref only — no network. The ref may be absent on
+// fresh clones that never ran `git remote set-head`; that's fine, we omit it.
+func DefaultBranch(workingDir string) string {
+	ref := runGitCmd(workingDir, "symbolic-ref", "refs/remotes/origin/HEAD")
+	const prefix = "refs/remotes/origin/"
+	if strings.HasPrefix(ref, prefix) {
+		return strings.TrimPrefix(ref, prefix)
+	}
+	return ""
+}
+
 // GetRepoName extracts repository name from path or git remote
 func GetRepoName(workingDir string) string {
 	// Try to get from git remote URL

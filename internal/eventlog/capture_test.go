@@ -10,7 +10,7 @@ import (
 func TestRecordCaptureWritesBareEnvelope(t *testing.T) {
 	withTempDir(t)
 
-	payload := []byte(`{"envelope_version":"1.2","tool":"claude-code","hook_event":"UserPromptSubmit","native_payload":{"session_id":"abc"}}`)
+	payload := []byte(`{"schema":2,"tool":"claude-code","hook_event":"UserPromptSubmit","session_id":"abc","raw_event":{"session_id":"abc"}}`)
 	RecordCapture(payload)
 
 	data, err := os.ReadFile(EventsJSONLPath())
@@ -43,7 +43,7 @@ func TestRecordCaptureWritesBareEnvelope(t *testing.T) {
 func TestRecordCaptureRedactsSecrets(t *testing.T) {
 	withTempDir(t)
 
-	RecordCapture([]byte(`{"tool":"cursor","native_payload":{"prompt":"my key sk-ABCDEF0123456789abcd"}}`))
+	RecordCapture([]byte(`{"schema":2,"tool":"cursor","raw_event":{"prompt":"my key sk-ABCDEF0123456789abcd"}}`))
 
 	data, err := os.ReadFile(EventsJSONLPath())
 	if err != nil {
@@ -84,9 +84,51 @@ func TestCountCapturedCountsEachLine(t *testing.T) {
 	withTempDir(t)
 
 	for i := 0; i < 3; i++ {
-		RecordCapture([]byte(`{"tool":"claude-code","hook_event":"Stop"}`))
+		RecordCapture([]byte(`{"schema":2,"tool":"claude-code","hook_event":"Stop"}`))
 	}
 	if n, ok := CountCaptured(); !ok || n != 3 {
 		t.Errorf("CountCaptured() = %d,%v want 3,true", n, ok)
+	}
+}
+
+func TestMigrateV1FilesMovesLegacyLogAside(t *testing.T) {
+	withTempDir(t)
+
+	// A pre-v2 events.jsonl (no "schema" key) plus the retired ndjson files.
+	v1Line := `{"envelope_version":"1.2","tool":"claude-code","native_payload":{}}`
+	if err := os.WriteFile(EventsJSONLPath(), []byte(v1Line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	legacyNDJSON := EventsJSONLPath()[:len(EventsJSONLPath())-len("events.jsonl")] + "events.ndjson"
+	if err := os.WriteFile(legacyNDJSON, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateV1Files()
+
+	if _, err := os.Stat(EventsJSONLPath() + ".v1.bak"); err != nil {
+		t.Errorf("v1 log not moved to .v1.bak: %v", err)
+	}
+	if _, err := os.Stat(legacyNDJSON); !os.IsNotExist(err) {
+		t.Error("events.ndjson not deleted")
+	}
+	if _, err := os.Stat(EventsJSONLPath()); !os.IsNotExist(err) {
+		t.Error("live events.jsonl should be gone until the first v2 capture")
+	}
+}
+
+func TestMigrateV1FilesLeavesV2LogAlone(t *testing.T) {
+	withTempDir(t)
+
+	v2Line := `{"schema":2,"tool":"claude-code","raw_event":{}}`
+	if err := os.WriteFile(EventsJSONLPath(), []byte(v2Line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	migrateV1Files()
+
+	data, err := os.ReadFile(EventsJSONLPath())
+	if err != nil || !strings.Contains(string(data), `"schema":2`) {
+		t.Errorf("v2 log must be untouched: %v %s", err, data)
 	}
 }

@@ -55,21 +55,24 @@ var resumableTools = map[string]bool{
 	"claude-code": true,
 }
 
-// envelope is the minimal slice of an events.jsonl line we need. The event log
-// stores far more; we only decode the resume-relevant fields.
+// envelope is the minimal slice of a v2 events.jsonl line we need. The event
+// log stores far more; we only decode the resume-relevant fields.
 type envelope struct {
+	Schema     int    `json:"schema"`
 	Tool       string `json:"tool"`
 	HookEvent  string `json:"hook_event"`
 	CapturedAt string `json:"captured_at"`
-	Native     struct {
-		SessionID string `json:"session_id"`
-		Cwd       string `json:"cwd"`
-		Prompt    string `json:"prompt"`
-	} `json:"native_payload"`
-	Git struct {
-		RepoName string `json:"repo_name"`
-		Branch   string `json:"branch"`
-	} `json:"git"`
+	SessionID  string `json:"session_id"`
+	Raw        struct {
+		Cwd    string `json:"cwd"`
+		Prompt string `json:"prompt"`
+	} `json:"raw_event"`
+	Enrichments struct {
+		VCS struct {
+			Repo   string `json:"repo"`
+			Branch string `json:"branch"`
+		} `json:"vcs"`
+	} `json:"enrichments"`
 }
 
 // Aggregate folds a chronological run of event lines into one Session per
@@ -87,8 +90,11 @@ func Aggregate(lines []string) []Session {
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			continue
 		}
-		sid := e.Native.SessionID
-		if sid == "" || e.Native.Cwd == "" || !resumableTools[e.Tool] {
+		if e.Schema < 2 {
+			continue // pre-v2 line (shouldn't survive migration, but be safe)
+		}
+		sid := e.SessionID
+		if sid == "" || e.Raw.Cwd == "" || !resumableTools[e.Tool] {
 			continue
 		}
 		t, _ := time.Parse(time.RFC3339, e.CapturedAt)
@@ -99,25 +105,25 @@ func Aggregate(lines []string) []Session {
 			bySession[sid] = s
 		}
 		s.EventCount++
-		s.addTouched(e.Native.Cwd)
+		s.addTouched(e.Raw.Cwd)
 		// Keep the fields from the latest event so cwd/branch reflect where the
 		// session ended up (it can move between worktrees mid-session).
 		if !t.IsZero() && !t.Before(s.LastActive) {
 			s.LastActive = t
-			s.Cwd = e.Native.Cwd
-			s.Repo = e.Git.RepoName
-			s.Branch = e.Git.Branch
+			s.Cwd = e.Raw.Cwd
+			s.Repo = e.Enrichments.VCS.Repo
+			s.Branch = e.Enrichments.VCS.Branch
 		} else if s.Cwd == "" {
 			// No usable timestamp yet — still capture a cwd so the session is
 			// restorable.
-			s.Cwd = e.Native.Cwd
-			s.Repo = e.Git.RepoName
-			s.Branch = e.Git.Branch
+			s.Cwd = e.Raw.Cwd
+			s.Repo = e.Enrichments.VCS.Repo
+			s.Branch = e.Enrichments.VCS.Branch
 		}
 		// Use the event's prompt as a human label, but skip system/tool-injected
 		// messages (task notifications, tool XML) that start with "<" — they're
 		// not something the user typed and make for a confusing label.
-		if p := strings.TrimSpace(e.Native.Prompt); p != "" && !strings.HasPrefix(p, "<") {
+		if p := strings.TrimSpace(e.Raw.Prompt); p != "" && !strings.HasPrefix(p, "<") {
 			s.LastPrompt = truncate(p, 140)
 		}
 	}
@@ -193,7 +199,7 @@ func tailLines(path string, maxBytes int64) ([]string, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	fi, err := f.Stat()
 	if err != nil {
