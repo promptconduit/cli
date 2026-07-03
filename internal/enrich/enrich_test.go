@@ -375,3 +375,102 @@ func TestOSVersionParsers(t *testing.T) {
 		t.Errorf("version_id fallback = %q", got)
 	}
 }
+
+func TestTurnAndInterrupt_Lifecycle(t *testing.T) {
+	SetStateDirForTest(t.TempDir())
+	t.Cleanup(func() { SetStateDirForTest("") })
+
+	sess := "turn-sess"
+	pe := promptEnricher{}
+	te := turnEnricher{}
+	promptCtx := func() *Context {
+		return &Context{
+			Tool: "claude-code", HookEvent: "UserPromptSubmit", SessionID: sess,
+			RawEvent: map[string]interface{}{"prompt": "do the thing"},
+		}
+	}
+	stopCtx := func() *Context {
+		return &Context{
+			Tool: "claude-code", HookEvent: "Stop", SessionID: sess, PromptID: "p-9",
+			RawEvent: map[string]interface{}{},
+		}
+	}
+
+	// Prompt 1 opens a turn: not an interrupt.
+	payload, err := pe.Enrich(promptCtx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.(PromptEnrichment).IsInterrupt {
+		t.Error("first prompt must not be an interrupt")
+	}
+
+	// Prompt 2 before any Stop: interrupt.
+	payload, _ = pe.Enrich(promptCtx())
+	if !payload.(PromptEnrichment).IsInterrupt {
+		t.Error("prompt during an open turn must be an interrupt")
+	}
+
+	// Stop closes the turn and reports its duration + prompt id.
+	if !te.Applies(stopCtx()) {
+		t.Fatal("turn enricher must apply to Stop")
+	}
+	payload, err = te.Enrich(stopCtx())
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := payload.(TurnEnrichment)
+	if turn.DurationMs < 0 || turn.PromptID != "p-9" {
+		t.Errorf("turn = %+v", turn)
+	}
+
+	// Turn consumed: a second Stop emits nothing…
+	payload, _ = te.Enrich(stopCtx())
+	if payload != nil {
+		t.Errorf("closed turn should not re-emit, got %+v", payload)
+	}
+	// …and the next prompt is clean again.
+	payload, _ = pe.Enrich(promptCtx())
+	if payload.(PromptEnrichment).IsInterrupt {
+		t.Error("prompt after Stop must not be an interrupt")
+	}
+}
+
+func TestPermissionEnricher(t *testing.T) {
+	e := permissionEnricher{}
+
+	payload, err := e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "PermissionRequest",
+		RawEvent: map[string]interface{}{
+			"tool_name":  "Bash",
+			"tool_input": map[string]interface{}{"command": "SECRET"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := payload.(PermissionEnrichment)
+	if req.Decision != "requested" || req.ToolName != "Bash" {
+		t.Errorf("request = %+v", req)
+	}
+	data, _ := json.Marshal(req)
+	if strings.Contains(string(data), "SECRET") {
+		t.Fatalf("tool_input leaked into permission slug: %s", data)
+	}
+
+	payload, _ = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "PermissionDenied",
+		RawEvent: map[string]interface{}{
+			"tool_name": "mcp__stripe__create_customer",
+			"reason":    "policy says no",
+		},
+	})
+	den := payload.(PermissionEnrichment)
+	if den.Decision != "denied" || den.MCPServer != "stripe" {
+		t.Errorf("denied = %+v", den)
+	}
+	data, _ = json.Marshal(den)
+	if strings.Contains(string(data), "policy says no") {
+		t.Fatalf("denial reason leaked into permission slug: %s", data)
+	}
+}
