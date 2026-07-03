@@ -53,7 +53,7 @@ to what's POSTed to `/v1/events/raw` and stored in the platform bucket.
   "cli_version": "…",
   "raw_event": { /* native hook payload, untouched */ },
   "enrichments": { "env": {…}, "trace": {…}, "vcs": {…}, "prompt": {…}, "cost": {…},
-                   "tools": {…}, "diff": {…}, "subagent": {…} }
+                   "tools": {…}, "diff": {…}, "subagent": {…}, "turn": {…}, "permission": {…} }
 }
 ```
 
@@ -63,7 +63,10 @@ git repos) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
 requests, Stop / cursor stop) · `tools` (normalized tool-call list,
 PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
 Stop/SessionEnd) · `subagent` (Start/Stop join with duration + per-agent
-tokens/USD from the agent transcript, SubagentStart/Stop).
+tokens/USD from the agent transcript, SubagentStart/Stop) · `turn`
+(prompt→Stop wall-clock, Stop/StopFailure) · `permission`
+(requested/denied + tool name, PermissionRequest/Denied). `prompt` also
+carries `is_interrupt` (turn-open rule computed at the source).
 
 **Adding an enrichment** = one new file in `internal/enrich/` implementing
 `Enricher` (Slug/Applies/Enrich) plus `Register()` in its `init()`. Rules:

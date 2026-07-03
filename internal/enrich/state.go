@@ -22,6 +22,10 @@ type sessionState struct {
 	PromptCount      int                     `json:"prompt_count,omitempty"`
 	TranscriptOffset int64                   `json:"transcript_offset,omitempty"`
 	Subagents        map[string]subagentInfo `json:"subagents,omitempty"`
+	// TurnStartedAt is the RFC3339 time of the last UserPromptSubmit; non-empty
+	// means a turn is OPEN (no Stop yet). The prompt enricher sets it (and reads
+	// it first for is_interrupt); the turn enricher consumes it at Stop.
+	TurnStartedAt string `json:"turn_started_at,omitempty"`
 }
 
 // subagentInfo is what SubagentStart records for the matching SubagentStop.
