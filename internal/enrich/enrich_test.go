@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -212,5 +213,165 @@ func TestVCS_NormalizeRemote(t *testing.T) {
 		if slug != tc.wantSlug || url != tc.wantURL {
 			t.Errorf("normalizeRemote(%q) = %q,%q want %q,%q", tc.in, slug, url, tc.wantSlug, tc.wantURL)
 		}
+	}
+}
+
+func TestSubagentEnricher_StartStopJoin(t *testing.T) {
+	SetStateDirForTest(t.TempDir())
+	t.Cleanup(func() { SetStateDirForTest("") })
+
+	// Fake subagent transcript with two priced requests.
+	transcript := filepath.Join(t.TempDir(), "agent.jsonl")
+	lines := `{"type":"assistant","requestId":"ar-1","timestamp":"2026-07-03T10:00:00Z","message":{"model":"claude-opus-4-8","usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0}}}
+{"type":"assistant","requestId":"ar-2","timestamp":"2026-07-03T10:00:05Z","message":{"model":"claude-haiku-4-5","usage":{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}
+`
+	if err := os.WriteFile(transcript, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	e := subagentEnricher{}
+
+	startCtx := &Context{
+		Tool: "claude-code", HookEvent: "SubagentStart", SessionID: "sub-sess",
+		RawEvent: map[string]interface{}{"agent_id": "a1", "agent_type": "Explore"},
+	}
+	if !e.Applies(startCtx) {
+		t.Fatal("must apply to SubagentStart")
+	}
+	payload, err := e.Enrich(startCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := payload.(*SubagentEnrichment)
+	if start.Phase != "start" || start.AgentType != "Explore" || start.Concurrent != 1 {
+		t.Errorf("start = %+v", start)
+	}
+
+	// A second concurrent agent bumps parallelism.
+	payload, _ = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "SubagentStart", SessionID: "sub-sess",
+		RawEvent: map[string]interface{}{"agent_id": "a2", "agent_type": "Plan"},
+	})
+	if payload.(*SubagentEnrichment).Concurrent != 2 {
+		t.Errorf("second start concurrent = %d, want 2", payload.(*SubagentEnrichment).Concurrent)
+	}
+
+	// Stop: real payloads carry an EMPTY agent_type — the state join recovers it.
+	payload, err = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "SubagentStop", SessionID: "sub-sess",
+		RawEvent: map[string]interface{}{"agent_id": "a1", "agent_type": "", "agent_transcript_path": transcript},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := payload.(*SubagentEnrichment)
+	if stop.Phase != "stop" || stop.AgentType != "Explore" {
+		t.Errorf("stop join failed: %+v", stop)
+	}
+	if stop.DurationMs < 0 {
+		t.Errorf("duration = %d", stop.DurationMs)
+	}
+	if stop.Requests != 2 || stop.Tokens == nil || stop.Tokens.Input != 110 {
+		t.Errorf("transcript sum wrong: requests=%d tokens=%+v", stop.Requests, stop.Tokens)
+	}
+	if stop.USD == nil || stop.USD.Total <= 0 {
+		t.Errorf("usd = %+v, want > 0 for priced models", stop.USD)
+	}
+	if stop.Model != "claude-opus-4-8" {
+		t.Errorf("model = %q, want the costliest", stop.Model)
+	}
+
+	// State entry consumed: a repeated Stop degrades gracefully (no join).
+	payload, _ = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "SubagentStop", SessionID: "sub-sess",
+		RawEvent: map[string]interface{}{"agent_id": "a1", "agent_type": ""},
+	})
+	if payload.(*SubagentEnrichment).AgentType != "" {
+		t.Error("state entry should have been consumed by the first Stop")
+	}
+}
+
+func TestToolsEnricher_Shapes(t *testing.T) {
+	e := toolsEnricher{}
+
+	// Single PostToolUse.
+	payload, err := e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "PostToolUse",
+		RawEvent: map[string]interface{}{
+			"tool_name": "Bash", "duration_ms": float64(1500),
+			"tool_input":    map[string]interface{}{"command": "SECRET must not leak"},
+			"tool_response": map[string]interface{}{"stdout": "ok"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	single := payload.(*ToolsEnrichment)
+	if single.Total != 1 || single.Failed != 0 || single.Calls[0].Name != "Bash" || single.Calls[0].DurationMs != 1500 {
+		t.Errorf("single = %+v", single)
+	}
+
+	// Privacy: serialized slug must not contain tool inputs.
+	data, _ := json.Marshal(single)
+	if strings.Contains(string(data), "SECRET") {
+		t.Fatalf("tool_input leaked into tools slug: %s", data)
+	}
+
+	// Failure event.
+	payload, _ = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "PostToolUseFailure",
+		RawEvent: map[string]interface{}{"tool_name": "Bash", "tool_response": nil},
+	})
+	if fail := payload.(*ToolsEnrichment); fail.Failed != 1 || fail.Calls[0].OK {
+		t.Errorf("failure = %+v", fail)
+	}
+
+	// Batch with MCP, Skill, and a subagent call (+ one is_error response).
+	payload, _ = e.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "PostToolBatch",
+		RawEvent: map[string]interface{}{
+			"tool_calls": []interface{}{
+				map[string]interface{}{"tool_name": "mcp__stripe__create_customer", "tool_response": map[string]interface{}{}},
+				map[string]interface{}{"tool_name": "Skill", "tool_input": map[string]interface{}{"skill": "schedule"}},
+				map[string]interface{}{"tool_name": "Agent", "tool_response": map[string]interface{}{"agentType": "Explore", "totalDurationMs": float64(41000)}},
+				map[string]interface{}{"tool_name": "Read", "tool_response": map[string]interface{}{"is_error": true}},
+			},
+		},
+	})
+	batch := payload.(*ToolsEnrichment)
+	if batch.Total != 4 || batch.Failed != 1 {
+		t.Fatalf("batch = %+v", batch)
+	}
+	if batch.Calls[0].MCPServer != "stripe" {
+		t.Errorf("mcp_server = %q", batch.Calls[0].MCPServer)
+	}
+	if batch.Calls[1].Skill != "schedule" {
+		t.Errorf("skill = %q", batch.Calls[1].Skill)
+	}
+	if batch.Calls[2].AgentType != "Explore" || batch.Calls[2].DurationMs != 41000 {
+		t.Errorf("agent call = %+v", batch.Calls[2])
+	}
+	if batch.Calls[3].OK {
+		t.Error("is_error response must mark the call failed")
+	}
+}
+
+func TestOSVersionParsers(t *testing.T) {
+	plist := []byte(`<dict><key>ProductName</key><string>macOS</string>
+<key>ProductVersion</key>
+<string>26.1</string></dict>`)
+	if got := osVersionFromPlist(plist); got != "26.1" {
+		t.Errorf("plist version = %q", got)
+	}
+	if got := osVersionFromPlist([]byte("<dict></dict>")); got != "" {
+		t.Errorf("missing key should yield empty, got %q", got)
+	}
+
+	osRelease := []byte("NAME=\"Ubuntu\"\nPRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nVERSION_ID=\"24.04\"\n")
+	if got := osVersionFromOSRelease(osRelease); got != "Ubuntu 24.04.1 LTS" {
+		t.Errorf("os-release = %q", got)
+	}
+	if got := osVersionFromOSRelease([]byte("VERSION_ID=\"12\"\n")); got != "12" {
+		t.Errorf("version_id fallback = %q", got)
 	}
 }

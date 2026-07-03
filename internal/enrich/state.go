@@ -12,13 +12,22 @@ import (
 )
 
 // sessionState is the tiny per-session scratchpad some enrichers need across
-// hook fires: the running prompt count and how far into the transcript the
-// cost enricher has already priced. One JSON file per session under
+// hook fires: the running prompt count, how far into the transcript the cost
+// enricher has already priced, and the currently-open subagents (so
+// SubagentStop can recover the type and duration that only SubagentStart
+// carries). One JSON file per session under
 // ~/.config/promptconduit/enrich/sessions/, GC'd by mtime like the
 // correlation store.
 type sessionState struct {
-	PromptCount      int   `json:"prompt_count,omitempty"`
-	TranscriptOffset int64 `json:"transcript_offset,omitempty"`
+	PromptCount      int                     `json:"prompt_count,omitempty"`
+	TranscriptOffset int64                   `json:"transcript_offset,omitempty"`
+	Subagents        map[string]subagentInfo `json:"subagents,omitempty"`
+}
+
+// subagentInfo is what SubagentStart records for the matching SubagentStop.
+type subagentInfo struct {
+	Type      string `json:"type,omitempty"`
+	StartedAt string `json:"started_at"`
 }
 
 const (

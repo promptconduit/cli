@@ -5,6 +5,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -188,6 +189,35 @@ func DefaultBranch(workingDir string) string {
 		return strings.TrimPrefix(ref, prefix)
 	}
 	return ""
+}
+
+// diffShortstatRE parses `git diff --shortstat` output, whose insertion and
+// deletion clauses are each optional:
+//
+//	" 3 files changed, 120 insertions(+), 40 deletions(-)"
+var diffShortstatRE = regexp.MustCompile(`(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?`)
+
+// DiffShortstat returns the working-tree change counts vs HEAD (staged +
+// unstaged). ok is false when workingDir isn't a git repo or git failed; a
+// clean tree returns (0, 0, 0, true).
+func DiffShortstat(workingDir string) (files, insertions, deletions int, ok bool) {
+	// Distinguish "clean tree" (empty output, success) from "not a repo"
+	// (command failure, also empty via runGitCmd) with an explicit repo check.
+	if runGitCmd(workingDir, "rev-parse", "--git-dir") == "" {
+		return 0, 0, 0, false
+	}
+	out := runGitCmd(workingDir, "diff", "HEAD", "--shortstat")
+	if out == "" {
+		return 0, 0, 0, true // clean tree (or unborn HEAD — treat as no changes)
+	}
+	m := diffShortstatRE.FindStringSubmatch(out)
+	if m == nil {
+		return 0, 0, 0, false
+	}
+	files, _ = strconv.Atoi(m[1])
+	insertions, _ = strconv.Atoi(m[2])
+	deletions, _ = strconv.Atoi(m[3])
+	return files, insertions, deletions, true
 }
 
 // GetRepoName extracts repository name from path or git remote
