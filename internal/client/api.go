@@ -25,20 +25,16 @@ import (
 // event-log records and the request URLs can't drift apart.
 const eventsEndpoint = "/v1/events/raw"
 
-// recordEventSend writes a full-fidelity record of an outbound event send to
-// the local event log (~/.promptconduit/events.ndjson) and updates the rolling
-// status counters. Best-effort and gated by config; it never blocks or fails
-// the send. Called from every event-send chokepoint with the exact envelope
-// JSON we put on the wire plus the HTTP result.
-func recordEventSend(envJSON []byte, status int, latency time.Duration, attempt int, sendErr error) {
-	eventlog.RecordSend(eventlog.SendRecord{
-		Endpoint:  eventsEndpoint,
-		Payload:   envJSON,
-		Status:    status,
-		LatencyMs: latency.Milliseconds(),
-		Attempt:   attempt,
-		Err:       sendErr,
-	})
+// recordEventSend updates the rolling send counters (status.json, and
+// errors.log on failure) after an outbound event send. The payload itself was
+// already captured to events.jsonl at hook time; full HTTP diagnostics live in
+// outbound.ndjson. Best-effort and gated by config; never blocks the send.
+func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, sendErr error) {
+	var probe struct {
+		HookEvent string `json:"hook_event"`
+	}
+	_ = json.Unmarshal(envJSON, &probe)
+	eventlog.RecordSendOutcome(probe.HookEvent, status, latency.Milliseconds(), sendErr)
 }
 
 // APIResponse represents a response from the API
@@ -415,6 +411,8 @@ func (c *Client) TestConnection() *APIResponse {
 		c.version,
 		"test",
 		"test",
+		"", // session id
+		"", // prompt id
 		[]byte(`{"test": true}`),
 		nil,
 	)
@@ -484,6 +482,64 @@ func (c *Client) SyncTranscriptRaw(req *RawTranscriptSyncRequest) (*TranscriptSy
 	}
 
 	return &syncResp, nil
+}
+
+// ============================================================================
+// Plan Sync
+// ============================================================================
+
+// PlanSyncRequest uploads one Claude Code plan-mode plan file.
+type PlanSyncRequest struct {
+	SessionID      string `json:"session_id,omitempty"` // owning session, when resolved
+	Tool           string `json:"tool"`
+	Filename       string `json:"filename"`
+	Content        string `json:"content"`
+	SourceFileHash string `json:"source_file_hash"`
+	ModifiedAt     string `json:"modified_at,omitempty"`
+}
+
+// PlanSyncResponse is the platform's acknowledgement.
+type PlanSyncResponse struct {
+	PlanID string `json:"plan_id"`
+	Status string `json:"status"` // created, updated, skipped
+}
+
+// SyncPlan uploads a plan file to POST /v1/plans/sync.
+func (c *Client) SyncPlan(req *PlanSyncRequest) (*PlanSyncResponse, error) {
+	jsonData, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+"/v1/plans/sync", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.setHeaders(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+	}
+
+	var planResp PlanSyncResponse
+	if err := json.Unmarshal(body, &planResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &planResp, nil
 }
 
 // ============================================================================

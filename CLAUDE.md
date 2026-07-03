@@ -28,16 +28,49 @@ cli/
 ├── internal/
 │   ├── client/       # HTTP client, config loading
 │   ├── correlation/  # W3C trace_id/span_id generation and per-session persistence
-│   ├── envelope/     # Raw event envelope types
+│   ├── enrich/       # Enrichment registry: slug-keyed normalized context on every event (see below)
+│   ├── envelope/     # v2 event envelope types + per-tool id extraction
 │   ├── extension/    # Bundled cost editor extension (.vsix go:embed) + sideload into Cursor
 │   ├── git/          # Git context extraction
 │   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
-│   ├── sync/         # Transcript sync and parsing (Claude Code parser, state management)
+│   ├── sync/         # Transcript + plan sync and parsing (Claude Code parser, state management)
 │   ├── transcript/   # Transcript parsing and attachment extraction
 │   └── updater/      # GitHub-release version check + self-replace upgrade
 ├── scripts/          # Install scripts
 └── main.go           # Entry point
 ```
+
+## Event envelope v2 + enrichments
+
+Every hook event becomes ONE payload shape (`internal/envelope`): the line
+appended to `~/.promptconduit/events.jsonl` at capture time is byte-identical
+to what's POSTed to `/v1/events/raw` and stored in the platform bucket.
+
+```jsonc
+{
+  "schema": 2, "event_id": "…", "session_id": "…", "prompt_id": "…",
+  "tool": "claude-code", "hook_event": "PostToolUse", "captured_at": "…",
+  "cli_version": "…",
+  "raw_event": { /* native hook payload, untouched */ },
+  "enrichments": { "env": {…}, "trace": {…}, "vcs": {…}, "prompt": {…}, "cost": {…} }
+}
+```
+
+**Adding an enrichment** = one new file in `internal/enrich/` implementing
+`Enricher` (Slug/Applies/Enrich) plus `Register()` in its `init()`. Rules:
+JSON-serializable payload; failure/panic drops the slug, never the event; keep
+the hook fast — anything slow (network) must be disk-cached and refreshed by a
+detached subprocess (see `vcscache.go` / `cmd/vcsrefresh.go` for the pattern).
+Readers (editor extension, platform) ignore unknown slugs, so a new slug needs
+no coordinated release. The v2 envelope + slug shapes are mirrored in
+`platform/app/api/src/types/envelope.ts` and `editor-extension/src/envelope.ts`
+— additive-only after v2.
+
+The cost enrichment (`enrich/cost.go`) replaced the old `cost watch --json`
+feed: Claude Code Stop events price the transcript lines appended since the
+last Stop (per-session offset state under `~/.config/promptconduit/enrich/`),
+Cursor stop/afterAgentResponse events price their own payload. The editor
+extension reads it from events.jsonl.
 
 ## Auto-update
 
@@ -78,6 +111,9 @@ promptconduit sync --limit 10   # Sync only N most recent
 3. Calculates SHA256 hash to detect changes
 4. Uploads to platform via `POST /v1/transcripts/sync`
 5. Tracks synced files in `~/.config/promptconduit/sync_state.json`
+6. Rides along plan files from `~/.claude/plans/*.md` via `POST /v1/plans/sync`,
+   associating each plan to its session by finding the plan path inside a
+   transcript (`internal/sync/plans.go`)
 
 ### Hooks vs Sync
 
@@ -136,13 +172,13 @@ false — i.e. no API key, or `local_only` is set (config `local_only`, flag
 required. A missing API key is a normal Free state, not an error (the old
 `not_configured` drop/error path was removed).
 
-Two distinct local logs under `~/.promptconduit/`:
-- `events.jsonl` — raw event envelopes, one per line, written at capture time
-  (before send) for *every* event. The stable substrate external tools read.
-- `events.ndjson` — send-outcome diagnostics (status/latency), written only when
-  an event is actually sent. Surfaced by `promptconduit status` / `events`.
+ONE local event log under `~/.promptconduit/`:
+- `events.jsonl` — v2 envelopes, one per line, written at capture time (before
+  send) for *every* event. The stable substrate every local reader consumes.
 
-Both are gated by the same `PROMPTCONDUIT_EVENT_LOG` knob (on by default).
+(`events.ndjson` was removed in the v2 redesign; send outcomes live in
+`status.json`/`errors.log`, raw HTTP diagnostics in `outbound.ndjson` via
+`promptconduit watch`.) Gated by `PROMPTCONDUIT_EVENT_LOG` (on by default).
 
 ## Branch Naming
 

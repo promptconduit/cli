@@ -192,6 +192,13 @@ type ccContentBlock struct {
 	Name string `json:"name"`
 }
 
+// ParseTranscriptLine prices one Claude Code transcript line for callers
+// outside the cost watcher (the envelope's cost enrichment). Same semantics as
+// parseClaudeCodeLine.
+func ParseTranscriptLine(line []byte, table *PriceTable, sessionFallback string) (ev CostEvent, dedupKey string, ok bool) {
+	return parseClaudeCodeLine(line, table, sessionFallback)
+}
+
 // parseClaudeCodeLine turns one transcript line into a priced CostEvent. The
 // returned dedupKey (requestId, falling back to uuid) lets the caller skip
 // re-reads. ok is false for non-assistant lines, lines without usage, or

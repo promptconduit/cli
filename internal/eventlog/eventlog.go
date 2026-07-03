@@ -4,13 +4,20 @@
 //
 // It writes three files:
 //
-//	events.ndjson  — one record per outbound event send, embedding the FULL
-//	                 envelope payload we POST to /v1/events/raw (untruncated),
-//	                 plus the HTTP outcome (status, latency, attempt).
-//	errors.log     — human-readable lines for every failure or silent drop,
-//	                 so "events aren't reaching the platform" is debuggable.
-//	status.json    — rolling counters (sent / failed / dropped) and the last
-//	                 success/error, surfaced by `promptconduit status`.
+//	events.jsonl  — THE local event log: one v2 envelope per line, written at
+//	                capture time BEFORE any network send. This is the single
+//	                payload shape — the same JSON is POSTed to /v1/events/raw
+//	                and stored in the platform bucket. The stable substrate
+//	                every local reader (editor extension panels, sessions,
+//	                cost) consumes.
+//	errors.log    — human-readable lines for every failure or silent drop,
+//	                so "events aren't reaching the platform" is debuggable.
+//	status.json   — rolling counters (sent / failed / dropped) and the last
+//	                success/error, surfaced by `promptconduit status`.
+//
+// (events.ndjson, the old per-send payload log, was removed in the v2
+// redesign: it duplicated events.jsonl. Send outcomes now land in status.json
+// / errors.log, and full HTTP diagnostics remain in outbound.ndjson.)
 //
 // Design notes:
 //   - This intentionally does NOT reuse internal/logger (combined error/debug
@@ -32,8 +39,8 @@ import (
 	"time"
 )
 
-// EventsRotateAt is the size threshold at which events.ndjson is rotated to
-// events.ndjson.1. Records themselves are never truncated (full fidelity);
+// EventsRotateAt is the size threshold at which events.jsonl is rotated to
+// events.jsonl.1. Records themselves are never truncated (full fidelity);
 // total disk is bounded by rotation instead. One backup is kept.
 const EventsRotateAt int64 = 50 * 1024 * 1024 // 50 MB
 
@@ -99,14 +106,10 @@ func Dir() string {
 	return filepath.Join(home, ".promptconduit")
 }
 
-// EventsPath is the absolute path of the full-payload event log.
-func EventsPath() string { return filepath.Join(Dir(), "events.ndjson") }
-
-// EventsJSONLPath is the absolute path of the capture log: one raw envelope per
-// line, written at capture time BEFORE any network send. Unlike events.ndjson
-// (which is keyed on send outcome), this file is the durable local substrate of
-// the events themselves — it is written even when nothing is sent (Free /
-// local-only mode), and is the file external local tooling reads.
+// EventsJSONLPath is the absolute path of the event log: one v2 envelope per
+// line, written at capture time BEFORE any network send. The durable local
+// substrate of the events themselves — written even when nothing is sent
+// (Free / local-only mode), and the file external local tooling reads.
 func EventsJSONLPath() string { return filepath.Join(Dir(), "events.jsonl") }
 
 // ErrorsPath is the absolute path of the human-readable error log.

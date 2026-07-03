@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,44 +26,46 @@ var (
 
 var eventsCmd = &cobra.Command{
 	Use:           "events",
-	Short:         "Inspect the local event log of payloads sent to the platform",
+	Short:         "Inspect the local event log (captured v2 envelopes)",
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	Long: `Show the full JSON payloads the CLI has sent to the platform, recorded
-locally before/at send time — the actual envelope plus the HTTP outcome
-(status, latency) for each event.
+	Long: `Show the events the CLI has captured, exactly as they are (or would be)
+sent to the platform.
 
-This reads ~/.promptconduit/events.ndjson (full-fidelity, one record per send;
-secrets scrubbed; the file rotates to events.ndjson.1 at 50MB). Use it to
-answer "what did my hook actually send?" and "did it reach the platform?".
+This reads ~/.promptconduit/events.jsonl — one v2 envelope per line, written at
+capture time for every event, in cloud AND Free/local-only mode (secrets
+scrubbed; the file rotates to events.jsonl.1 at 50MB). Send outcomes are in
+'promptconduit status'; raw HTTP diagnostics in 'promptconduit watch'.
 
-By default each record is shown as a one-line summary:
+By default each event is shown as a one-line summary:
 
-  16:55:02  sent    UserPromptSubmit  claude-code  3.2KB  → 200 (87ms)
+  16:55:02  PostToolUse        claude-code  9a402796  3.2KB  env,trace,vcs
 
-Use --raw to print the full envelope payload beneath each summary, or
---errors to tail the human-readable failure/drop log (errors.log) instead.
+The trailing list is the enrichment slugs attached to the event.
+
+Use --raw to print the full envelope beneath each summary, or --errors to tail
+the human-readable failure/drop log (errors.log) instead.
 
 Examples:
-  promptconduit events                # last 20 records, summary lines
-  promptconduit events --raw          # include the full payload per record
-  promptconduit events -n 5           # last 5 records
-  promptconduit events --follow       # stream new records live
+  promptconduit events                # last 20 events, summary lines
+  promptconduit events --raw          # include the full envelope per event
+  promptconduit events -n 5           # last 5 events
+  promptconduit events --follow       # stream new events live
   promptconduit events --errors       # tail errors.log (failures + drops)
   promptconduit events --path         # print the event-log file path`,
 	RunE: runEvents,
 }
 
 func init() {
-	eventsCmd.Flags().IntVarP(&eventsTailN, "lines", "n", 20, "Number of records to show from the end of the log")
-	eventsCmd.Flags().BoolVarP(&eventsFollow, "follow", "f", false, "Stream new records as they are written (like `tail -f`)")
+	eventsCmd.Flags().IntVarP(&eventsTailN, "lines", "n", 20, "Number of events to show from the end of the log")
+	eventsCmd.Flags().BoolVarP(&eventsFollow, "follow", "f", false, "Stream new events as they are written (like `tail -f`)")
 	eventsCmd.Flags().BoolVar(&eventsErrors, "errors", false, "Show the human-readable error log (errors.log) instead of the event log")
-	eventsCmd.Flags().BoolVar(&eventsRaw, "raw", false, "Print the full JSON payload beneath each summary line")
+	eventsCmd.Flags().BoolVar(&eventsRaw, "raw", false, "Print the full JSON envelope beneath each summary line")
 	eventsCmd.Flags().BoolVar(&eventsPath, "path", false, "Print only the log file path and exit")
 }
 
 func runEvents(cmd *cobra.Command, args []string) error {
-	path := eventlog.EventsPath()
+	path := eventlog.EventsJSONLPath()
 	if eventsErrors {
 		path = eventlog.ErrorsPath()
 	}
@@ -93,13 +96,13 @@ func runEvents(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	out, err := eventlog.TailEvents(eventsTailN)
+	out, err := eventlog.TailCaptured(eventsTailN)
 	if err != nil {
 		return fmt.Errorf("read event log: %w", err)
 	}
 	if out == "" {
-		cmd.Printf("No events recorded yet.\n  Path: %s\n", path)
-		cmd.Println("  (events are logged when the CLI sends to the platform; check `promptconduit status`)")
+		cmd.Printf("No events captured yet.\n  Path: %s\n", path)
+		cmd.Println("  (events are captured whenever an installed hook fires; check `promptconduit status`)")
 		return nil
 	}
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
@@ -108,51 +111,51 @@ func runEvents(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// renderEventLine turns one NDJSON event record into a readable summary line
-// (plus the full payload when --raw is set). Lines that don't parse are echoed
-// verbatim so nothing is silently hidden.
+// renderEventLine turns one captured envelope line into a readable summary
+// (plus the full envelope when --raw is set). Lines that don't parse are
+// echoed verbatim so nothing is silently hidden.
 func renderEventLine(line string) string {
-	line = strings.TrimSpace(line)
-	if line == "" {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
 		return ""
 	}
-	var rec struct {
-		TS        string          `json:"ts"`
-		Tool      string          `json:"tool"`
-		HookEvent string          `json:"hook_event"`
-		Outcome   string          `json:"outcome"`
-		Status    int             `json:"status"`
-		LatencyMs int64           `json:"latency_ms"`
-		Error     string          `json:"error"`
-		Payload   json.RawMessage `json:"payload"`
+	var env struct {
+		SessionID   string                     `json:"session_id"`
+		Tool        string                     `json:"tool"`
+		HookEvent   string                     `json:"hook_event"`
+		CapturedAt  string                     `json:"captured_at"`
+		Enrichments map[string]json.RawMessage `json:"enrichments"`
 	}
-	if err := json.Unmarshal([]byte(line), &rec); err != nil {
-		return line + "\n"
+	if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+		return trimmed + "\n"
 	}
 
-	ts := rec.TS
-	if t, err := time.Parse(time.RFC3339, rec.TS); err == nil {
+	ts := env.CapturedAt
+	if t, err := time.Parse(time.RFC3339, env.CapturedAt); err == nil {
 		ts = t.Local().Format("15:04:05")
 	}
 
-	size := humanBytes(len(rec.Payload))
-	statusPart := fmt.Sprintf("→ %d (%dms)", rec.Status, rec.LatencyMs)
-	if rec.Status == 0 {
-		statusPart = fmt.Sprintf("→ no response (%dms)", rec.LatencyMs)
+	slugs := make([]string, 0, len(env.Enrichments))
+	for slug := range env.Enrichments {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+
+	session := env.SessionID
+	if len(session) > 8 {
+		session = session[:8]
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %-7s %-18s %-12s %7s  %s\n",
-		ts, rec.Outcome, dashIfEmpty(rec.HookEvent), dashIfEmpty(rec.Tool), size, statusPart)
-	if rec.Error != "" {
-		fmt.Fprintf(&b, "          error: %s\n", rec.Error)
-	}
-	if eventsRaw && len(rec.Payload) > 0 {
+	fmt.Fprintf(&b, "%s  %-18s %-12s %-8s %7s  %s\n",
+		ts, dashIfEmpty(env.HookEvent), dashIfEmpty(env.Tool), dashIfEmpty(session),
+		humanBytes(len(trimmed)), strings.Join(slugs, ","))
+	if eventsRaw {
 		var pretty bytes.Buffer
-		if err := json.Indent(&pretty, rec.Payload, "          ", "  "); err == nil {
+		if err := json.Indent(&pretty, []byte(trimmed), "          ", "  "); err == nil {
 			fmt.Fprintf(&b, "          %s\n", pretty.String())
 		} else {
-			fmt.Fprintf(&b, "          %s\n", string(rec.Payload))
+			fmt.Fprintf(&b, "          %s\n", trimmed)
 		}
 	}
 	return b.String()
@@ -186,7 +189,7 @@ func followFile(cmd *cobra.Command, path string, render func(string) string) err
 	}
 
 	// Backfill recent context.
-	if out, err := eventlog.TailEvents(eventsTailN); err == nil && !eventsErrors {
+	if out, err := eventlog.TailCaptured(eventsTailN); err == nil && !eventsErrors {
 		for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 			cmd.Print(render(line))
 		}

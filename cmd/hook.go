@@ -7,15 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/cost"
+	"github.com/promptconduit/cli/internal/enrich"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/eventlog"
-	"github.com/promptconduit/cli/internal/git"
 	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/promptconduit/cli/internal/transcript"
@@ -116,19 +115,10 @@ func processHookEvent() error {
 	// Detect tool (simple heuristics)
 	tool := detectTool(nativeEvent)
 	hookEvent := getHookEventName(nativeEvent)
-	sessionID := getSessionID(nativeEvent)
+	sessionID, promptID := envelope.ExtractIDs(tool, nativeEvent)
 
 	logger.Debug("Detected tool: %s, hook event: %s", tool, hookEvent)
 
-	// Build correlation IDs (W3C-compatible trace_id/span_id).
-	// Stable across hook fires within a session; best-effort, never blocks.
-	corr := buildCorrelation(tool, hookEvent, sessionID, nativeEvent)
-	if corr != nil {
-		logger.Debug("correlation: trace=%s span=%s parent=%s", corr.TraceID, corr.SpanID, corr.ParentSpanID)
-	}
-
-	// Extract git context from working directory
-	var gitCtx *envelope.GitContext
 	cwd := getWorkingDirectory(nativeEvent)
 
 	// Write to local events file for macOS app
@@ -147,14 +137,19 @@ func processHookEvent() error {
 		}
 	}
 
-	if cwd != "" {
-		gitCtx = git.ExtractContext(cwd)
-		if gitCtx != nil {
-			logger.Debug("Extracted git context: repo=%s, branch=%s", gitCtx.RepoName, gitCtx.Branch)
-		}
-	}
-
-	enr := buildEnrichment(gitCtx, corr)
+	// Compute the enrichments map — every slug is best-effort and isolated,
+	// so a failing enricher can never block the hook or drop the event.
+	transcriptPath, _ := nativeEvent["transcript_path"].(string)
+	enrichments := enrich.Run(&enrich.Context{
+		Tool:           tool,
+		HookEvent:      hookEvent,
+		SessionID:      sessionID,
+		PromptID:       promptID,
+		RawEvent:       nativeEvent,
+		RawJSON:        rawInput,
+		Cwd:            cwd,
+		TranscriptPath: transcriptPath,
+	})
 
 	// For UserPromptSubmit events, check if the user's message includes attachments
 	// We extract from the transcript which should have the message by now
@@ -191,7 +186,7 @@ func processHookEvent() error {
 				}
 
 				// Create envelope with attachment metadata
-				env := envelope.NewWithAttachments(Version, tool, hookEvent, rawInput, enr, envAttachments)
+				env := envelope.NewWithAttachments(Version, tool, hookEvent, sessionID, promptID, rawInput, enrichments, envAttachments)
 
 				// Always record the captured event locally, before any send.
 				captureEnvelope(env)
@@ -213,7 +208,7 @@ func processHookEvent() error {
 	}
 
 	// Create envelope with raw payload (no attachments case, or non-UserPromptSubmit events)
-	env := envelope.New(Version, tool, hookEvent, rawInput, enr)
+	env := envelope.New(Version, tool, hookEvent, sessionID, promptID, rawInput, enrichments)
 
 	logger.Debug("Created envelope: tool=%s, event=%s", tool, hookEvent)
 
@@ -246,32 +241,6 @@ func captureEnvelope(env *envelope.RawEventEnvelope) {
 		return
 	}
 	eventlog.RecordCapture(data)
-}
-
-// buildEnrichment assembles the enrichment block: CLI-computed context that
-// augments the raw native payload (git, source provider, correlation IDs,
-// host/os/arch). Returns nil only when there's nothing to send.
-func buildEnrichment(gitCtx *envelope.GitContext, corr *envelope.Correlation) *envelope.Enrichment {
-	enr := &envelope.Enrichment{
-		Git:         gitCtx,
-		Correlation: corr,
-		Host:        hostname(),
-		OS:          runtime.GOOS,
-		Arch:        runtime.GOARCH,
-	}
-	if gitCtx != nil {
-		enr.Source = git.DetectSource(gitCtx.RemoteURL)
-	}
-	return enr
-}
-
-// hostname returns the machine hostname or "" if unavailable.
-func hostname() string {
-	h, err := os.Hostname()
-	if err != nil {
-		return ""
-	}
-	return h
 }
 
 // detectTool identifies which AI tool generated the event.
@@ -349,14 +318,6 @@ func getWorkingDirectory(event map[string]interface{}) string {
 		return cwd
 	}
 
-	return ""
-}
-
-// getSessionID extracts the session ID from native event
-func getSessionID(event map[string]interface{}) string {
-	if sessionID, ok := event["session_id"].(string); ok {
-		return sessionID
-	}
 	return ""
 }
 
@@ -514,8 +475,8 @@ func retryFailedSyncs(exe string) {
 // writeLocalEvent appends a lightweight status trace to
 // ~/.promptconduit/hook-events so the macOS menu-bar app can tell when a
 // session starts/stops. This is NOT the API payload — only {event, cwd,
-// session_id, timestamp}. The full outgoing payload is recorded separately by
-// the eventlog package (~/.promptconduit/events.ndjson) at send time.
+// session_id, timestamp}. The full envelope is recorded separately by the
+// eventlog package (~/.promptconduit/events.jsonl) at capture time.
 func writeLocalEvent(hookEvent, cwd, sessionID string) {
 	// Only write status-relevant events
 	switch hookEvent {

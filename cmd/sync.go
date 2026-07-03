@@ -244,6 +244,9 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Plan files ride along with every full sync.
+	plansSynced := syncPlans(apiClient, stateManager, "")
+
 	// Save state
 	if !syncDryRun {
 		if err := stateManager.Save(); err != nil {
@@ -256,10 +259,76 @@ func runSync(cmd *cobra.Command, args []string) error {
 	if syncDryRun {
 		fmt.Printf("Dry run complete: %d transcript(s) would be synced\n", totalSynced)
 	} else {
-		fmt.Printf("Sync complete: %d synced, %d skipped, %d errors\n", totalSynced, totalSkipped, totalErrors)
+		fmt.Printf("Sync complete: %d synced, %d skipped, %d errors", totalSynced, totalSkipped, totalErrors)
+		if plansSynced > 0 {
+			fmt.Printf(", %d plan(s)", plansSynced)
+		}
+		fmt.Println()
 	}
 
 	return nil
+}
+
+// syncPlans uploads new/changed plan files from ~/.claude/plans. When
+// scopeTranscript is non-empty (the auto-sync path), association is checked
+// against that transcript only and unmatched plans are left for the next full
+// sync; otherwise association scans transcripts modified near the plan's
+// mtime. Returns the number of plans uploaded. Dry-run lists without sending.
+func syncPlans(apiClient *client.Client, stateManager *sync.StateManager, scopeTranscript string) int {
+	plans, err := sync.DiscoverPlans()
+	if err != nil || len(plans) == 0 {
+		return 0
+	}
+
+	parser, err := sync.NewClaudeCodeParser()
+	if err != nil {
+		return 0
+	}
+
+	synced := 0
+	for _, plan := range plans {
+		if stateManager.IsPlanSynced(plan.Path, plan.Hash) {
+			continue
+		}
+
+		var candidates []string
+		if scopeTranscript != "" {
+			candidates = []string{scopeTranscript}
+		} else {
+			candidates = sync.RecentTranscripts(parser, plan, 72)
+		}
+		sessionID := sync.AssociatePlanSession(plan, candidates)
+		if scopeTranscript != "" && sessionID == "" {
+			continue // not this session's plan; a full sync will pick it up
+		}
+
+		if syncDryRun {
+			fmt.Printf("  [dry-run] Would sync plan: %s (session %s)\n", plan.Name, dashIfEmpty(sessionID))
+			synced++
+			continue
+		}
+
+		resp, err := apiClient.SyncPlan(&client.PlanSyncRequest{
+			SessionID:      sessionID,
+			Tool:           "claude-code",
+			Filename:       plan.Name,
+			Content:        string(plan.Content),
+			SourceFileHash: plan.Hash,
+			ModifiedAt:     plan.ModifiedAt,
+		})
+		if err != nil {
+			fmt.Printf("  ❌ plan %s: %v\n", plan.Name, err)
+			continue
+		}
+		stateManager.MarkPlanSynced(plan.Path, sync.SyncedPlanInfo{
+			Hash:      plan.Hash,
+			SessionID: sessionID,
+			PlanID:    resp.PlanID,
+		})
+		fmt.Printf("  ✓ plan: %s\n", plan.Name)
+		synced++
+	}
+	return synced
 }
 
 func getParser(tool string) (sync.Parser, error) {
@@ -472,6 +541,10 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 		MessageCount:   resp.MessageCount,
 	})
 	stateManager.ClearFailedSync(conversation.SessionID)
+
+	// Ride-along: upload any new plan this session's transcript references.
+	syncPlans(apiClient, stateManager, filePath)
+
 	_ = stateManager.Save()
 
 	return nil

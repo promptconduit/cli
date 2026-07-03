@@ -46,6 +46,15 @@ type SyncState struct {
 	SyncedFiles    map[string]SyncedFileInfo    `json:"synced_files"`
 	PendingUploads map[string]PendingUploadInfo `json:"pending_uploads,omitempty"`
 	FailedSyncs    map[string]FailedSyncInfo    `json:"failed_syncs,omitempty"`
+	SyncedPlans    map[string]SyncedPlanInfo    `json:"synced_plans,omitempty"`
+}
+
+// SyncedPlanInfo stores information about a synced plan file, keyed by path.
+type SyncedPlanInfo struct {
+	Hash      string `json:"hash"`
+	SyncedAt  string `json:"synced_at"`
+	SessionID string `json:"session_id,omitempty"`
+	PlanID    string `json:"plan_id,omitempty"`
 }
 
 // FailedSyncInfo tracks a sync that failed and should be retried

@@ -3,88 +3,56 @@ package envelope
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
-// EnvelopeVersion is the current envelope schema version. The platform is
-// expected to handle older versions transparently — the CLI is intentionally
-// thin and the server normalizes everything.
-const EnvelopeVersion = "1.2"
+// SchemaVersion is the envelope schema generation. v2 is a breaking redesign:
+// session_id/prompt_id are lifted to the top level, the native hook payload is
+// carried as raw_event, and all CLI-computed context lives in the extensible
+// slug-keyed `enrichments` map. There is no v1 back-compat — readers accept
+// schema >= 2 only.
+const SchemaVersion = 2
 
-// RawEventEnvelope is the wrapper sent to the platform API.
+// RawEventEnvelope is the single event payload shape: the record appended to
+// ~/.promptconduit/events.jsonl at capture time, POSTed verbatim to
+// /v1/events/raw, and stored verbatim in the platform's R2 bucket.
 //
-// The CLI is a thin client: it forwards the tool's raw event payload
-// untouched (`native_payload`), plus an `enrichment` block of locally
-// computed/inferred context (git, host, correlation IDs, etc.) to help the
-// server normalize. All canonical-format work happens server-side.
+// The CLI is a thin client: it forwards the tool's raw hook payload untouched
+// (`raw_event`) plus an `enrichments` map of locally computed/normalized
+// context. Each enrichment is an independent slug — producers add slugs,
+// readers ignore slugs they don't know. The platform may append its own
+// server-side slugs to the stored copy under the same rules.
 type RawEventEnvelope struct {
-	// Envelope metadata
-	EnvelopeVersion string `json:"envelope_version"`
-	CliVersion      string `json:"cli_version"`
+	// Schema is the envelope generation (SchemaVersion).
+	Schema int `json:"schema"`
 
-	// Tool identification
+	// EventID uniquely identifies this event (UUIDv7: time-ordered).
+	EventID string `json:"event_id"`
+
+	// SessionID / PromptID are lifted from the tool's raw payload per tool
+	// (see ExtractIDs). Empty when the tool doesn't report them.
+	SessionID string `json:"session_id,omitempty"`
+	PromptID  string `json:"prompt_id,omitempty"`
+
+	// Tool identification.
 	Tool      string `json:"tool"`       // claude-code, cursor, gemini-cli, etc.
-	HookEvent string `json:"hook_event"` // Hook event name from the tool
+	HookEvent string `json:"hook_event"` // which hook generated the event
 
-	// Timing
+	// Timing + producer version.
 	CapturedAt string `json:"captured_at"` // ISO8601 timestamp
+	CliVersion string `json:"cli_version"`
 
-	// Raw native payload (passed through untouched)
-	NativePayload json.RawMessage `json:"native_payload"`
+	// RawEvent is the tool's native hook payload, passed through untouched.
+	RawEvent json.RawMessage `json:"raw_event"`
 
-	// Attachment metadata (binary data sent separately in multipart)
+	// Enrichments maps slug -> enrichment payload (see internal/enrich).
+	// Well-known slugs: env, trace, vcs, prompt, cost. Every slug is optional
+	// and unknown slugs must be ignored by readers.
+	Enrichments map[string]json.RawMessage `json:"enrichments,omitempty"`
+
+	// Attachment metadata (binary data sent separately in multipart).
 	Attachments []AttachmentMetadata `json:"attachments,omitempty"`
-
-	// Enrichment is everything the CLI added on top of the raw payload.
-	// Optional: the server should treat absence as "no enrichment available"
-	// rather than erroring.
-	Enrichment *Enrichment `json:"enrichment,omitempty"`
-
-	// Deprecated: use Enrichment.Git. Mirrored for one or two releases so
-	// servers expecting the 1.0/1.1 shape continue to receive git context.
-	// Remove once all servers read from enrichment.git.
-	Git *GitContext `json:"git,omitempty"`
-
-	// Deprecated: use Enrichment.Correlation. Mirrored for one or two
-	// releases so servers expecting the 1.1 shape continue to receive
-	// correlation IDs. Remove once all servers read from
-	// enrichment.correlation.
-	Correlation *Correlation `json:"correlation,omitempty"`
-}
-
-// Enrichment carries CLI-computed context that augments the raw payload.
-// Add new fields here rather than at the top level so the envelope keeps a
-// clean separation between metadata, raw data, and enrichment.
-type Enrichment struct {
-	// Git context (extracted by walking up from cwd).
-	Git *GitContext `json:"git,omitempty"`
-
-	// Source provider derived from the git remote URL: "github", "gitlab",
-	// "bitbucket", "azure", or "" when unknown / no remote.
-	Source string `json:"source,omitempty"`
-
-	// W3C Trace Context-compatible correlation IDs.
-	Correlation *Correlation `json:"correlation,omitempty"`
-
-	// Host is the machine hostname (best-effort; "" if unavailable).
-	Host string `json:"host,omitempty"`
-
-	// OS is runtime.GOOS (linux, darwin, windows, ...).
-	OS string `json:"os,omitempty"`
-
-	// Arch is runtime.GOARCH (amd64, arm64, ...).
-	Arch string `json:"arch,omitempty"`
-}
-
-// Correlation carries W3C Trace Context-compatible IDs so events can be
-// stitched into a single trace. Generated locally; not OTEL-SDK backed.
-type Correlation struct {
-	// TraceID is 32 lowercase hex chars (16 bytes), stable per session.
-	TraceID string `json:"trace_id"`
-	// SpanID is 16 lowercase hex chars (8 bytes), unique per event.
-	SpanID string `json:"span_id"`
-	// ParentSpanID is 16 lowercase hex chars when this event has a known
-	// parent in a defined event-chain (tool_post → tool_pre, etc.).
-	ParentSpanID string `json:"parent_span_id,omitempty"`
 }
 
 // AttachmentMetadata describes an attachment sent with the envelope.
@@ -97,8 +65,8 @@ type AttachmentMetadata struct {
 	Type         string `json:"type"` // "image", "document", "file"
 }
 
-// GitContext contains git repository state at event time.
-// Extracted by the CLI since it has file system access.
+// GitContext contains git repository state at event time. It is the raw
+// extraction the vcs enrichment builds on (see internal/enrich/vcs.go).
 type GitContext struct {
 	RepoName         string `json:"repo_name,omitempty"`
 	RepoPath         string `json:"repo_path,omitempty"`
@@ -123,52 +91,37 @@ type GitContext struct {
 	WorktreePath string `json:"worktree_path,omitempty"`
 }
 
-// New creates a new RawEventEnvelope with the given enrichment block.
-// Pass nil for enrichment if none is available.
-func New(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment) *RawEventEnvelope {
-	env := &RawEventEnvelope{
-		EnvelopeVersion: EnvelopeVersion,
-		CliVersion:      cliVersion,
-		Tool:            tool,
-		HookEvent:       hookEvent,
-		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		NativePayload:   nativePayload,
-		Enrichment:      enr,
+// New creates a v2 envelope. rawEvent is the tool's hook payload verbatim;
+// enrichments may be nil.
+func New(cliVersion, tool, hookEvent, sessionID, promptID string, rawEvent []byte, enrichments map[string]json.RawMessage) *RawEventEnvelope {
+	return &RawEventEnvelope{
+		Schema:      SchemaVersion,
+		EventID:     NewEventID(),
+		SessionID:   sessionID,
+		PromptID:    promptID,
+		Tool:        tool,
+		HookEvent:   hookEvent,
+		CapturedAt:  time.Now().UTC().Format(time.RFC3339),
+		CliVersion:  cliVersion,
+		RawEvent:    rawEvent,
+		Enrichments: enrichments,
 	}
-	mirrorLegacyFields(env)
+}
+
+// NewWithAttachments creates a v2 envelope carrying attachment metadata.
+func NewWithAttachments(cliVersion, tool, hookEvent, sessionID, promptID string, rawEvent []byte, enrichments map[string]json.RawMessage, attachments []AttachmentMetadata) *RawEventEnvelope {
+	env := New(cliVersion, tool, hookEvent, sessionID, promptID, rawEvent, enrichments)
+	env.Attachments = attachments
 	return env
 }
 
-// NewWithAttachments creates a new RawEventEnvelope with attachment metadata.
-func NewWithAttachments(cliVersion, tool, hookEvent string, nativePayload []byte, enr *Enrichment, attachments []AttachmentMetadata) *RawEventEnvelope {
-	env := &RawEventEnvelope{
-		EnvelopeVersion: EnvelopeVersion,
-		CliVersion:      cliVersion,
-		Tool:            tool,
-		HookEvent:       hookEvent,
-		CapturedAt:      time.Now().UTC().Format(time.RFC3339),
-		NativePayload:   nativePayload,
-		Attachments:     attachments,
-		Enrichment:      enr,
+// NewEventID returns a time-ordered unique event id (UUIDv7, falling back to
+// a random UUIDv4 if the clock-based generator errors).
+func NewEventID() string {
+	if id, err := uuid.NewV7(); err == nil {
+		return id.String()
 	}
-	mirrorLegacyFields(env)
-	return env
-}
-
-// mirrorLegacyFields copies enrichment.git and enrichment.correlation to the
-// deprecated top-level fields so older servers that read the 1.1 shape keep
-// working during the transition. Remove once all servers consume from
-// enrichment.* directly.
-func mirrorLegacyFields(env *RawEventEnvelope) {
-	if env.Enrichment == nil {
-		return
-	}
-	if env.Enrichment.Git != nil {
-		env.Git = env.Enrichment.Git
-	}
-	if env.Enrichment.Correlation != nil {
-		env.Correlation = env.Enrichment.Correlation
-	}
+	return uuid.New().String()
 }
 
 // ToJSON serializes the envelope to JSON

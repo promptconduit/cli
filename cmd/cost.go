@@ -6,11 +6,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/promptconduit/cli/internal/cost"
@@ -19,7 +17,6 @@ import (
 
 var (
 	costCwd  string
-	costAll  bool
 	costJSON bool
 	costDays int
 )
@@ -34,9 +31,12 @@ PromptConduit platform or anywhere else.
 
 Run with no subcommand to see the current session's cost.
 
+The live per-request feed the editor extension renders comes from the cost
+enrichment on ~/.promptconduit/events.jsonl (the old 'cost watch' stream was
+retired with the v2 envelope).
+
 Subcommands:
   (none)          Show the current session's cost summary
-  watch           Stream cost events as your session runs (the editor extension's feed)
   session         Same as running 'cost' with no subcommand
   history         Aggregate cost over the last N days
   refresh-pricing Fetch the latest public model-price table (opt-in)
@@ -48,14 +48,6 @@ reported with exact tokens but flagged unpriced rather than guessed.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          runCostSession, // bare 'promptconduit cost' shows the current session
-}
-
-var costWatchCmd = &cobra.Command{
-	Use:           "watch",
-	Short:         "Stream real-time cost events (newline-delimited JSON)",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostWatch,
 }
 
 var costSessionCmd = &cobra.Command{
@@ -96,10 +88,6 @@ file.`,
 }
 
 func init() {
-	costWatchCmd.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
-	costWatchCmd.Flags().BoolVar(&costAll, "all", false, "watch every project, not just the current workspace")
-	costWatchCmd.Flags().BoolVar(&costJSON, "json", true, "emit newline-delimited JSON (the editor extension's feed)")
-
 	// Bare `cost` and `cost session` share behavior: human-readable by default,
 	// --json for scripts. They bind the same package vars (only one runs).
 	for _, c := range []*cobra.Command{costCmd, costSessionCmd} {
@@ -110,7 +98,6 @@ func init() {
 	costHistoryCmd.Flags().IntVar(&costDays, "days", 7, "number of days to include")
 	costHistoryCmd.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a table")
 
-	costCmd.AddCommand(costWatchCmd)
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
 	costCmd.AddCommand(costRefreshPricingCmd)
@@ -167,50 +154,6 @@ func resolveCwd() string {
 	return ""
 }
 
-func runCostWatch(cmd *cobra.Command, args []string) error {
-	table, err := cost.LoadPriceTable()
-	if err != nil {
-		return fmt.Errorf("load pricing table: %w", err)
-	}
-
-	dirs, err := cost.ResolveDirs(resolveCwd(), costAll)
-	if err != nil {
-		return fmt.Errorf("resolve transcript directories: %w", err)
-	}
-
-	// Persist to the local store best-effort; a store failure must never stop
-	// the live stream the extension depends on.
-	store, err := cost.OpenStore()
-	if err != nil {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "cost: local store unavailable (%v); continuing without history\n", err)
-		store = nil
-	}
-	if store != nil {
-		defer func() { _ = store.Close() }()
-	}
-
-	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	cursorFeeds := cost.CursorFeedPaths(resolveCwd(), costAll)
-
-	scope := "current workspace"
-	if costAll {
-		scope = "all projects"
-	}
-	_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "cost: watching %s (Claude Code + Cursor) — local only, Ctrl-C to stop.\n", scope)
-
-	// Under --all, let the watcher rescan the Cursor feed dir for workspaces
-	// that come online after startup.
-	cursorRescanDir := ""
-	if costAll {
-		cursorRescanDir = cost.CursorFeedDir()
-	}
-
-	w := cost.NewWatcher(table, store, cmd.OutOrStdout(), true)
-	return w.Run(ctx, dirs, cursorFeeds, cursorRescanDir)
-}
-
 func runCostSession(cmd *cobra.Command, args []string) error {
 	table, err := cost.LoadPriceTable()
 	if err != nil {
@@ -260,7 +203,7 @@ func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
 			m.Model, costStr, m.Tokens.Input, m.Tokens.Output, m.Tokens.CacheRead, m.Tokens.CacheWrite)
 	}
 	if s.Tools.Total > 0 {
-		fmt.Fprintf(out, "  Tools: %d call(s)%s\n", s.Tools.Total, formatToolBreakdown(s.Tools.ByName))
+		_, _ = fmt.Fprintf(out, "  Tools: %d call(s)%s\n", s.Tools.Total, formatToolBreakdown(s.Tools.ByName))
 	}
 	renderSignalsHuman(out, s.Signals)
 }
@@ -269,10 +212,10 @@ func renderSessionHuman(out io.Writer, s cost.SessionSummary) {
 // Numbers only — no prompt content. Skipped entirely for an unpriced session,
 // where the cost-share signal would be a meaningless 0.
 func renderSignalsHuman(out io.Writer, sig cost.Signals) {
-	fmt.Fprintf(out, "  Signals: cache-hit %.0f%% · input-share %.0f%% · tier %s\n",
+	_, _ = fmt.Fprintf(out, "  Signals: cache-hit %.0f%% · input-share %.0f%% · tier %s\n",
 		sig.CacheHitRate*100, sig.InputTokenShare*100, sig.Tier)
 	if sig.ModelPriced {
-		fmt.Fprintf(out, "           cache-miss cost share %.0f%%\n", sig.CacheMissCostShare*100)
+		_, _ = fmt.Fprintf(out, "           cache-miss cost share %.0f%%\n", sig.CacheMissCostShare*100)
 	}
 }
 
