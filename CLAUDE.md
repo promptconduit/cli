@@ -52,9 +52,18 @@ to what's POSTed to `/v1/events/raw` and stored in the platform bucket.
   "tool": "claude-code", "hook_event": "PostToolUse", "captured_at": "…",
   "cli_version": "…",
   "raw_event": { /* native hook payload, untouched */ },
-  "enrichments": { "env": {…}, "trace": {…}, "vcs": {…}, "prompt": {…}, "cost": {…} }
+  "enrichments": { "env": {…}, "trace": {…}, "vcs": {…}, "prompt": {…}, "cost": {…},
+                   "tools": {…}, "diff": {…}, "subagent": {…} }
 }
 ```
+
+Well-known slugs: `env` (host/os/os_version/arch/cwd, every event) · `trace`
+(W3C correlation, every event) · `vcs` (normalized provider/repo/branch/PR,
+git repos) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
+requests, Stop / cursor stop) · `tools` (normalized tool-call list,
+PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
+Stop/SessionEnd) · `subagent` (Start/Stop join with duration + per-agent
+tokens/USD from the agent transcript, SubagentStart/Stop).
 
 **Adding an enrichment** = one new file in `internal/enrich/` implementing
 `Enricher` (Slug/Applies/Enrich) plus `Register()` in its `init()`. Rules:
