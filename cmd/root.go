@@ -61,6 +61,7 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(eventsCmd)
 	rootCmd.AddCommand(costCmd)
+	rootCmd.AddCommand(pruneCmd)
 }
 
 var versionCmd = &cobra.Command{

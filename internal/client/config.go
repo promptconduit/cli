@@ -10,17 +10,21 @@ import (
 const (
 	DefaultAPIURL      = "https://api.promptconduit.dev"
 	DefaultTimeoutSecs = 30
-	EnvAPIKey          = "PROMPTCONDUIT_API_KEY"
-	EnvAPIURL          = "PROMPTCONDUIT_API_URL"
-	EnvDebug           = "PROMPTCONDUIT_DEBUG"
-	EnvTimeout         = "PROMPTCONDUIT_TIMEOUT"
-	EnvTool            = "PROMPTCONDUIT_TOOL"
-	EnvAutoUpdate      = "PROMPTCONDUIT_AUTO_UPDATE" // "0"/"false" disables background self-upgrade
-	EnvEventLog        = "PROMPTCONDUIT_EVENT_LOG"   // "0"/"false" disables the local ~/.promptconduit event log
-	EnvLocalOnly       = "PROMPTCONDUIT_LOCAL_ONLY"  // "1"/"true" forces Free / local-only mode (never send to the cloud)
-	EnvXDGConfigHome   = "XDG_CONFIG_HOME"
-	ConfigDirName      = "promptconduit" // ~/.config/promptconduit/
-	ConfigFileName     = "config.json"
+	// DefaultEventLogRetentionDays is the floor for local hook history: every
+	// event captured in the last N days is kept. Used when retention is unset.
+	DefaultEventLogRetentionDays = 30
+	EnvAPIKey                    = "PROMPTCONDUIT_API_KEY"
+	EnvAPIURL                    = "PROMPTCONDUIT_API_URL"
+	EnvDebug                     = "PROMPTCONDUIT_DEBUG"
+	EnvTimeout                   = "PROMPTCONDUIT_TIMEOUT"
+	EnvTool                      = "PROMPTCONDUIT_TOOL"
+	EnvAutoUpdate                = "PROMPTCONDUIT_AUTO_UPDATE"              // "0"/"false" disables background self-upgrade
+	EnvEventLog                  = "PROMPTCONDUIT_EVENT_LOG"                // "0"/"false" disables the local ~/.promptconduit event log
+	EnvEventLogRetentionDays     = "PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS" // days of local hook history to keep; -1 keeps forever
+	EnvLocalOnly                 = "PROMPTCONDUIT_LOCAL_ONLY"               // "1"/"true" forces Free / local-only mode (never send to the cloud)
+	EnvXDGConfigHome             = "XDG_CONFIG_HOME"
+	ConfigDirName                = "promptconduit" // ~/.config/promptconduit/
+	ConfigFileName               = "config.json"
 )
 
 // Config holds the client configuration
@@ -40,6 +44,11 @@ type Config struct {
 	// but NEVER sent to the cloud, regardless of whether an API key is set.
 	// Zero value (false) leaves cloud sync enabled (when an API key exists).
 	LocalOnly bool `json:"local_only,omitempty"`
+	// EventLogRetentionDays is how many days of local hook history
+	// (~/.promptconduit/events.jsonl) to keep. Zero/unset means the default
+	// (DefaultEventLogRetentionDays); a negative value keeps history forever
+	// (never prune). Resolve via RetentionDays(), not this field directly.
+	EventLogRetentionDays int `json:"event_log_retention_days,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -51,13 +60,14 @@ type FileConfig struct {
 	Environments map[string]*Config `json:"environments,omitempty"`
 
 	// Legacy flat config (for backwards compatibility)
-	APIKey            string `json:"api_key,omitempty"`
-	APIURL            string `json:"api_url,omitempty"`
-	Debug             bool   `json:"debug,omitempty"`
-	Timeout           int    `json:"timeout_seconds,omitempty"`
-	DisableAutoUpdate bool   `json:"disable_auto_update,omitempty"`
-	DisableEventLog   bool   `json:"disable_event_log,omitempty"`
-	LocalOnly         bool   `json:"local_only,omitempty"`
+	APIKey                string `json:"api_key,omitempty"`
+	APIURL                string `json:"api_url,omitempty"`
+	Debug                 bool   `json:"debug,omitempty"`
+	Timeout               int    `json:"timeout_seconds,omitempty"`
+	DisableAutoUpdate     bool   `json:"disable_auto_update,omitempty"`
+	DisableEventLog       bool   `json:"disable_event_log,omitempty"`
+	LocalOnly             bool   `json:"local_only,omitempty"`
+	EventLogRetentionDays int    `json:"event_log_retention_days,omitempty"`
 }
 
 // EventLogEnabled reports whether the local ~/.promptconduit event log should
@@ -65,6 +75,21 @@ type FileConfig struct {
 // config (disable_event_log) or PROMPTCONDUIT_EVENT_LOG=0.
 func (c *Config) EventLogEnabled() bool {
 	return !c.DisableEventLog
+}
+
+// RetentionDays resolves the effective local hook-history retention window in
+// days. Returns 0 to mean "keep forever" (no pruning): an unset field falls
+// back to DefaultEventLogRetentionDays, and a negative field is the explicit
+// keep-forever opt-out. Any positive value is used as-is.
+func (c *Config) RetentionDays() int {
+	switch {
+	case c.EventLogRetentionDays < 0:
+		return 0 // keep forever
+	case c.EventLogRetentionDays == 0:
+		return DefaultEventLogRetentionDays
+	default:
+		return c.EventLogRetentionDays
+	}
 }
 
 // IsConfigured returns true if the API key is set
@@ -172,20 +197,25 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 			merged.DisableAutoUpdate = merged.DisableAutoUpdate || fc.DisableAutoUpdate
 			merged.DisableEventLog = merged.DisableEventLog || fc.DisableEventLog
 			merged.LocalOnly = merged.LocalOnly || fc.LocalOnly
+			// Retention is a global default too: use it when the env didn't set one.
+			if merged.EventLogRetentionDays == 0 {
+				merged.EventLogRetentionDays = fc.EventLogRetentionDays
+			}
 			return &merged
 		}
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog || fc.LocalOnly {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 {
 		return &Config{
-			APIKey:            fc.APIKey,
-			APIURL:            fc.APIURL,
-			Debug:             fc.Debug,
-			TimeoutSeconds:    fc.Timeout,
-			DisableAutoUpdate: fc.DisableAutoUpdate,
-			DisableEventLog:   fc.DisableEventLog,
-			LocalOnly:         fc.LocalOnly,
+			APIKey:                fc.APIKey,
+			APIURL:                fc.APIURL,
+			Debug:                 fc.Debug,
+			TimeoutSeconds:        fc.Timeout,
+			DisableAutoUpdate:     fc.DisableAutoUpdate,
+			DisableEventLog:       fc.DisableEventLog,
+			LocalOnly:             fc.LocalOnly,
+			EventLogRetentionDays: fc.EventLogRetentionDays,
 		}
 	}
 
@@ -226,6 +256,9 @@ func LoadConfig() *Config {
 			if fileCfg.LocalOnly {
 				cfg.LocalOnly = true
 			}
+			if fileCfg.EventLogRetentionDays != 0 {
+				cfg.EventLogRetentionDays = fileCfg.EventLogRetentionDays
+			}
 		}
 	}
 
@@ -245,6 +278,14 @@ func LoadConfig() *Config {
 	// anything else (or unset) leaves whatever the file config decided.
 	if v := os.Getenv(EnvLocalOnly); v == "1" || v == "true" || v == "yes" {
 		cfg.LocalOnly = true
+	}
+
+	// PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS overrides the local hook-history
+	// window (in days); -1 keeps forever. Anything unparseable is ignored.
+	if v := os.Getenv(EnvEventLogRetentionDays); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.EventLogRetentionDays = n
+		}
 	}
 
 	// Apply defaults

@@ -39,10 +39,11 @@ import (
 	"time"
 )
 
-// EventsRotateAt is the size threshold at which events.jsonl is rotated to
-// events.jsonl.1. Records themselves are never truncated (full fidelity);
-// total disk is bounded by rotation instead. One backup is kept.
-const EventsRotateAt int64 = 50 * 1024 * 1024 // 50 MB
+// events.jsonl is NOT size-rotated: its disk footprint is governed by
+// time-based retention (see prune.go — every record within the retention
+// window is kept, older ones trimmed only past EventsCeiling). Blind size
+// rotation is avoided here precisely because it would discard a whole backup at
+// once, dropping recent data and breaking the "keep at least N days" guarantee.
 
 // ErrorsRotateAt is the (smaller) rotation threshold for the human-readable
 // errors.log — sized like internal/logger so a tail/cat finishes instantly.

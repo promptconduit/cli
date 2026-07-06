@@ -34,8 +34,9 @@ sent to the platform.
 
 This reads ~/.promptconduit/events.jsonl — one v2 envelope per line, written at
 capture time for every event, in cloud AND Free/local-only mode (secrets
-scrubbed; the file rotates to events.jsonl.1 at 50MB). Send outcomes are in
-'promptconduit status'; raw HTTP diagnostics in 'promptconduit watch'.
+scrubbed; history is kept for the configured retention window, default 30 days —
+see 'promptconduit prune'). Send outcomes are in 'promptconduit status'; raw
+HTTP diagnostics in 'promptconduit watch'.
 
 By default each event is shown as a one-line summary:
 
