@@ -158,8 +158,8 @@ func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string, 
 				}
 			}
 			// Under --all, pick up Cursor feeds for workspaces that started
-			// after the watcher did. New feed files are near-empty, so tailing
-			// from the end captures everything without re-seeding.
+			// after the watcher did (cli#63). New feed files are near-empty, so
+			// tailing from the end captures everything without re-seeding.
 			if cursorRescanDir != "" {
 				if entries, err := os.ReadDir(cursorRescanDir); err == nil {
 					for _, e := range entries {

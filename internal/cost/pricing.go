@@ -49,6 +49,15 @@ type PriceTable struct {
 var modelAliases = map[string]string{
 	"claude-3-5-haiku-20241022": "claude-3-5-haiku",
 	"claude-3-5-haiku-latest":   "claude-3-5-haiku",
+	// Common passthrough strings from Claude Code / Cursor hooks (cli#63).
+	"claude-sonnet-4":       "claude-sonnet-4-6",
+	"claude-sonnet-4-5":     "claude-sonnet-4-5",
+	"claude-opus-4":         "claude-opus-4-6",
+	"claude-opus-4-8":       "claude-opus-4-8",
+	"claude-haiku-4-5":      "claude-haiku-4-5",
+	"composer-1":            "cursor-composer-1",
+	"claude-4.5-sonnet":     "claude-sonnet-4-5",
+	"claude-4.5-opus":       "claude-opus-4-5",
 }
 
 // LoadBundledPriceTable parses the embedded snapshot only. Tests use this for
