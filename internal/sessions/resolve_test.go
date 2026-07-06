@@ -1,9 +1,11 @@
 package sessions
 
 import (
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestParseProcessTree(t *testing.T) {
@@ -99,4 +101,96 @@ func TestIsDescendantOf(t *testing.T) {
 	if isDescendantOf("53134", "15823", parents) {
 		t.Fatal("53134 is not under 15823")
 	}
+}
+
+func TestEncodeProjectPath(t *testing.T) {
+	got := encodeProjectPath("/Users/x/GitHub/foo")
+	want := "-Users-x-GitHub-foo"
+	if got != want {
+		t.Fatalf("encodeProjectPath = %q, want %q", got, want)
+	}
+}
+
+func TestTranscriptSessionsInDir(t *testing.T) {
+	dir := t.TempDir()
+
+	mustTouch := func(name string, mod time.Time) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Now()
+	mustTouch("older.jsonl", now.Add(-30*time.Minute))
+	mustTouch("newer.jsonl", now.Add(-1*time.Minute))
+
+	got := transcriptSessionsInDir(dir, time.Hour)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2", len(got))
+	}
+	if got[0].sessionID != "newer" {
+		t.Fatalf("newest first: got %q", got[0].sessionID)
+	}
+}
+
+func TestTranscriptSessionFromCwd(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	projects := filepath.Join(home, ".claude", "projects")
+	cwd := "/tmp/my-project"
+	projDir := filepath.Join(projects, encodeProjectPath(cwd))
+	if err := os.MkdirAll(projDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(projDir, "sess-abc.jsonl")
+	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := transcriptSessionFromCwd(cwd); got != "sess-abc" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestEventLogCandidatesForCwd(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	lines := []string{
+		`{"schema":2,"tool":"claude-code","session_id":"old","raw_event":{"cwd":"/a"}}`,
+		`{"schema":2,"tool":"claude-code","session_id":"new","raw_event":{"cwd":"/a"}}`,
+		`{"schema":2,"tool":"cursor","session_id":"c1","raw_event":{"cwd":"/a"}}`,
+	}
+	if err := os.WriteFile(path, []byte(stringsJoin(lines)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := eventLogCandidatesForCwd("/a", path, time.Hour)
+	want := []ResolveCandidate{{SessionID: "new", Cwd: "/a"}, {SessionID: "old", Cwd: "/a"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
+	}
+}
+
+func TestDedupeCandidates(t *testing.T) {
+	in := []ResolveCandidate{
+		{SessionID: "a", PID: "1"},
+		{SessionID: "a", PID: "2"},
+		{SessionID: "b", PID: "3"},
+	}
+	got := dedupeCandidates(in)
+	if len(got) != 2 || got[0].SessionID != "a" || got[1].SessionID != "b" {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func stringsJoin(ss []string) string {
+	out := ""
+	for i, s := range ss {
+		if i > 0 {
+			out += "\n"
+		}
+		out += s
+	}
+	return out + "\n"
 }

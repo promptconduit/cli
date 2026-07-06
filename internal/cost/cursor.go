@@ -13,6 +13,10 @@ import (
 // reconciliation — Cursor cost is computed the same exact way as Claude Code,
 // just sourced from a hook payload instead of a transcript line.
 //
+// Cache pricing deferral (cli#63): cache_read / cache_write tokens are priced at
+// $0 until Cursor publishes per-model cache rates. Breakdown totals may
+// undercount cache-heavy Cursor sessions until then.
+//
 // Both `stop` and `afterAgentResponse` fire per generation with the SAME
 // generation_id and identical final tokens, so dedup by generation_id collapses
 // them to one billable unit regardless of which hook(s) are installed.
