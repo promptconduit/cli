@@ -17,6 +17,8 @@ var (
 	sessionsJSON      bool
 	sessionsAll       bool // include sessions that are still running
 	sessionsUnderPath string
+	sessionsResolvePID string
+	sessionsResolveJSON bool
 )
 
 var sessionsCmd = &cobra.Command{
@@ -153,10 +155,34 @@ func shortID(id string) string {
 	return id
 }
 
+var sessionsResolveCmd = &cobra.Command{
+	Use:   "resolve",
+	Short: "Resolve a terminal shell PID to a Claude Code session",
+	Long: `Map a VS Code / Cursor terminal shell PID to the Claude Code session
+running inside it. Used by the editor extension to follow terminal focus.
+
+Resolution order per claude child process: --resume in argv, else an open
+transcript file (lsof). When several claude processes exist under the shell
+(sub-agents), --json returns ambiguous: true with a candidates list.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if sessionsResolvePID == "" {
+			return fmt.Errorf("--pid is required")
+		}
+		result := sessions.ResolveFromShellPID(sessionsResolvePID)
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		return enc.Encode(result)
+	},
+}
+
 func init() {
 	sessionsCmd.Flags().DurationVar(&sessionsSince, "since", 12*time.Hour, "only sessions active within this window")
 	sessionsCmd.Flags().BoolVar(&sessionsJSON, "json", false, "emit machine-readable JSON")
 	sessionsCmd.Flags().BoolVar(&sessionsAll, "all", false, "include sessions that are still running")
 	sessionsCmd.Flags().StringVar(&sessionsUnderPath, "under", "", "only sessions whose directory is under this path")
+	sessionsResolveCmd.Flags().StringVar(&sessionsResolvePID, "pid", "", "shell process id from the focused terminal")
+	sessionsResolveCmd.Flags().BoolVar(&sessionsResolveJSON, "json", false, "emit machine-readable JSON (always JSON; flag for CLI consistency)")
+	_ = sessionsResolveCmd.MarkFlagRequired("pid")
+	sessionsCmd.AddCommand(sessionsResolveCmd)
 	rootCmd.AddCommand(sessionsCmd)
 }
