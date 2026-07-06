@@ -30,7 +30,10 @@ func RecordCapture(payload []byte) {
 	}
 
 	migrateOnce.Do(migrateV1Files)
-	appendLine(EventsJSONLPath(), line, EventsRotateAt)
+	// rotateAt=0: no blind size rotation. Disk is bounded by time-based
+	// retention pruning instead (see prune.go / MaybePrune), which never drops
+	// records inside the retention window.
+	appendLine(EventsJSONLPath(), line, 0)
 }
 
 var migrateOnce sync.Once
@@ -74,7 +77,7 @@ func headIsV1(path string) bool {
 
 // CountCaptured returns the number of events currently in events.jsonl and
 // false if the file doesn't exist yet. Best-effort; reads the whole file, whose
-// size is bounded by rotation (EventsRotateAt).
+// size is bounded by retention pruning (EventsCeiling, see prune.go).
 func CountCaptured() (int, bool) {
 	data, err := os.ReadFile(EventsJSONLPath())
 	if err != nil {

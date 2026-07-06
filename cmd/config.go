@@ -49,6 +49,11 @@ var configShowCmd = &cobra.Command{
 			eventLog = "disabled"
 		}
 		cmd.Printf("Event log:   %s\n", eventLog)
+		if cfg.RetentionDays() == 0 {
+			cmd.Printf("Retention:   keep forever\n")
+		} else {
+			cmd.Printf("Retention:   %d days of local hook history\n", cfg.RetentionDays())
+		}
 		// Effective mode: Free / local-only (nothing sent) vs cloud sync. This
 		// reflects ShouldSend, so "no API key" also reads as local-only.
 		mode := "cloud sync"
@@ -80,12 +85,13 @@ var configShowCmd = &cobra.Command{
 }
 
 var (
-	setAPIKey            string
-	setAPIURL            string
-	setDebug             bool
-	setDisableAutoUpdate bool
-	setDisableEventLog   bool
-	setLocalOnly         bool
+	setAPIKey                string
+	setAPIURL                string
+	setDebug                 bool
+	setDisableAutoUpdate     bool
+	setDisableEventLog       bool
+	setLocalOnly             bool
+	setEventLogRetentionDays int
 )
 
 var configSetCmd = &cobra.Command{
@@ -116,7 +122,13 @@ Examples:
   promptconduit config set --local-only=true
 
   # Re-enable cloud sync (events sent when an API key is set)
-  promptconduit config set --local-only=false`,
+  promptconduit config set --local-only=false
+
+  # Keep 90 days of local hook history (default is 30)
+  promptconduit config set --event-log-retention-days=90
+
+  # Never prune local hook history
+  promptconduit config set --event-log-retention-days=-1`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -153,9 +165,13 @@ Examples:
 			fc.LocalOnly = setLocalOnly
 			changed = true
 		}
+		if cmd.Flags().Changed("event-log-retention-days") {
+			fc.EventLogRetentionDays = setEventLogRetentionDays
+			changed = true
+		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-event-log, or --local-only")
+			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-event-log, --local-only, or --event-log-retention-days")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -191,6 +207,13 @@ Examples:
 				cmd.Printf("  Mode:        local-only (Free) — events captured locally, nothing sent\n")
 			} else {
 				cmd.Printf("  Mode:        cloud sync — events sent when an API key is set\n")
+			}
+		}
+		if cmd.Flags().Changed("event-log-retention-days") {
+			if fc.EventLogRetentionDays < 0 {
+				cmd.Printf("  Retention:   keep forever (local hook history never pruned)\n")
+			} else {
+				cmd.Printf("  Retention:   %d days of local hook history\n", (&client.Config{EventLogRetentionDays: fc.EventLogRetentionDays}).RetentionDays())
 			}
 		}
 
@@ -415,6 +438,7 @@ func init() {
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
 	configSetCmd.Flags().BoolVar(&setLocalOnly, "local-only", false, "Free / local-only mode: capture events locally, never send to the cloud")
+	configSetCmd.Flags().IntVar(&setEventLogRetentionDays, "event-log-retention-days", 0, "Days of local hook history to keep (default 30; -1 = keep forever)")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)

@@ -61,6 +61,12 @@ func processHookEvent() error {
 	logger.SetDebug(cfg.Debug)
 	eventlog.SetEnabled(cfg.EventLogEnabled())
 
+	// Opportunistically enforce local hook-history retention. Runs after the
+	// event is captured (deferred); cheap on the hot path — a couple of stats
+	// unless the log has grown past its size ceiling, in which case expired
+	// records (older than the retention window) are trimmed oldest-first.
+	defer eventlog.MaybePrune(cfg.RetentionDays())
+
 	logger.Debug("Hook started")
 
 	// Read raw input from stdin
