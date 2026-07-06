@@ -57,7 +57,9 @@ func defaultResolveProbe() resolveProbe {
 			out, err := exec.CommandContext(ctx, "lsof", "-Fn", "-p", pid).Output()
 			return string(out), err
 		},
-		procCwd: procCwd,
+		procCwd: func(ctx context.Context, pid string) (string, error) {
+			return procCwd(ctx, pid), nil
+		},
 		now:     time.Now,
 	}
 }
