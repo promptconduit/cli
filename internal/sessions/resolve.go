@@ -2,16 +2,11 @@ package sessions
 
 import (
 	"context"
-	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
-
-	"github.com/promptconduit/cli/internal/eventlog"
 )
 
 // ResolveCandidate is one claude process that could own the terminal session.
@@ -33,10 +28,44 @@ type ResolveResult struct {
 }
 
 // ResolveFromShellPID finds claude processes descended from shellPID and resolves
-// each to a session id (--resume in argv, else an open transcript via lsof).
-// macOS/Linux only; returns an empty result on other platforms or when nothing
-// matches.
+// each to a session id (--resume in argv, else an open transcript via lsof, else
+// cwd/transcript/event-log fallbacks for plain `claude`). macOS/Linux only;
+// returns an empty result on other platforms or when nothing matches.
 func ResolveFromShellPID(shellPID string) ResolveResult {
+	return resolveFromShellPID(shellPID, resolveProbe{})
+}
+
+type resolveProbe struct {
+	ps       func(ctx context.Context) (string, error)
+	procArgs func(ctx context.Context, pid string) (string, error)
+	lsof     func(ctx context.Context, pid string) (string, error)
+	procCwd  func(ctx context.Context, pid string) (string, error)
+	now      func() time.Time
+}
+
+func defaultResolveProbe() resolveProbe {
+	return resolveProbe{
+		ps: func(ctx context.Context) (string, error) {
+			out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,comm=").Output()
+			return string(out), err
+		},
+		procArgs: func(ctx context.Context, pid string) (string, error) {
+			out, err := exec.CommandContext(ctx, "ps", "-p", pid, "-o", "args=").Output()
+			return strings.TrimSpace(string(out)), err
+		},
+		lsof: func(ctx context.Context, pid string) (string, error) {
+			out, err := exec.CommandContext(ctx, "lsof", "-Fn", "-p", pid).Output()
+			return string(out), err
+		},
+		procCwd: procCwd,
+		now:     time.Now,
+	}
+}
+
+func resolveFromShellPID(shellPID string, probe resolveProbe) ResolveResult {
+	if probe.ps == nil {
+		probe = defaultResolveProbe()
+	}
 	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		return ResolveResult{}
 	}
@@ -48,26 +77,29 @@ func ResolveFromShellPID(shellPID string) ResolveResult {
 	ctx, cancel := context.WithTimeout(context.Background(), liveProbeTimeout)
 	defer cancel()
 
-	psOut, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=,comm=").Output()
+	psOut, err := probe.ps(ctx)
 	if err != nil {
 		return ResolveResult{}
 	}
-	parents, comms := parseProcessTree(string(psOut))
+	parents, comms := parseProcessTree(psOut)
 	pids := claudeDescendants(shellPID, parents, comms)
 	if len(pids) == 0 {
 		return ResolveResult{}
 	}
 
-	if amb := sameCwdAmbiguousResult(ctx, pids); amb.Ambiguous {
+	nowFn := probe.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+
+	if amb := sameCwdAmbiguousResult(ctx, probe, pids, now); amb.Ambiguous {
 		return amb
 	}
 
 	candidates := make([]ResolveCandidate, 0, len(pids))
 	for _, pid := range pids {
-		c := resolveClaudePID(ctx, pid)
-		if c.SessionID != "" {
-			candidates = append(candidates, c)
-		}
+		candidates = append(candidates, resolveClaudePID(ctx, probe, pid, now)...)
 	}
 	candidates = dedupeCandidates(candidates)
 	if len(candidates) == 0 {
@@ -139,226 +171,69 @@ func isDescendantOf(pid, ancestor string, parents map[string]string) bool {
 	}
 }
 
-func resolveClaudePID(ctx context.Context, pid string) ResolveCandidate {
-	args := procArgs(ctx, pid)
-	sessionID := parseResumeSessionID(args)
-	cwd := procCwd(ctx, pid)
-	if sessionID == "" {
-		sessionID = transcriptSessionFromLsof(ctx, pid)
+// sameCwdAmbiguousResult fires when several claude descendants share a cwd and
+// cwd-based fallbacks surface multiple distinct sessions.
+func sameCwdAmbiguousResult(ctx context.Context, probe resolveProbe, pids []string, now time.Time) ResolveResult {
+	if len(pids) <= 1 {
+		return ResolveResult{}
 	}
-	if sessionID == "" && cwd != "" {
-		sessionID = transcriptSessionFromCwd(cwd)
-	}
-	if sessionID == "" && cwd != "" {
-		sessionID = sessionFromEventLog(cwd, eventlog.EventsJSONLPath())
-	}
-	return ResolveCandidate{SessionID: sessionID, PID: pid, Cwd: cwd}
-}
-
-// dedupeCandidates keeps one entry per session_id (first pid wins).
-func dedupeCandidates(in []ResolveCandidate) []ResolveCandidate {
-	seen := map[string]bool{}
-	out := make([]ResolveCandidate, 0, len(in))
-	for _, c := range in {
-		if c.SessionID == "" || seen[c.SessionID] {
-			continue
-		}
-		seen[c.SessionID] = true
-		out = append(out, c)
-	}
-	return out
-}
-
-// sameCwdAmbiguousResult fires when multiple claude children share a cwd and
-// more than one session could own that terminal — plain `claude` without
-// --resume cannot be attributed to a single transcript.
-func sameCwdAmbiguousResult(ctx context.Context, pids []string) ResolveResult {
 	byCwd := map[string][]string{}
 	for _, pid := range pids {
-		cwd := procCwd(ctx, pid)
+		cwd, _ := probe.procCwd(ctx, pid)
+		cwd = filepath.Clean(cwd)
 		if cwd == "" {
 			continue
 		}
 		byCwd[cwd] = append(byCwd[cwd], pid)
 	}
-	for cwd, cpids := range byCwd {
-		if len(cpids) < 2 {
+	projectsRoot := claudeProjectsDir()
+	for cwd, group := range byCwd {
+		if len(group) <= 1 {
 			continue
 		}
-		cands := transcriptCandidatesForCwd(cwd, recentTranscriptWindow)
-		if len(cands) == 0 {
-			cands = eventLogCandidatesForCwd(cwd, eventlog.EventsJSONLPath(), recentTranscriptWindow)
+		if allResolvedViaPrimary(ctx, probe, group) {
+			continue
 		}
-		for i := range cands {
-			cands[i].Cwd = cwd
-			if cands[i].PID == "" && len(cpids) > 0 {
-				cands[i].PID = cpids[0]
-			}
+		ids := recentTranscriptSessionIDs(projectsRoot, cwd, now)
+		if len(ids) <= 1 {
+			continue
 		}
-		if len(cands) > 1 {
-			return ResolveResult{Ambiguous: true, Candidates: cands}
-		}
-		if len(cands) == 1 {
-			// One transcript but two processes — still ambiguous (cannot pick).
-			return ResolveResult{Ambiguous: true, Candidates: cands}
+		return ResolveResult{
+			Ambiguous:  true,
+			Candidates: candidatesFromIDs(ids, group[0], cwd),
 		}
 	}
 	return ResolveResult{}
 }
 
-// recentTranscriptWindow bounds which on-disk transcripts count as live when
-// disambiguating same-cwd plain-claude terminals.
-const recentTranscriptWindow = 2 * time.Hour
-
-// encodeProjectPath mirrors Claude Code's project-folder naming (see cost package).
-func encodeProjectPath(p string) string {
-	var b strings.Builder
-	b.Grow(len(p))
-	for _, r := range p {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	return b.String()
-}
-
-func projectDirForCwd(cwd string) string {
-	root := claudeProjectsDir()
-	if root == "" || cwd == "" {
-		return ""
-	}
-	encoded := filepath.Join(root, encodeProjectPath(cwd))
-	if fi, err := os.Stat(encoded); err == nil && fi.IsDir() {
-		return encoded
-	}
-	return encoded
-}
-
-type transcriptEntry struct {
-	sessionID string
-	mod       time.Time
-}
-
-// transcriptSessionsInDir returns session ids from .jsonl files in dir, newest
-// mtime first. Only files modified within within are included.
-func transcriptSessionsInDir(dir string, within time.Duration) []transcriptEntry {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	cutoff := time.Now().Add(-within)
-	var out []transcriptEntry
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil || info.ModTime().Before(cutoff) {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".jsonl")
-		if id == "" {
-			continue
-		}
-		out = append(out, transcriptEntry{sessionID: id, mod: info.ModTime()})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].mod.After(out[j].mod)
-	})
-	return out
-}
-
-// transcriptSessionFromCwd picks the newest recently-modified transcript in the
-// Claude Code project folder for cwd.
-func transcriptSessionFromCwd(cwd string) string {
-	dir := projectDirForCwd(cwd)
-	if dir == "" {
-		return ""
-	}
-	entries := transcriptSessionsInDir(dir, recentTranscriptWindow)
-	if len(entries) == 0 {
-		return ""
-	}
-	return entries[0].sessionID
-}
-
-// transcriptCandidatesForCwd lists recent transcript session ids for cwd.
-func transcriptCandidatesForCwd(cwd string, within time.Duration) []ResolveCandidate {
-	dir := projectDirForCwd(cwd)
-	if dir == "" {
-		return nil
-	}
-	entries := transcriptSessionsInDir(dir, within)
-	out := make([]ResolveCandidate, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, ResolveCandidate{SessionID: e.sessionID, Cwd: cwd})
-	}
-	return out
-}
-
-// resolveEnvelope is the minimal events.jsonl line for cwd correlation.
-type resolveEnvelope struct {
-	Schema    int    `json:"schema"`
-	Tool      string `json:"tool"`
-	SessionID string `json:"session_id"`
-	Raw       struct {
-		Cwd string `json:"cwd"`
-	} `json:"raw_event"`
-}
-
-// sessionFromEventLog returns the most recent claude-code session_id seen at cwd.
-func sessionFromEventLog(cwd, path string) string {
-	cands := eventLogCandidatesForCwd(cwd, path, recentTranscriptWindow)
-	if len(cands) == 0 {
-		return ""
-	}
-	return cands[0].SessionID
-}
-
-// eventLogCandidatesForCwd scans the event log tail for distinct session ids at
-// cwd, newest activity first.
-func eventLogCandidatesForCwd(cwd, path string, within time.Duration) []ResolveCandidate {
-	lines, err := tailLines(path, defaultMaxBytes)
-	if err != nil || len(lines) == 0 {
-		return nil
-	}
-	cutoff := time.Now().Add(-within)
+func allResolvedViaPrimary(ctx context.Context, probe resolveProbe, pids []string) bool {
 	seen := map[string]bool{}
-	var out []ResolveCandidate
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
+	for _, pid := range pids {
+		args, _ := probe.procArgs(ctx, pid)
+		if sid := parseResumeSessionID(args); sid != "" {
+			seen[sid] = true
 			continue
 		}
-		var e resolveEnvelope
-		if err := json.Unmarshal([]byte(line), &e); err != nil {
-			continue
+		lsofOut, _ := probe.lsof(ctx, pid)
+		if sid := parseTranscriptSessionID(lsofOut); sid != "" {
+			seen[sid] = true
 		}
-		if e.Schema < 2 || e.Tool != "claude-code" || e.SessionID == "" {
-			continue
-		}
-		if e.Raw.Cwd != cwd {
-			continue
-		}
-		if seen[e.SessionID] {
-			continue
-		}
-		seen[e.SessionID] = true
-		_ = cutoff // tail is bounded; recency is implied by reverse scan order
-		out = append(out, ResolveCandidate{SessionID: e.SessionID, Cwd: cwd})
 	}
-	return out
+	return len(seen) == 1
 }
 
-func procArgs(ctx context.Context, pid string) string {
-	out, err := exec.CommandContext(ctx, "ps", "-p", pid, "-o", "args=").Output()
-	if err != nil {
-		return ""
+func resolveClaudePID(ctx context.Context, probe resolveProbe, pid string, now time.Time) []ResolveCandidate {
+	args, _ := probe.procArgs(ctx, pid)
+	sessionID := parseResumeSessionID(args)
+	if sessionID == "" {
+		lsofOut, _ := probe.lsof(ctx, pid)
+		sessionID = parseTranscriptSessionID(lsofOut)
 	}
-	return strings.TrimSpace(string(out))
+	cwd, _ := probe.procCwd(ctx, pid)
+	if sessionID != "" {
+		return []ResolveCandidate{{SessionID: sessionID, PID: pid, Cwd: cwd}}
+	}
+	return resolveFallbackCandidates(pid, cwd, now)
 }
 
 // parseResumeSessionID extracts the session id from a claude argv string.
@@ -370,16 +245,6 @@ func parseResumeSessionID(args string) string {
 		}
 	}
 	return ""
-}
-
-// transcriptSessionFromLsof finds an open Claude Code transcript for pid and
-// returns the session id from its filename (<session-id>.jsonl).
-func transcriptSessionFromLsof(ctx context.Context, pid string) string {
-	out, err := exec.CommandContext(ctx, "lsof", "-Fn", "-p", pid).Output()
-	if err != nil {
-		return ""
-	}
-	return parseTranscriptSessionID(string(out))
 }
 
 // parseTranscriptSessionID scans lsof -Fn output for a .jsonl path under

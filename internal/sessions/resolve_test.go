@@ -111,7 +111,7 @@ func TestEncodeProjectPath(t *testing.T) {
 	}
 }
 
-func TestTranscriptSessionsInDir(t *testing.T) {
+func TestListRecentTranscripts(t *testing.T) {
 	dir := t.TempDir()
 
 	mustTouch := func(name string, mod time.Time) {
@@ -127,16 +127,16 @@ func TestTranscriptSessionsInDir(t *testing.T) {
 	mustTouch("older.jsonl", now.Add(-30*time.Minute))
 	mustTouch("newer.jsonl", now.Add(-1*time.Minute))
 
-	got := transcriptSessionsInDir(dir, time.Hour)
+	got := listRecentTranscripts(dir, now.Add(-time.Hour))
 	if len(got) != 2 {
 		t.Fatalf("got %d entries, want 2", len(got))
 	}
-	if got[0].sessionID != "newer" {
-		t.Fatalf("newest first: got %q", got[0].sessionID)
+	if sessionIDFromTranscriptPath(got[0]) != "newer" {
+		t.Fatalf("newest first: got %q", got[0])
 	}
 }
 
-func TestTranscriptSessionFromCwd(t *testing.T) {
+func TestResolveFallbackCandidates_transcript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	projects := filepath.Join(home, ".claude", "projects")
@@ -149,24 +149,30 @@ func TestTranscriptSessionFromCwd(t *testing.T) {
 	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := transcriptSessionFromCwd(cwd); got != "sess-abc" {
-		t.Fatalf("got %q", got)
+	now := time.Now()
+	cands := resolveFallbackCandidates("53134", cwd, now)
+	if len(cands) != 1 || cands[0].SessionID != "sess-abc" {
+		t.Fatalf("got %#v", cands)
 	}
 }
 
-func TestEventLogCandidatesForCwd(t *testing.T) {
+func TestRecentSessionStartsFromEvents(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
 	lines := []string{
-		`{"schema":2,"tool":"claude-code","session_id":"old","raw_event":{"cwd":"/a"}}`,
-		`{"schema":2,"tool":"claude-code","session_id":"new","raw_event":{"cwd":"/a"}}`,
-		`{"schema":2,"tool":"cursor","session_id":"c1","raw_event":{"cwd":"/a"}}`,
+		`{"schema":2,"tool":"claude-code","hook_event":"SessionStart","session_id":"old","captured_at":"2026-07-01T10:00:00Z","raw_event":{"cwd":"/a"}}`,
+		`{"schema":2,"tool":"claude-code","hook_event":"SessionStart","session_id":"new","captured_at":"2026-07-01T12:00:00Z","raw_event":{"cwd":"/a"}}`,
+		`{"schema":2,"tool":"cursor","hook_event":"sessionStart","session_id":"c1","captured_at":"2026-07-01T12:00:00Z","raw_event":{"cwd":"/a"}}`,
 	}
 	if err := os.WriteFile(path, []byte(stringsJoin(lines)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got := eventLogCandidatesForCwd("/a", path, time.Hour)
-	want := []ResolveCandidate{{SessionID: "new", Cwd: "/a"}, {SessionID: "old", Cwd: "/a"}}
+	now, _ := time.Parse(time.RFC3339, "2026-07-01T13:00:00Z")
+	got, err := recentSessionStartsFromEvents(path, "/a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"new", "old"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %#v want %#v", got, want)
 	}
