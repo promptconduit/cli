@@ -263,17 +263,19 @@ func detectTool(event map[string]interface{}) string {
 		return tool
 	}
 
+	// Cursor: has cursor_version field. Must precede the hook_event_name check —
+	// Cursor hooks also carry hook_event_name, so checking that first would
+	// mislabel every Cursor event as claude-code.
+	if _, ok := event["cursor_version"]; ok {
+		return "cursor"
+	}
+
 	// Claude Code: has hook_event_name or hook_event field
 	if _, ok := event["hook_event_name"]; ok {
 		return "claude-code"
 	}
 	if _, ok := event["hook_event"]; ok {
 		return "claude-code"
-	}
-
-	// Cursor: has cursor_version field
-	if _, ok := event["cursor_version"]; ok {
-		return "cursor"
 	}
 
 	// Gemini: has gemini_session field
