@@ -62,18 +62,3 @@ release:
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
-
-brews:
-  - name: promptconduit
-    repository:
-      owner: promptconduit
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: "https://promptconduit.dev"
-    description: "CLI for capturing events from AI coding assistants"
-    license: "MIT"
-    install: |
-      bin.install "promptconduit"
-    test: |
-      system "#{bin}/promptconduit", "version"
