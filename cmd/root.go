@@ -100,13 +100,12 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 	// If a previous run upgraded us, the cache's recorded CurrentVersion no
 	// longer matches the running binary — surface a one-time success notice
 	// and rewrite the cache so we don't show it again. Gated on a real
-	// forward step so a downgrade (e.g. `brew install --version` older
-	// build) doesn't print a misleading "upgraded" line.
+	// forward step so a downgrade doesn't print a misleading "upgraded" line.
 	if cached, _ := updater.LoadCache(cachePath); cached != nil && cached.DetectUpgrade(Version) {
 		notifyUpgraded(cmd, cached.CurrentVersion, Version, cached.ReleaseURL)
 		cached.CurrentVersion = Version
 		_ = updater.SaveCache(cachePath, cached)
-		// The binary just changed (self-replace or brew), so the embedded
+		// The binary just changed via self-replace, so the embedded
 		// extension .vsix may be newer than what's installed in the editor.
 		// This is the one moment we know they can differ — reconcile now,
 		// unless the user opted out of auto-update.

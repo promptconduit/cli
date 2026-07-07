@@ -69,7 +69,7 @@ func TestShouldCheck(t *testing.T) {
 		t.Error("expected ShouldCheck=true with stale cache")
 	}
 
-	// Version mismatch invalidates the cache (e.g. user did brew upgrade).
+	// Version mismatch invalidates the cache (e.g. user upgraded manually).
 	if err := SaveCache(path, fresh); err != nil {
 		t.Fatalf("SaveCache: %v", err)
 	}
