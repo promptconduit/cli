@@ -16,7 +16,7 @@ promptconduit --version
 <!-- e.g. Claude Code 1.2.3, Cursor 0.42 -->
 
 **Installation method**
-<!-- curl installer / homebrew / from source -->
+<!-- curl installer / from source -->
 
 ---
 
