@@ -92,7 +92,7 @@ func (r *CheckResult) IsNewer() bool {
 // DetectUpgrade reports whether `runningVersion` is strictly newer than
 // the cached CurrentVersion. Used to fire the one-time "upgraded vX → vY"
 // notice on the first invocation after a self-replace; gated on actual
-// forward progress so a downgrade (e.g. `brew install --version vOLD`)
+// forward progress so a downgrade doesn't print a misleading notice.
 // is silent rather than mislabelled as an upgrade.
 func (r *CheckResult) DetectUpgrade(runningVersion string) bool {
 	if r == nil || r.CurrentVersion == "" || r.CurrentVersion == runningVersion {
@@ -137,7 +137,7 @@ func SaveCache(cachePath string, r *CheckResult) error {
 
 // ShouldCheck returns true when the cache is missing or older than ttl,
 // or when the cached current_version no longer matches (e.g. user upgraded
-// out-of-band via Homebrew).
+// out-of-band).
 func ShouldCheck(cachePath, currentVersion string, ttl time.Duration) bool {
 	r, err := LoadCache(cachePath)
 	if err != nil || r == nil {
@@ -538,6 +538,14 @@ func compareSemver(a, b string) (int, bool) {
 		}
 	}
 	return 0, true
+}
+
+// IsNewerVersion reports whether semver a is strictly newer than b. Inputs that
+// don't parse yield false (treated as "not newer") so callers stay conservative
+// and never act on an ambiguous comparison.
+func IsNewerVersion(a, b string) bool {
+	cmp, ok := compareSemver(a, b)
+	return ok && cmp > 0
 }
 
 func parseSemver(v string) ([3]int, bool) {

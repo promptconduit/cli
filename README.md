@@ -13,7 +13,7 @@ Turn your existing AI coding transcripts into reusable Claude Code skills — **
 
 ```bash
 # Install
-brew tap promptconduit/tap && brew install promptconduit
+curl -fsSL https://promptconduit.dev/install | bash
 
 # Generate skills from your transcripts (uses your Claude Code subscription)
 promptconduit skills generate --local
@@ -59,14 +59,7 @@ The CLI automatically extracts and uploads attachments from prompts:
 
 ## Installation
 
-### Homebrew (Recommended)
-
-```bash
-brew tap promptconduit/tap
-brew install promptconduit
-```
-
-### Quick Install Script
+### Quick Install
 
 ```bash
 curl -fsSL https://promptconduit.dev/install | bash
@@ -109,9 +102,7 @@ PROMPTCONDUIT_AUTO_UPDATE=0 promptconduit ...
 ```
 
 The check uses the unauthenticated GitHub API (60 requests/hour/IP) and is
-cached at `~/.config/promptconduit/update.json`. Homebrew users get a notice
-pointing them to `brew upgrade promptconduit` instead — the CLI never tries
-to overwrite a binary it cannot write to.
+cached at `~/.config/promptconduit/update.json`.
 
 ## Platform Quick Start
 
