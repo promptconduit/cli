@@ -30,11 +30,13 @@ Supported tools:
   - Claude Code
   - Cursor
   - Gemini CLI
+  - Codex
+  - GitHub Copilot
 
 Get started:
-  1. Set your API key: promptconduit config set --api-key="your-key"
-  2. Install hooks: promptconduit install claude-code
-  3. Use your AI assistant as normal - events are captured automatically`,
+  1. Install: curl -fsSL https://promptconduit.dev/install | bash
+  2. Sign in:  promptconduit login
+  3. Set up:   promptconduit init`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		maybeBackgroundUpdateCheck(cmd)
 	},
@@ -47,6 +49,8 @@ func Execute() error {
 func init() {
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(uninstallCmd)
+	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(testCmd)
 	rootCmd.AddCommand(hookCmd)

@@ -55,6 +55,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	checkClaudeCodeInstallation()
 	checkCursorInstallation()
 	checkGeminiInstallation()
+	checkCodexInstallation()
+	checkCopilotInstallation()
 
 	return nil
 }
@@ -206,6 +208,77 @@ func checkGeminiInstallation() {
 		fmt.Printf("  Gemini CLI:  Installed (%d hooks)\n", count)
 	} else {
 		fmt.Println("  Gemini CLI:  Not installed")
+	}
+}
+
+func checkCodexInstallation() {
+	homeDir, _ := os.UserHomeDir()
+	settingsPath := filepath.Join(homeDir, ".codex", "hooks.json")
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		fmt.Println("  Codex:       Not installed (no hooks file)")
+		return
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		fmt.Println("  Codex:       Error reading hooks")
+		return
+	}
+
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		fmt.Println("  Codex:       Not installed (no hooks)")
+		return
+	}
+
+	count := 0
+	for _, hookConfig := range hooks {
+		if containsPromptConduitString(hookConfig) {
+			count++
+		}
+	}
+
+	if count > 0 {
+		fmt.Printf("  Codex:       Installed (%d hooks)\n", count)
+	} else {
+		fmt.Println("  Codex:       Not installed")
+	}
+}
+
+func checkCopilotInstallation() {
+	homeDir, _ := os.UserHomeDir()
+	hooksDir := filepath.Join(homeDir, ".copilot", "hooks")
+
+	entries, err := os.ReadDir(hooksDir)
+	if err != nil {
+		fmt.Println("  Copilot:     Not installed (no hooks directory)")
+		return
+	}
+
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(hooksDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var hook map[string]interface{}
+		if err := json.Unmarshal(data, &hook); err != nil {
+			continue
+		}
+		if containsPromptConduitString(hook) {
+			count++
+		}
+	}
+
+	if count > 0 {
+		fmt.Printf("  Copilot:     Installed (%d hooks)\n", count)
+	} else {
+		fmt.Println("  Copilot:     Not installed")
 	}
 }
 

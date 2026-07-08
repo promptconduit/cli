@@ -149,6 +149,28 @@ configure_api_key() {
     fi
 }
 
+# Run the init wizard after install when in an interactive terminal
+run_init_wizard() {
+    local api_key="$1"
+
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        return
+    fi
+
+    if ! command -v promptconduit &> /dev/null; then
+        return
+    fi
+
+    info "Starting setup wizard..."
+    echo ""
+
+    if [ -n "$api_key" ]; then
+        promptconduit init --yes
+    else
+        promptconduit init
+    fi
+}
+
 main() {
     local api_key="${1:-}"
     local version="${PROMPTCONDUIT_VERSION:-}"
@@ -183,13 +205,24 @@ main() {
     # Configure API key if provided
     configure_api_key "$api_key"
 
+    # Run init wizard if interactive terminal and CLI is available
+    run_init_wizard "$api_key"
+
     echo ""
     info "Installation complete!"
     echo ""
-    echo "  Next steps:"
-    echo "    1. Set your API key: promptconduit config set --api-key=\"your-key\""
-    echo "    2. Install hooks:    promptconduit install claude-code"
-    echo "    3. Check status:     promptconduit status"
+
+    if [ -n "$api_key" ]; then
+        echo "  Next steps:"
+        echo "    1. Restart your AI tools to activate hooks"
+        echo "    2. Check status:     promptconduit status"
+        echo "    3. Test connection:  promptconduit test"
+    else
+        echo "  Next steps:"
+        echo "    1. Run setup wizard: promptconduit init"
+        echo "       (or local-only:  promptconduit init --local-only)"
+        echo "    2. Check status:     promptconduit status"
+    fi
     echo ""
 }
 
