@@ -110,48 +110,38 @@ cached at `~/.config/promptconduit/update.json`.
 
 ![PromptConduit dashboard — sessions, skills, and recent activity](docs/screenshot-dashboard.png)
 
-### 1. Get your API key
-
-Sign up at [promptconduit.dev](https://promptconduit.dev) and create an API key.
-
-### 2. Configure your API key
+### 1. Set up
 
 ```bash
-promptconduit config set --api-key="your-api-key"
+promptconduit init
 ```
 
-This saves your key to `~/.config/promptconduit/config.json`.
+The interactive wizard signs you in through your browser, detects your installed
+AI tools, and installs their hooks — the whole setup in one command. Sign up at
+[promptconduit.dev](https://promptconduit.dev) first if you don't have an account.
 
-### 3. Install hooks for your tool
-
-```bash
-# For Claude Code
-promptconduit install claude-code
-
-# For Cursor
-promptconduit install cursor
-
-# For Gemini CLI
-promptconduit install gemini-cli
-
-# For OpenAI Codex CLI
-promptconduit install codex
-
-# For GitHub Copilot CLI
-promptconduit install copilot
-```
-
-### 4. Verify installation
+### 2. Verify
 
 ```bash
 promptconduit status
 ```
 
-### 5. Test API connectivity
+<details>
+<summary>Prefer to set it up manually?</summary>
 
 ```bash
-promptconduit test
+promptconduit login                  # browser sign-in; saves your key to config
+promptconduit install claude-code    # or: cursor | gemini-cli | codex | copilot
+promptconduit status
 ```
+
+For CI or scripted setups, set the key directly instead of the browser flow:
+
+```bash
+promptconduit config set --api-key="your-api-key"   # ~/.config/promptconduit/config.json
+```
+
+</details>
 
 ## Commands
 
