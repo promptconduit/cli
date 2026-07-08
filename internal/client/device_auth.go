@@ -158,7 +158,8 @@ func postJSONWithStatus(url string, payload interface{}, version, bearerToken st
 	return body, resp.StatusCode, nil
 }
 
-// SaveAPIKey persists the API key to config and disables local-only mode.
+// SaveAPIKey persists the API key to the active config (environment-aware) and
+// disables local-only mode.
 func SaveAPIKey(apiKey string) error {
 	fc, err := LoadFileConfig()
 	if err != nil {
@@ -167,7 +168,21 @@ func SaveAPIKey(apiKey string) error {
 	if fc == nil {
 		fc = &FileConfig{}
 	}
-	fc.APIKey = apiKey
+
+	if fc.CurrentEnv != "" {
+		if fc.Environments == nil {
+			fc.Environments = make(map[string]*Config)
+		}
+		cfg := fc.Environments[fc.CurrentEnv]
+		if cfg == nil {
+			cfg = &Config{}
+			fc.Environments[fc.CurrentEnv] = cfg
+		}
+		cfg.APIKey = apiKey
+		cfg.LocalOnly = false
+	} else {
+		fc.APIKey = apiKey
+	}
 	fc.LocalOnly = false
 	return SaveFileConfig(fc)
 }

@@ -69,6 +69,30 @@ func TestPollDeviceToken_Success(t *testing.T) {
 	}
 }
 
+func TestSaveAPIKey_EnvironmentAware(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	fc := &FileConfig{
+		CurrentEnv: "prod",
+		Environments: map[string]*Config{
+			"prod": {APIURL: "https://api.example.com"},
+		},
+	}
+	if err := SaveFileConfig(fc); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SaveAPIKey("sk_env_key"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := LoadConfig()
+	if cfg.APIKey != "sk_env_key" {
+		t.Fatalf("api_key = %q", cfg.APIKey)
+	}
+}
+
 func TestSaveAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

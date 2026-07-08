@@ -48,6 +48,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Step 1: Choose mode (unless flags preset it)
 	if !initLocalOnly && !initYes && outbound.IsTerminal(os.Stdin) && initAPIKey == "" {
 		cloudMode, initLocalOnly = promptInitMode(cmd)
+	} else if !initLocalOnly && !outbound.IsTerminal(os.Stdin) && initAPIKey == "" {
+		cfg := client.LoadConfig()
+		if !cfg.IsConfigured() {
+			return fmt.Errorf("non-interactive mode: pass --local-only, --api-key, or run in a terminal to sign in")
+		}
 	}
 
 	if initLocalOnly {
@@ -74,6 +79,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			cfg := client.LoadConfig()
 			if !cfg.IsConfigured() {
+				if !outbound.IsTerminal(os.Stdin) {
+					return fmt.Errorf("non-interactive mode: pass --api-key or run promptconduit login in a terminal first")
+				}
 				_, _ = fmt.Fprintln(out, "No API key found — starting login...")
 				_, _ = fmt.Fprintln(out)
 				if _, err := performLogin(cmd, "", true); err != nil {
