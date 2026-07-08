@@ -1,0 +1,133 @@
+{
+  "schema": 2,
+  "event_id": "0192f7a0-1c2d-7e3f-8a4b-5c6d7e8f9a0b",
+  "session_id": "sess-abc123",
+  "prompt_id": "prompt-xyz789",
+  "tool": "claude-code",
+  "hook_event": "Stop",
+  "captured_at": "2026-07-08T12:00:00Z",
+  "cli_version": "0.13.1",
+  "raw_event": {
+    "hook_event_name": "Stop",
+    "session_id": "sess-abc123",
+    "cwd": "/Users/dev/project"
+  },
+  "enrichments": {
+    "env": {
+      "host": "mac.local",
+      "os": "darwin",
+      "os_version": "26.3",
+      "arch": "arm64",
+      "cwd": "/Users/dev/project"
+    },
+    "trace": {
+      "trace_id": "0af7651916cd43dd8448eb211c80319c",
+      "span_id": "b7ad6b7169203331",
+      "parent_span_id": "0020000000000001"
+    },
+    "vcs": {
+      "type": "github",
+      "repo": "promptconduit/cli",
+      "repo_url": "https://github.com/promptconduit/cli",
+      "branch": "main",
+      "branch_url": "https://github.com/promptconduit/cli/tree/main",
+      "default_branch": "main",
+      "pr": {
+        "number": 42,
+        "url": "https://github.com/promptconduit/cli/pull/42",
+        "title": "fix: something",
+        "state": "open"
+      },
+      "commit": {
+        "hash": "d2065769abcdef",
+        "message": "fix: something",
+        "author": "dev"
+      },
+      "dirty": true,
+      "staged": 1,
+      "unstaged": 2,
+      "untracked": 0,
+      "ahead": 1,
+      "behind": 0,
+      "remote_url": "git@github.com:promptconduit/cli.git",
+      "repo_path": "/Users/dev/project",
+      "working_directory": "/Users/dev/project",
+      "detached_head": false,
+      "worktree": {
+        "is_worktree": true,
+        "path": "/Users/dev/promptconduit-worktrees/feat-x"
+      }
+    },
+    "prompt": {
+      "count": 1,
+      "chars": 128,
+      "words": 20,
+      "has_attachments": false,
+      "is_interrupt": false
+    },
+    "cost": {
+      "requests": [
+        {
+          "request_id": "req-1",
+          "conversation_id": "conv-1",
+          "model": "claude-opus-4-8",
+          "model_priced": true,
+          "source": "transcript",
+          "ts": "2026-07-08T12:00:00Z",
+          "tokens": { "input": 100, "output": 200, "cache_read": 50, "cache_write": 10 },
+          "usd": { "input": 0.01, "output": 0.02, "cache_read": 0.001, "cache_write": 0.0005, "total": 0.0315, "currency": "USD" },
+          "tools": { "total": 3, "by_name": { "Read": 2, "Edit": 1 } },
+          "signals": { "interrupted": false }
+        }
+      ],
+      "totals": {
+        "usd": 0.0315,
+        "currency": "USD",
+        "tokens": { "input": 100, "output": 200, "cache_read": 50, "cache_write": 10 }
+      }
+    },
+    "tools": {
+      "total": 3,
+      "failed": 0,
+      "calls": [
+        { "name": "Read", "ok": true, "duration_ms": 12 },
+        { "name": "Edit", "ok": true, "duration_ms": 8 },
+        { "name": "mcp__github__search", "ok": true, "duration_ms": 40, "mcp_server": "github" }
+      ]
+    },
+    "diff": {
+      "files_changed": 3,
+      "insertions": 42,
+      "deletions": 5
+    },
+    "subagent": {
+      "agent_id": "agent-1",
+      "agent_type": "Explore",
+      "phase": "stop",
+      "concurrent": 2,
+      "duration_ms": 5000,
+      "requests": 4,
+      "model": "claude-sonnet-5",
+      "tokens": { "input": 1000, "output": 2000, "cache_read": 500, "cache_write": 100 },
+      "usd": { "input": 0.1, "output": 0.2, "cache_read": 0.01, "cache_write": 0.005, "total": 0.315, "currency": "USD" }
+    },
+    "turn": {
+      "duration_ms": 12000,
+      "prompt_id": "prompt-xyz789"
+    },
+    "permission": {
+      "decision": "requested",
+      "tool_name": "Bash",
+      "mcp_server": ""
+    }
+  },
+  "attachments": [
+    {
+      "attachment_id": "att-1",
+      "filename": "screenshot.png",
+      "content_type": "image/png",
+      "size_bytes": 20480,
+      "type": "image"
+    }
+  ]
+}
