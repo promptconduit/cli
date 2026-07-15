@@ -60,6 +60,49 @@ func TestResolvePrice(t *testing.T) {
 	}
 }
 
+// TestResolvePrice_CurrentClaudeFamily pins every model in the current Claude
+// lineup to its list input rate. ResolvePrice's fallbacks can't rescue a model
+// that's simply absent from the table — "claude-sonnet-5" trims to
+// "claude-sonnet" then "claude", neither of which is a key — so a new model that
+// misses the table resolves ok=false and is silently charged $0 with
+// ModelPriced=false (cli#123). This table is the guard: adding a model to the
+// lineup without adding its rates fails here.
+func TestResolvePrice_CurrentClaudeFamily(t *testing.T) {
+	tbl := mustTable(t)
+
+	cases := []struct {
+		model     string
+		wantInput float64 // USD per input token
+	}{
+		{"claude-sonnet-5", 0.000003},
+		{"claude-fable-5", 0.00001},
+		{"claude-mythos-5", 0.00001},
+		{"claude-opus-4-8", 0.000005},
+		{"claude-sonnet-4-6", 0.000003},
+		{"claude-haiku-4-5", 0.000001},
+	}
+	for _, tc := range cases {
+		mp, ok := tbl.ResolvePrice(tc.model)
+		if !ok {
+			t.Errorf("ResolvePrice(%q) = not priced; every current Claude model must resolve", tc.model)
+			continue
+		}
+		if mp.Input != tc.wantInput {
+			t.Errorf("ResolvePrice(%q).Input = %v, want %v", tc.model, mp.Input, tc.wantInput)
+		}
+		// A dated variant from a real hook payload must reach the same rates.
+		dated := tc.model + "-20260101"
+		datedMP, ok := tbl.ResolvePrice(dated)
+		if !ok {
+			t.Errorf("ResolvePrice(%q) = not priced; dated variant should trim to the base model", dated)
+			continue
+		}
+		if datedMP.Input != tc.wantInput {
+			t.Errorf("ResolvePrice(%q).Input = %v, want %v", dated, datedMP.Input, tc.wantInput)
+		}
+	}
+}
+
 // TestCostForUsage_RealBlock checks the exact dollar math against a real
 // Claude Code usage block captured from a live transcript:
 //
