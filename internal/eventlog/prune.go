@@ -281,12 +281,19 @@ func pruneFileFrom(path string, ceiling int64, cutoff time.Time, tsOf timestampF
 	}
 	tmpName := tmp.Name()
 	w := bufio.NewWriter(tmp)
+	// Record + terminator go out as one write, mirroring appendLine (issue
+	// #125). Nothing else holds this temp file's descriptor, so unlike the
+	// live append path this was never a corruption vector — it is kept
+	// single-write so the invariant "a line and its \n are never emitted
+	// separately" holds everywhere a JSONL record is produced.
+	line := make([]byte, 0, 4096)
 	for i, rec := range records {
 		if !keep[i] {
 			continue
 		}
-		_, _ = w.Write(rec.data)
-		_, _ = w.Write([]byte{'\n'})
+		line = append(line[:0], rec.data...)
+		line = append(line, '\n')
+		_, _ = w.Write(line)
 	}
 	// Carry over any bytes appended after startSize by a concurrent writer, so no
 	// in-flight capture is dropped by the rewrite.
