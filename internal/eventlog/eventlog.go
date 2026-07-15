@@ -139,8 +139,23 @@ func appendLine(path string, line []byte, rotateAt int64) {
 	}
 	defer func() { _ = f.Close() }()
 
-	_, _ = f.Write(line)
-	_, _ = f.Write([]byte{'\n'})
+	// Emit the line and its terminator in ONE write. O_APPEND makes an
+	// individual write atomic with respect to the file offset, but that
+	// guarantee is per-write: with a separate Write(line) and Write("\n"),
+	// another PROCESS appending concurrently interleaves between the two —
+	// A.Write(line), B.Write(line), A.Write('\n'), B.Write('\n') — leaving
+	// `A_lineB_line\n\n`: one line holding two concatenated envelopes followed
+	// by an empty line. writeMu only serializes writers inside this process;
+	// each hook invocation is its own process, so the single write is what
+	// actually keeps the file parseable. See issue #125.
+	//
+	// Build a fresh buffer rather than append(line, '\n'): line's backing array
+	// belongs to the caller and may have spare capacity, so appending in place
+	// could scribble past the caller's slice.
+	buf := make([]byte, 0, len(line)+1)
+	buf = append(buf, line...)
+	buf = append(buf, '\n')
+	_, _ = f.Write(buf)
 }
 
 // rotateIfNeeded renames path -> path+".1" once it reaches rotateAt bytes. Any
