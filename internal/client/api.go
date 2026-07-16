@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -31,10 +30,13 @@ const eventsEndpoint = "/v1/events/raw"
 // outbound.ndjson. Best-effort and gated by config; never blocks the send.
 func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, sendErr error) {
 	var probe struct {
+		EventID   string `json:"event_id"`
 		HookEvent string `json:"hook_event"`
 	}
+	// Best-effort: a payload we couldn't parse still gets its outcome recorded,
+	// just without the identifiers.
 	_ = json.Unmarshal(envJSON, &probe)
-	eventlog.RecordSendOutcome(probe.HookEvent, status, latency.Milliseconds(), sendErr)
+	eventlog.RecordSendOutcome(probe.EventID, probe.HookEvent, status, latency.Milliseconds(), sendErr)
 }
 
 // APIResponse represents a response from the API
@@ -195,8 +197,18 @@ func (c *Client) SendEnvelopeWithAttachmentsAsync(env *envelope.RawEventEnvelope
 		return fmt.Errorf("failed to serialize envelope with attachments: %w", err)
 	}
 
-	// For payloads with attachments (typically images), always use blocking mode
-	// since subprocess stdin has ~64KB limit and images are often larger
+	// Attachments are sent in blocking mode because the detached sender speaks
+	// exactly one dialect: `hook --send-event` reads stdin and POSTs it verbatim
+	// as a JSON envelope (sendEnvelopeFromStdin). This payload is the other
+	// shape — envelope + binary blobs, which has to go out as multipart — and
+	// the child has no way to tell the two apart from the bytes alone.
+	//
+	// The previous rationale here ("subprocess stdin has ~64KB limit") was
+	// wrong: there is no such limit. What there was is a 64KB pipe buffer and a
+	// parent that exited before finishing the write, which truncated large
+	// sends on every path, attachments or not — see #124 and
+	// stageEnvelopeForChild. That's fixed, so going async here is now merely a
+	// matter of teaching the child a second dialect rather than a hard blocker.
 	return c.sendEnvelopeWithAttachmentsBlocking(jsonData)
 }
 
@@ -220,34 +232,87 @@ func (c *Client) SendEnvelopeWithAttachmentsDirect(jsonData []byte) error {
 	return c.sendEnvelopeWithAttachmentsBlocking(jsonData)
 }
 
-// SendEnvelopeAsync sends an envelope asynchronously without blocking
+// SendEnvelopeAsync sends an envelope asynchronously without blocking.
+//
+// Unix and Windows share one implementation. They used to diverge — Windows
+// spawned a `go cmd.Wait()` the unix path didn't — but that difference was
+// illusory (see startDetachedSender), and the only thing that genuinely differs
+// between the platforms is how a temp file is made to disappear on its own
+// (createEphemeralTemp).
 func (c *Client) SendEnvelopeAsync(env *envelope.RawEventEnvelope) error {
 	envJSON, err := env.ToJSON()
 	if err != nil {
 		return fmt.Errorf("failed to serialize envelope: %w", err)
 	}
 
-	if runtime.GOOS == "windows" {
-		return c.sendAsyncWindows(envJSON)
-	}
-
-	return c.sendAsyncUnix(envJSON)
+	return c.startDetachedSender(envJSON)
 }
 
-// sendAsyncUnix uses fork to send envelope without blocking. The subprocess
-// inherits a file descriptor pointing at the persistent log file as stderr,
-// so any crash or panic — which the in-process logger can't catch — still
-// leaves a trace on disk. Previously stderr was discarded, which made
+// stageEnvelopeForChild materializes envJSON into a temp file that the OS has
+// already been told to discard, and returns it rewound and ready to be handed
+// to a child as stdin.
+//
+// Passing the child an *os.File is load-bearing, not a style choice. When
+// cmd.Stdin is an io.Reader that is NOT an *os.File, os/exec quietly creates an
+// OS pipe and copies the reader into it from a goroutine IN THIS PROCESS — and
+// cmd.Wait() is the only thing that joins that goroutine. The async sender
+// deliberately never waits: it releases the child and the hook exits
+// immediately. The copier was therefore killed mid-write and the child was left
+// with just the ~64KB the pipe buffer had absorbed, so it POSTed truncated JSON
+// and the platform answered 400 (#124). Handing over an *os.File instead makes
+// the child inherit the descriptor directly: no pipe, no goroutine, nothing
+// left to wait on, and no size ceiling.
+func stageEnvelopeForChild(envJSON []byte) (*os.File, error) {
+	f, err := createEphemeralTemp("promptconduit-envelope-")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := f.Write(envJSON); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// The child inherits the descriptor along with its offset, so rewind.
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+// startDetachedSender spawns `hook --send-event`, feeding it envJSON via an
+// inherited descriptor, and does not wait for it. Any failure to set the child
+// up falls back to sending in-process so the event is never silently lost.
+//
+// Not waiting is the point — the hook must not make the user's editor wait on a
+// network round trip — and it's also why the payload must reach the child
+// without any parent-side bookkeeping (see stageEnvelopeForChild). The Windows
+// variant of this used to spawn a `go cmd.Wait()`, which looked like it joined
+// the stdin copier but didn't: the Go runtime tears the process down when main
+// returns without joining stray goroutines, and the hook returns immediately
+// after this call. Windows truncated exactly as unix did.
+//
+// The subprocess also inherits a descriptor pointing at the persistent log file
+// as stderr, so any crash or panic — which the in-process logger can't catch —
+// still leaves a trace on disk. Previously stderr was discarded, which made
 // failed sends invisible.
-func (c *Client) sendAsyncUnix(envJSON []byte) error {
+func (c *Client) startDetachedSender(envJSON []byte) error {
 	exe, err := os.Executable()
 	if err != nil {
 		logger.Error("async send: cannot resolve executable path: %v (falling back to blocking)", err)
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
+	stdin, err := stageEnvelopeForChild(envJSON)
+	if err != nil {
+		logger.Error("async send: cannot stage envelope for subprocess: %v (falling back to blocking)", err)
+		return c.sendEnvelopeBlocking(envJSON)
+	}
+	// Close our copy once the child has been given its own (or once we've
+	// given up). The file is already unlinked, so this is the whole cleanup.
+	defer func() { _ = stdin.Close() }()
+
 	cmd := exec.Command(exe, "hook", "--send-event")
-	cmd.Stdin = bytes.NewReader(envJSON)
+	cmd.Stdin = stdin
 	cmd.Stdout = nil
 	cmd.Stderr = openLogForStderr()
 
@@ -256,32 +321,9 @@ func (c *Client) sendAsyncUnix(envJSON []byte) error {
 		return c.sendEnvelopeBlocking(envJSON)
 	}
 
-	// Process already started, ignore error
+	// Detach: the child owns the send from here, and this process is free to
+	// exit. Nothing about the payload depends on us staying alive any more.
 	_ = cmd.Process.Release()
-
-	return nil
-}
-
-// sendAsyncWindows spawns a subprocess on Windows
-func (c *Client) sendAsyncWindows(envJSON []byte) error {
-	exe, err := os.Executable()
-	if err != nil {
-		logger.Error("async send: cannot resolve executable path: %v (falling back to blocking)", err)
-		return c.sendEnvelopeBlocking(envJSON)
-	}
-
-	cmd := exec.Command(exe, "hook", "--send-event")
-	cmd.Stdin = bytes.NewReader(envJSON)
-	cmd.Stderr = openLogForStderr()
-
-	if err := cmd.Start(); err != nil {
-		logger.Error("async send: cmd.Start failed: %v (falling back to blocking)", err)
-		return c.sendEnvelopeBlocking(envJSON)
-	}
-
-	go func() {
-		_ = cmd.Wait()
-	}()
 
 	return nil
 }

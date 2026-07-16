@@ -24,7 +24,7 @@ func withTempDir(t *testing.T) string {
 func TestRecordSendOutcomeBumpsSent(t *testing.T) {
 	withTempDir(t)
 
-	RecordSendOutcome("Stop", 200, 42, nil)
+	RecordSendOutcome("evt-1", "Stop", 200, 42, nil)
 
 	st := LoadStatus()
 	if st.Sent != 1 || st.Failed != 0 || st.Dropped != 0 {
@@ -38,7 +38,7 @@ func TestRecordSendOutcomeBumpsSent(t *testing.T) {
 func TestRecordSendOutcomeFailureWritesErrorAndBumpsFailed(t *testing.T) {
 	withTempDir(t)
 
-	RecordSendOutcome("Stop", 401, 10, errors.New("API error: 401 - unauthorized"))
+	RecordSendOutcome("evt-2", "Stop", 401, 10, errors.New("API error: 401 - unauthorized"))
 
 	st := LoadStatus()
 	if st.Failed != 1 || st.Sent != 0 {
@@ -54,6 +54,25 @@ func TestRecordSendOutcomeFailureWritesErrorAndBumpsFailed(t *testing.T) {
 	}
 	if !strings.Contains(string(errLog), "send failed") || !strings.Contains(string(errLog), "401") {
 		t.Errorf("errors.log missing failure line:\n%s", errLog)
+	}
+	// The event_id is what makes the line actionable: it's the key that finds
+	// the offending envelope in events.jsonl.
+	if !strings.Contains(string(errLog), "event_id=evt-2") {
+		t.Errorf("errors.log missing event_id:\n%s", errLog)
+	}
+}
+
+func TestRecordSendOutcomeUnknownIdentifiersRenderAsDash(t *testing.T) {
+	withTempDir(t)
+
+	RecordSendOutcome("", "", 400, 5, errors.New("API error: 400 - Invalid JSON in request body"))
+
+	errLog, err := os.ReadFile(ErrorsPath())
+	if err != nil {
+		t.Fatalf("read errors.log: %v", err)
+	}
+	if !strings.Contains(string(errLog), "event=- event_id=-") {
+		t.Errorf("errors.log should render unknown identifiers as dashes:\n%s", errLog)
 	}
 }
 
@@ -116,7 +135,7 @@ func TestDisabledIsNoOp(t *testing.T) {
 	t.Cleanup(func() { SetDirForTest("") })
 
 	RecordCapture([]byte(`{"schema":2}`))
-	RecordSendOutcome("Stop", 200, 1, nil)
+	RecordSendOutcome("evt-3", "Stop", 200, 1, nil)
 	RecordDrop("parse_error", "x")
 	Errorf("should not write")
 
