@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PromptConduit — Session Graph</title>
+<!-- Rendered by the portable graph core (shared with the editor extension).
+     No --vscode-* variables defined: the panel CSS falls back to literals. -->
+<style>body{margin:0;background:#1e1e1e;color:#ccc;font-family:-apple-system,"Segoe UI",sans-serif;padding:0 1.5rem;}</style>
+</head>
+<body>
+<script>"use strict";(()=>{var Me=2;function u(e){return typeof e=="string"?e:""}function f(e,t=0){return typeof e=="number"&&Number.isFinite(e)?e:t}function k(e){return typeof e=="object"&&e!==null&&!Array.isArray(e)?e:{}}function se(e){let t=e.trim();if(!t)return null;let n;try{n=JSON.parse(t)}catch{return null}let r=k(n);if(f(r.schema,0)<Me)return null;let o=k(r.enrichments),s=k(r.raw_event),i=k(o.vcs),d=k(i.commit),a=k(i.worktree),l=k(i.pr),m=k(o.trace);return{schema:f(r.schema),eventId:u(r.event_id),sessionId:u(r.session_id),promptId:u(r.prompt_id),tool:u(r.tool),hookEvent:u(r.hook_event),capturedAt:u(r.captured_at),raw:s,vcs:{type:u(i.type)||void 0,repo:u(i.repo)||void 0,repo_url:u(i.repo_url)||void 0,branch:u(i.branch)||void 0,branch_url:u(i.branch_url)||void 0,default_branch:u(i.default_branch)||void 0,pr:Object.keys(l).length>0?{number:f(l.number)||void 0,title:u(l.title)||void 0,state:u(l.state)||void 0}:void 0,pr_url:u(l.url)||void 0,commit_hash:u(d.hash)||void 0,commit_message:u(d.message)||void 0,remote_url:u(i.remote_url)||void 0,is_worktree:a.is_worktree===!0||void 0,worktree_path:u(a.path)||void 0,dirty:i.dirty===!0||void 0,staged:f(i.staged)||void 0,unstaged:f(i.unstaged)||void 0,untracked:f(i.untracked)||void 0,ahead:f(i.ahead)||void 0,behind:f(i.behind)||void 0},trace:{trace_id:u(m.trace_id)||void 0,span_id:u(m.span_id)||void 0,parent_span_id:u(m.parent_span_id)||void 0},enrichments:o}}function Ie(e){if(!e||Object.keys(e).length===0)return;let t=k(e.tokens),n=k(e.usd);return{agent_id:u(e.agent_id)||void 0,agent_type:u(e.agent_type)||void 0,phase:u(e.phase)||void 0,concurrent:f(e.concurrent)||void 0,duration_ms:f(e.duration_ms)||void 0,requests:f(e.requests)||void 0,model:u(e.model)||void 0,tokens:Object.keys(t).length>0?{input:f(t.input),output:f(t.output),cache_read:f(t.cache_read),cache_write:f(t.cache_write)}:void 0,usd:Object.keys(n).length>0?{input:f(n.input),output:f(n.output),cache_read:f(n.cache_read),cache_write:f(n.cache_write),total:f(n.total),currency:u(n.currency)||"USD"}:void 0}}function Re(e){if(!e||Object.keys(e).length===0)return;let t=Array.isArray(e.calls)?e.calls.map(n=>{let r=k(n);return{name:u(r.name)||void 0,ok:r.ok===!0?!0:r.ok===!1?!1:void 0,duration_ms:f(r.duration_ms)||void 0,mcp_server:u(r.mcp_server)||void 0,skill:u(r.skill)||void 0,agent_type:u(r.agent_type)||void 0}}):void 0;return{total:f(e.total)||void 0,failed:f(e.failed)||void 0,calls:t}}function Ne(e){if(!(!e||Object.keys(e).length===0))return{host:u(e.host)||void 0,os:u(e.os)||void 0,os_version:u(e.os_version)||void 0,arch:u(e.arch)||void 0,cwd:u(e.cwd)||void 0}}function H(e){return Ie(k(e.enrichments.subagent))}function ie(e){return Re(k(e.enrichments.tools))}function ae(e){return Ne(k(e.enrichments.env))}function Ge(e){let t=e.replace(/[\\/]+$/,""),n=Math.max(t.lastIndexOf("/"),t.lastIndexOf("\\"));return n>=0?t.slice(n+1):t}function de(e){let t=k(e.enrichments.cost),n=Array.isArray(t.requests)?t.requests:[],r=[];for(let o of n){let s=k(o),i=k(s.tokens),d=k(s.usd),a=u(s.request_id);if(!a)continue;let l={tool:e.tool,session_id:e.sessionId||u(e.raw.session_id),conversation_id:u(s.conversation_id)||void 0,request_id:a,ts:u(s.ts)||e.capturedAt,model:u(s.model),model_priced:s.model_priced===!0,source:u(s.source),tokens:{input:f(i.input),output:f(i.output),cache_read:f(i.cache_read),cache_write:f(i.cache_write)},cost:{input:f(d.input),output:f(d.output),cache_read:f(d.cache_read),cache_write:f(d.cache_write),total:f(d.total),currency:u(d.currency)||"USD"},cwd_base:e.raw.cwd?Ge(u(e.raw.cwd)):"",tools:s.tools&&typeof s.tools=="object"?s.tools:void 0,signals:s.signals&&typeof s.signals=="object"?s.signals:void 0};l.session_id&&r.push(l)}return r}var qe=8e3,Oe=3e4,Be=2e3,Le=500,ce=100,je=60,le=32*1024,W=8*1024*1024,Fe=300;function y(e){return typeof e=="string"?e:""}function D(e){return typeof e=="number"&&Number.isFinite(e)?e:void 0}function G(e){return typeof e=="object"&&e!==null&&!Array.isArray(e)?e:{}}function z(e){if(!e)return NaN;let t=Date.parse(e);return Number.isNaN(t)?NaN:t}function Ve(e){let t=y(e.raw.conversation_id);return t||e.sessionId||y(e.raw.session_id)}function q(e){return e.vcs.is_worktree?e.vcs.worktree_path:void 0}var j=class{constructor(t={}){this.opts=t;this.convs=new Map;this.groupOrder=[];this.rawBytes=0}record(t,n){let r=Ve(t);if(!r)return;let o=this.ensure(r);if(t.eventId){if(o.seen.has(t.eventId))return;o.seen.add(t.eventId),o.seenOrder.push(t.eventId),o.seenOrder.length>qe&&o.seen.delete(o.seenOrder.shift())}switch(t.hookEvent){case"UserPromptSubmit":this.onPrompt(o,t);break;case"PostToolUse":case"PostToolBatch":case"PostToolUseFailure":this.onTools(o,t);break;case"SubagentStart":this.onSubagentStart(o,t);break;case"SubagentStop":this.onSubagentStop(o,t);break;case"Stop":case"stop":case"StopFailure":this.onStop(o,t,n);break;case"PermissionRequest":case"PermissionDenied":this.onPermission(o,t);break;default:break}}groupsFor(t){let n=this.convs.get(t);if(!n)return[];let r=[];for(let o of n.order){let s=n.byId.get(o);s&&r.push(s)}return r}droppedFor(t){return this.convs.get(t)?.dropped??0}ensure(t){let n=this.convs.get(t);return n||(n={key:t,order:[],byId:new Map,seen:new Set,seenOrder:[],dropped:0},this.convs.set(t,n)),n}pidOf(t){if(t.promptId)return t.promptId;if(t.hookEvent==="Stop"||t.hookEvent==="stop"||t.hookEvent==="StopFailure"){let n=y(G(t.enrichments.turn).prompt_id);if(n)return n}}newGroup(t,n){return{id:t,kind:n,requests:[],toolCalls:[],subagents:[],permissions:[],rawEvents:[],rev:0}}addGroup(t,n){for(t.byId.set(n.id,n),t.order.push(n.id),this.groupOrder.push(n);t.order.length>Fe;){let r=t.order.shift(),o=t.byId.get(r);if(t.byId.delete(r),t.dropped+=1,o){for(let i of o.rawEvents)i.json!==void 0&&(this.rawBytes-=i.json.length,i.json=void 0,i.evicted=!0);let s=this.groupOrder.indexOf(o);s>=0&&this.groupOrder.splice(s,1)}t.openId===r&&(t.openId=void 0),t.lastClosedId===r&&(t.lastClosedId=void 0)}return n}closeGroup(t,n){t.openId===n.id&&(t.openId=void 0),t.lastClosedId=n.id}target(t,n){let r=this.pidOf(n);if(r){let s=t.byId.get(r);if(s)return s}if(t.openId){let s=t.byId.get(t.openId);if(s)return s}let o=t.lastClosedId?t.byId.get(t.lastClosedId):void 0;return o&&this.withinTrail(n.capturedAt,o.endedAt)?o:this.ensurePreamble(t)}withinTrail(t,n){let r=z(t),o=z(n);return Number.isNaN(r)||Number.isNaN(o)?!0:r-o<Oe}ensurePreamble(t){let n="pre:"+t.key,r=t.byId.get(n);return r||this.addGroup(t,this.newGroup(n,"preamble"))}onPrompt(t,n){if(t.openId){let m=t.byId.get(t.openId);m?(m.endedAt=n.capturedAt,G(n.enrichments.prompt).is_interrupt===!0&&(m.interrupted=!0),m.rev+=1,this.closeGroup(t,m)):t.openId=void 0}let o=this.pidOf(n)??"t:"+n.eventId,s=t.byId.get(o);s||(s=this.addGroup(t,this.newGroup(o,"prompt")));let i=y(n.raw.prompt);i&&(s.promptText=i.slice(0,Be));let d=y(n.raw.permission_mode);d&&(s.permissionMode=d);let a=G(n.enrichments.prompt);Object.keys(a).length>0&&(s.promptStats={chars:D(a.chars),words:D(a.words),hasAttachments:a.has_attachments===!0||void 0}),s.startedAt=n.capturedAt;let l=q(n);l&&(s.worktreePath=l),t.openId=s.id,s.rev+=1,this.attachRaw(s,n)}onTools(t,n){let r=this.target(t,n),o=q(n);o&&(r.worktreePath=o);let s=ie(n)?.calls??[];for(let i of s){if(r.toolCalls.length>=Le){r.droppedToolCalls=(r.droppedToolCalls??0)+1;continue}r.toolCalls.push({name:i.name??"",ok:i.ok??n.hookEvent!=="PostToolUseFailure",durationMs:i.duration_ms,mcpServer:i.mcp_server,skill:i.skill,agentType:i.agent_type})}r.rev+=1,this.attachRaw(r,n)}onSubagentStart(t,n){let r=this.target(t,n),o=H(n),s=o?.agent_id||y(n.raw.agent_id);if(s){let i=r.subagents.find(d=>d.agentId===s);if(!i&&r.subagents.length<ce&&(i={agentId:s,agentType:""},r.subagents.push(i)),i){i.agentType=o?.agent_type||y(n.raw.agent_type)||i.agentType,i.startedAt=n.capturedAt,o?.concurrent!==void 0&&(i.concurrent=o.concurrent);let d=q(n);d&&(i.worktreePath=d)}}r.rev+=1,this.attachRaw(r,n)}onSubagentStop(t,n){let r=this.target(t,n),o=H(n),s=o?.agent_id||y(n.raw.agent_id),i=[r];if(t.openId){let m=t.byId.get(t.openId);m&&!i.includes(m)&&i.push(m)}for(let m of t.order.slice(-3).reverse()){let g=t.byId.get(m);g&&!i.includes(g)&&i.push(g)}let d=r,a;if(s)for(let m of i){let g=m.subagents.find(v=>v.agentId===s&&v.endedAt===void 0)??m.subagents.find(v=>v.agentId===s);if(g){d=m,a=g;break}}if(!a){a={agentId:s||"",agentType:"",orphanStop:!0};let m=z(n.capturedAt);!Number.isNaN(m)&&o?.duration_ms!==void 0&&(a.startedAt=new Date(m-o.duration_ms).toISOString()),d.subagents.length<ce&&d.subagents.push(a)}a.agentType=o?.agent_type||y(n.raw.agent_type)||a.agentType,o?.duration_ms!==void 0&&(a.durationMs=o.duration_ms),o?.requests!==void 0&&(a.requests=o.requests),o?.model&&(a.model=o.model),o?.tokens&&(a.tokens={input:o.tokens.input??0,output:o.tokens.output??0,cache_read:o.tokens.cache_read??0,cache_write:o.tokens.cache_write??0}),o?.usd?.total!==void 0&&(a.usdTotal=o.usd.total),a.endedAt=n.capturedAt;let l=q(n);l&&(a.worktreePath=l),d.rev+=1,this.attachRaw(d,n)}onStop(t,n,r){let o=this.pidOf(n),s=o?t.byId.get(o):void 0;!s&&t.openId&&(s=t.byId.get(t.openId)),s||(s=this.addGroup(t,this.newGroup("r:"+n.eventId,"uncaptured")));for(let a of r)a.request_id&&s.requests.some(l=>l.request_id===a.request_id)||s.requests.push(a);let i=D(G(n.enrichments.turn).duration_ms);i!==void 0&&(s.turnDurationMs=i),n.hookEvent==="StopFailure"&&(s.stopFailed=!0);let d=q(n);d&&(s.worktreePath=d),s.endedAt=n.capturedAt,this.closeGroup(t,s),s.rev+=1,this.attachRaw(s,n)}onPermission(t,n){let r=this.target(t,n),o=G(n.enrichments.permission);r.permissions.push({decision:y(o.decision)||(n.hookEvent==="PermissionDenied"?"denied":"requested"),toolName:y(o.tool_name)||y(n.raw.tool_name)||void 0,mcpServer:y(o.mcp_server)||void 0}),r.rev+=1,this.attachRaw(r,n)}attachRaw(t,n){if(this.opts.retainRaw===!1||t.rawEvents.length>=je)return;let r,o=!1;try{r=JSON.stringify({hook_event:n.hookEvent,prompt_id:n.promptId||void 0,captured_at:n.capturedAt,raw_event:n.raw,enrichments:n.enrichments},null,2)}catch{r=void 0}r!==void 0&&r.length>le&&(r=r.slice(0,le),o=!0),t.rawEvents.push({eventId:n.eventId,hookEvent:n.hookEvent,capturedAt:n.capturedAt,json:r,truncated:o,evicted:!1}),r!==void 0&&(this.rawBytes+=r.length,this.enforceRawBudget()),t.rev+=1}enforceRawBudget(){if(!(this.rawBytes<=W))for(let t of this.groupOrder){let n=!1;for(let r of t.rawEvents)if(r.json!==void 0&&(this.rawBytes-=r.json.length,r.json=void 0,r.evicted=!0,n=!0,this.rawBytes<=W))break;if(n&&(t.rev+=1),this.rawBytes<=W)return}}};var He=5*6e4,We=30,ue=50,De=120,ze=6;function X(e){return typeof e=="string"?e:""}function O(e){if(!e)return NaN;let t=Date.parse(e);return Number.isNaN(t)?NaN:t}function Ue(e){let t=X(e.raw.conversation_id);return t||e.sessionId||X(e.raw.session_id)}var he=()=>({input:0,output:0,cacheRead:0,cacheWrite:0});function U(e){let t=he();for(let n of e)t.input+=n.tokens.input,t.output+=n.tokens.output,t.cacheRead+=n.tokens.cache_read,t.cacheWrite+=n.tokens.cache_write;return t}function pe(e){let t={input:0,output:0,cacheRead:0,cacheWrite:0,total:0};for(let n of e)t.input+=n.cost.input,t.output+=n.cost.output,t.cacheRead+=n.cost.cache_read,t.cacheWrite+=n.cost.cache_write,t.total+=n.cost.total;return t}function me(e,t){let n=0,r=!1;for(let s of e)if(s.tokens.input>0&&s.cost.input>0&&s.tokens.cache_read>0){let i=s.cost.input/s.tokens.input;n+=Math.max(0,s.tokens.cache_read*i-s.cost.cache_read),r=!0}let o=t.cacheRead+t.input;return{hitRate:o>0?t.cacheRead/o:void 0,readTokens:t.cacheRead,writeTokens:t.cacheWrite,savingsUsd:r?n:void 0}}function fe(e){let t=new Map;for(let n of e){let r=n.name||"tool",o=t.get(r);o||(o={name:r,count:0,failed:0,mcpServer:n.mcpServer,skill:n.skill,agentType:n.agentType},t.set(r,o)),o.count+=1,n.ok||(o.failed+=1),n.durationMs!==void 0&&(o.totalMs=(o.totalMs??0)+n.durationMs)}return[...t.values()].sort((n,r)=>r.count-n.count)}function I(e){let t=[];for(let n of e)n&&!t.includes(n)&&t.push(n);return t}function Xe(e,t){e.input+=t.input,e.output+=t.output,e.cacheRead+=t.cacheRead,e.cacheWrite+=t.cacheWrite}function Je(e,t){for(let n of t){let r=e.get(n.name);r?(r.count+=n.count,r.failed+=n.failed,n.totalMs!==void 0&&(r.totalMs=(r.totalMs??0)+n.totalMs)):e.set(n.name,{...n})}}function Ke(e){if(e.permissions.length!==0)return e.permissions.map(t=>({decision:t.decision,toolName:t.toolName,mcpServer:t.mcpServer}))}function x(e){return e.length>0?e:void 0}var F=class{constructor(){this.store=new j({retainRaw:!1});this.meta=new Map}ingest(t){let n=Ue(t);if(!n)return;let r=this.ensure(n,t);t.tool&&(r.tool=t.tool);let o=X(t.raw.model);o&&(r.model=o),t.vcs.repo&&(r.repo=t.vcs.repo),t.vcs.branch&&(r.branch=t.vcs.branch);let s=ae(t);s&&(s.cwd&&(r.cwd=s.cwd),s.host&&(r.host=s.host),s.os&&(r.os=s.os_version?`${s.os} ${s.os_version}`:s.os),s.arch&&(r.arch=s.arch)),r.startedAt||(r.startedAt=t.capturedAt),t.hookEvent==="SessionEnd"?r.ended=!0:t.hookEvent==="SessionStart"&&(r.ended=!1);let i=O(t.capturedAt),d=Number.isNaN(i)?Math.max(Date.now(),r.lastActivity):i;d>r.lastActivity&&(r.lastActivity=d),this.store.record(t,de(t))}snapshot(t,n=Date.now()){let r=[...this.meta.values()].sort((i,d)=>d.lastActivity-i.lastActivity),o=r.map(i=>({key:i.key,tool:i.tool,repo:i.repo,branch:i.branch,lastActivity:i.lastActivity,live:this.isLive(i,n),turnCount:this.store.groupsFor(i.key).length})),s=t!==void 0?r.find(i=>i.key===t):void 0;return s||(s=r.find(i=>this.isLive(i,n))??r[0]),{sessions:o,selectedKey:s?.key,session:s?this.buildSession(s,n):void 0}}ensure(t,n){let r=this.meta.get(t);return r||(r={key:t,tool:"",baseWorktreePath:n.vcs.is_worktree?n.vcs.worktree_path??"":"",lastActivity:-1/0,ended:!1},this.meta.set(t,r),this.evict(r)),r}evict(t){for(;this.meta.size>We;){let n;for(let r of this.meta.values())r!==t&&(!n||r.lastActivity<n.lastActivity)&&(n=r);if(!n)return;this.meta.delete(n.key)}}isLive(t,n){return!t.ended&&n-t.lastActivity<=He}buildSession(t,n){let r=this.isLive(t,n),o=this.store.groupsFor(t.key),s=o.length>ue?o.slice(o.length-ue):o,i=s.map((w,T)=>this.buildTurn(w,t,r,T===s.length-1)),d=0;for(let w of i)d+=w.usdTotal??0;let a=he(),l={input:0,output:0,cacheRead:0,cacheWrite:0,total:0},m=new Map,g=[t.model],v=[],S=[],P=0,M=!1;for(let w of s){Xe(a,U(w.requests));let T=pe(w.requests);l.input+=T.input,l.output+=T.output,l.cacheRead+=T.cacheRead,l.cacheWrite+=T.cacheWrite,l.total+=T.total,Je(m,fe(w.toolCalls));for(let L of w.requests)g.push(L.model);for(let L of w.toolCalls)v.push(L.mcpServer),S.push(L.skill);let oe=me(w.requests,U(w.requests));oe.savingsUsd!==void 0&&(P+=oe.savingsUsd,M=!0)}let C=a.input+a.output+a.cacheRead+a.cacheWrite>0,h=a.cacheRead+a.input,_=[...m.values()].sort((w,T)=>T.count-w.count),N=t.startedAt!==void 0&&t.lastActivity>0&&!Number.isNaN(O(t.startedAt))?Math.max(0,t.lastActivity-O(t.startedAt)):void 0;return{key:t.key,tool:t.tool,repo:t.repo,branch:t.branch,model:t.model,live:r,ended:t.ended,startedAt:t.startedAt,lastActivity:t.lastActivity,worktreePath:t.baseWorktreePath||void 0,turns:i,droppedTurns:this.store.droppedFor(t.key)+(o.length-s.length),usdTotal:d>0?d:void 0,cwd:t.cwd,host:t.host,os:t.os,arch:t.arch,durationMs:N,models:x(I(g)),tokens:C?a:void 0,cost:C?l:void 0,cache:C?{hitRate:h>0?a.cacheRead/h:void 0,readTokens:a.cacheRead,writeTokens:a.cacheWrite,savingsUsd:M?P:void 0}:void 0,toolStats:x(_),mcpServers:x(I(v)),skills:x(I(S))}}buildTurn(t,n,r,o){let s=t.subagents.map(h=>this.buildSubagent(h,t,n,r)),i=new Map,d=0;for(let h of t.toolCalls){let _=h.name||"tool",N=i.get(_)??{count:0,failed:0};N.count+=1,h.ok||(N.failed+=1,d+=1),i.set(_,N)}let a=[...i.entries()].sort((h,_)=>_[1].count-h[1].count).slice(0,ze).map(([h,_])=>({name:h,count:_.count,failed:_.failed})),l,m=t.endedAt===void 0&&(t.kind!=="preamble"||o);t.interrupted?l="interrupted":t.stopFailed?l="failed":m&&r?l="running":l="completed";let g=0;for(let h of t.requests)g+=h.cost.total;for(let h of s)g+=h.usdTotal??0;let v=t.turnDurationMs;if(v===void 0&&t.startedAt&&t.endedAt){let h=O(t.endedAt)-O(t.startedAt);Number.isFinite(h)&&h>=0&&(v=h)}let S=U(t.requests),P=pe(t.requests),M=me(t.requests,S),C=fe(t.toolCalls);return{id:t.id,kind:t.kind,promptText:t.promptText?t.promptText.slice(0,De):void 0,state:l,startedAt:t.startedAt,endedAt:t.endedAt,durationMs:v,tools:{total:t.toolCalls.length+(t.droppedToolCalls??0),failed:d,top:a},subagents:s,usdTotal:g>0?g:void 0,worktreeBadge:this.badge(t.worktreePath,n)||void 0,worktreePath:t.worktreePath,promptFull:t.promptText||void 0,permissionMode:t.permissionMode,promptChars:t.promptStats?.chars,promptWords:t.promptStats?.words,hasAttachments:t.promptStats?.hasAttachments,models:x(I(t.requests.map(h=>h.model))),requests:t.requests.length||void 0,tokens:t.requests.length>0?S:void 0,cost:t.requests.length>0?P:void 0,cache:t.requests.length>0?M:void 0,toolStats:x(C),mcpServers:x(I(t.toolCalls.map(h=>h.mcpServer))),skills:x(I(t.toolCalls.map(h=>h.skill))),permissions:Ke(t)}}buildSubagent(t,n,r,o){let s=t.endedAt!==void 0&&t.agentType!==""&&n.toolCalls.some(l=>l.agentType===t.agentType&&!l.ok),i;t.startedAt!==void 0&&t.endedAt===void 0&&o?i="running":s?i="failed":i="completed";let d,a;if(t.tokens){d={input:t.tokens.input,output:t.tokens.output,cacheRead:t.tokens.cache_read,cacheWrite:t.tokens.cache_write};let l=d.cacheRead+d.input;a={hitRate:l>0?d.cacheRead/l:void 0,readTokens:d.cacheRead,writeTokens:d.cacheWrite}}return{agentId:t.agentId,agentType:t.agentType||"subagent",state:i,durationMs:t.durationMs,usdTotal:t.usdTotal,model:t.model,worktreeBadge:this.badge(t.worktreePath,r)||void 0,worktreePath:t.worktreePath,requests:t.requests,concurrent:t.concurrent,orphanStop:t.orphanStop,tokens:d,cache:a}}badge(t,n){return t!==void 0&&t!==""&&t!==n.baseWorktreePath}};var ge=`
+:root {
+  --ink: var(--vscode-editor-foreground, #ccc);
+  --paper: var(--vscode-editor-background, #1e1e1e);
+  --muted: var(--vscode-descriptionForeground, #8b8b8b);
+  --hairline: color-mix(in srgb, var(--vscode-panel-border, #333) 70%, transparent);
+  --accent: var(--vscode-textLink-foreground, #4daafc);
+  --good: var(--vscode-charts-green, #89d185);
+  --bad: var(--vscode-charts-red, #f14c4c);
+  --warn: var(--vscode-charts-yellow, #cca700);
+  --agent: var(--vscode-charts-purple, #a78bfa);
+  --box: var(--vscode-textCodeBlock-background, #262626);
+  --wire: color-mix(in srgb, var(--vscode-panel-border, #444) 90%, transparent);
+}
+* { box-sizing: border-box; }
+body {
+  font-family: var(--vscode-font-family, -apple-system, "Segoe UI", sans-serif);
+  color: var(--ink);
+  background: var(--paper);
+  margin: 0;
+  padding: 0 1.5rem 4rem;
+  line-height: 1.5;
+}
+code, .mono { font-family: var(--vscode-editor-font-family, Menlo, Consolas, monospace); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85em; }
+
+/* ---- toolbar (mirrors the stream panel) ---- */
+.toolbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.55rem 0;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--hairline);
+}
+.toolbar-spacer { flex: 1; }
+.toolbar label { font-size: 0.78rem; color: var(--muted); }
+select.picker {
+  font: inherit; font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  border: 1px solid var(--hairline);
+  border-radius: 3px; padding: 0.15rem 0.4rem;
+  max-width: 24rem;
+}
+button.tb {
+  font: inherit; font-size: 0.78rem;
+  color: var(--vscode-button-secondaryForeground, var(--ink));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 3px; padding: 0.15rem 0.6rem; cursor: pointer;
+}
+button.tb:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
+
+/* ---- header ---- */
+h1 { font-size: 1.05rem; margin: 1rem 0 0.15rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.header-meta { display: flex; gap: 0.9rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.4rem; }
+
+/* Live dot: the session-level heartbeat. */
+.dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); }
+.dot.live { background: var(--good); animation: breathe 1.6s ease-in-out infinite; }
+.live-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.live-label.on { color: var(--good); }
+
+.pill { display: inline-block; font-size: 0.72rem; padding: 0.05rem 0.45rem; border-radius: 0.6rem;
+        background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #fff); }
+.pill.worktree { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--accent); border: 1px solid var(--accent); }
+
+/* ---- two-column layout: graph left, detail right ---- */
+.layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+.graph-col { flex: 1; min-width: 0; }
+.detail-col {
+  width: 24rem; flex: 0 0 24rem;
+  position: sticky; top: 3rem;
+  max-height: calc(100vh - 4rem); overflow-y: auto;
+  border-left: 1px solid var(--hairline);
+  padding: 0.2rem 0 1rem 1.2rem;
+  font-size: 0.85rem;
+}
+@media (max-width: 62rem) {
+  .layout { flex-direction: column; }
+  .detail-col { width: 100%; flex-basis: auto; position: static; max-height: none;
+                border-left: none; border-top: 1px solid var(--hairline); padding: 1rem 0 0; }
+}
+
+/* ---- detail panel ---- */
+.detail-hint { color: var(--muted); font-style: italic; padding-top: 0.6rem; }
+.detail-title {
+  font-weight: 600; font-size: 0.95rem; margin: 0.2rem 0 0.6rem;
+  word-break: break-word; line-height: 1.35;
+}
+.dsec { margin: 0 0 0.9rem; }
+.dsec > h3 {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 0.35rem; padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.kv { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.12rem 0; align-items: baseline; }
+.kv.col { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+.kv .k { color: var(--muted); white-space: nowrap; }
+.kv .v { text-align: right; word-break: break-word; }
+.kv .k.bad, .bad { color: var(--bad); }
+
+.prompt-box {
+  background: var(--box); border: 1px solid var(--hairline); border-radius: 4px;
+  padding: 0.5rem 0.6rem; max-height: 12rem; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+  font-family: var(--vscode-editor-font-family, Menlo, monospace); font-size: 0.8rem;
+}
+
+/* token table: label \xB7 count \xB7 usd, cache rows tinted as "memory" */
+.tok-table { display: flex; flex-direction: column; gap: 0.1rem; }
+.tok-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; padding: 0.1rem 0; align-items: baseline; }
+.tok-row .tok-label { color: var(--muted); }
+.tok-row .tok-count { text-align: right; min-width: 5rem; }
+.tok-row .tok-usd { text-align: right; min-width: 4.5rem; color: var(--muted); }
+.tok-row.mem .tok-label { color: var(--accent); }
+.tok-row.total { border-top: 1px solid var(--hairline); margin-top: 0.15rem; padding-top: 0.25rem; font-weight: 600; }
+.tok-row.total .tok-label { color: var(--ink); }
+
+.savings {
+  margin-top: 0.4rem; padding: 0.3rem 0.5rem; border-radius: 4px;
+  background: color-mix(in srgb, var(--good) 15%, transparent);
+  color: var(--good); font-weight: 600; text-align: center;
+}
+
+/* detail tables (tools) */
+.dtable { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.dtable th { text-align: left; color: var(--muted); font-weight: 600; font-size: 0.72rem;
+             text-transform: uppercase; letter-spacing: 0.08em; padding: 0.15rem 0.3rem; }
+.dtable td { padding: 0.15rem 0.3rem; border-top: 1px solid var(--hairline); vertical-align: top; }
+.dtable th.num, .dtable td.num { text-align: right; white-space: nowrap; }
+.tool-anno { color: var(--agent); font-size: 0.9em; }
+
+/* ---- the tree ---- */
+.tree { position: relative; margin-top: 0.9rem; }
+svg.wires {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; overflow: visible;
+}
+svg.wires path { fill: none; stroke: var(--wire); stroke-width: 1.5; }
+svg.wires path[data-state="running"] { stroke: var(--accent); }
+
+.children { margin-left: 2.2rem; }
+
+/* ---- nodes: graphviz-style boxes ---- */
+.node {
+  position: relative;
+  background: var(--box);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 0.4rem 0.7rem;
+  margin: 0.55rem 0;
+  max-width: 46rem;
+  cursor: pointer;
+}
+.node:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline)); }
+.node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.node[data-state="running"] {
+  border-color: var(--accent);
+}
+.node[data-state="failed"] { border-color: var(--bad); }
+.node[data-state="interrupted"] { border-style: dashed; border-color: var(--warn); }
+
+/* The breathing: a soft pulse on anything currently running. */
+@media (prefers-reduced-motion: no-preference) {
+  .node[data-state="running"] {
+    animation: breathe-box 1.6s ease-in-out infinite;
+  }
+  @keyframes breathe-box {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}
+
+.node-row { display: flex; align-items: baseline; gap: 0.6rem; }
+.node-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.88rem; }
+.node-side { display: flex; gap: 0.7rem; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.node-side .usd { color: var(--ink); }
+
+.node.session { border-width: 1.5px; max-width: 46rem; }
+.node.session .node-label { font-weight: 600; }
+
+.node.turn .glyph { color: var(--accent); }
+.node.turn[data-state="failed"] .glyph { color: var(--bad); }
+.node.turn[data-state="interrupted"] .glyph { color: var(--warn); }
+.turn-tag { font-size: 0.72rem; padding: 0.02rem 0.4rem; border-radius: 0.5rem; }
+.turn-tag.interrupted { color: var(--warn); border: 1px solid var(--warn); }
+.turn-tag.failed { color: var(--bad); border: 1px solid var(--bad); }
+
+/* Tool chips: aggregated per turn ("Read \xD712"). */
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.chip {
+  font-size: 0.74rem; padding: 0.05rem 0.45rem; border-radius: 0.5rem;
+  background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #fff);
+}
+.chip.failed { background: color-mix(in srgb, var(--bad) 30%, transparent); color: var(--bad); }
+
+.node.agent { border-left: 3px solid var(--agent); max-width: 42rem; }
+.node.agent .glyph { color: var(--agent); }
+.node.agent[data-state="running"] { border-color: var(--accent); border-left-color: var(--agent); }
+
+.state-dot { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%; margin-right: 0.15rem; vertical-align: 0.05rem; }
+.state-dot[data-state="running"] { background: var(--accent); animation: breathe 1.6s ease-in-out infinite; }
+.state-dot[data-state="completed"] { background: var(--good); }
+.state-dot[data-state="failed"] { background: var(--bad); }
+.state-dot[data-state="interrupted"] { background: var(--warn); }
+
+/* "N earlier turns" stub. */
+.stub { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0; padding-left: 0.2rem; }
+
+/* ---- empty state / footer ---- */
+.empty { margin-top: 1.2rem; }
+footer { margin-top: 1.4rem; font-size: 0.8rem; color: var(--muted); }
+`;var Qe={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"};function c(e){return e.replace(/[&<>"']/g,t=>Qe[t])}function Ye(e){return e.length>12?`\u2026${e.slice(-8)}`:e}function Ze(e){let t=e.replace(/[\\/]+$/,""),n=Math.max(t.lastIndexOf("/"),t.lastIndexOf("\\"));return n>=0?t.slice(n+1):t}function B(e){return e===void 0||e<=0?"":e<.01?"<$0.01":`$${e.toFixed(2)}`}function $(e){return e===void 0?"\u2014":e===0?"$0":e<1e-4?"<$0.0001":`$${e.toFixed(4)}`}function E(e){return e===void 0?"\u2014":e.toLocaleString("en-US")}function et(e){return e===void 0?"\u2014":`${Math.round(e*100)}%`}function A(e){if(e===void 0||e<0)return"";let t=Math.round(e/1e3);if(t<60)return`${t}s`;let n=Math.floor(t/60);return n<60?`${n}m ${t%60}s`:`${Math.floor(n/60)}h ${n%60}m`}function be(e,t){let n=Math.max(0,Math.round((t-e)/1e3));if(n<60)return`${n}s ago`;let r=Math.floor(n/60);if(r<60)return`${r}m ago`;let o=Math.floor(r/60);return o<24?`${o}h ago`:`${Math.floor(o/24)}d ago`}function J(e){return e?` <span class="pill worktree" title="${c(e)}">\u2442 ${c(Ze(e))}</span>`:""}function R(e,t,n=""){if(!t)return"";let r=n?` title="${c(n)}"`:"";return`<span class="${e} mono"${r}>${c(t)}</span>`}function tt(e){let t=e.sessions.map(r=>{let o=r.live?"\u25CF ":"",s=r.repo?` \u2014 ${r.repo}${r.branch?` @ ${r.branch}`:""}`:"",i=r.key===e.selectedKey?" selected":"";return`<option value="${c(r.key)}"${i}>${c(`${o}${r.tool||"session"} ${Ye(r.key)}${s}`)}</option>`}).join("");return`<nav class="toolbar">
+    ${e.sessions.length?`<label for="picker">session</label>
+       <select id="picker" class="picker" data-picker>${t}</select>`:""}
+    <span class="toolbar-spacer"></span>
+    <button type="button" class="tb" data-cmd="refresh" title="Reload this panel to pick up an extension update \u2014 no window reload">\u21BB Refresh</button>
+  </nav>`}function nt(e,t){let n=e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session",r=e.live?'<span class="dot live"></span><span class="live-label on">live</span>':e.ended?'<span class="dot"></span><span class="live-label">ended</span>':'<span class="dot"></span><span class="live-label">idle</span>',o=[];e.tool&&o.push(c(e.tool)),e.model&&o.push(c(e.model));let s=e.turns.length+e.droppedTurns;o.push(`${s} turn${s===1?"":"s"}`);let i=B(e.usdTotal);return i&&o.push(`${i} total`),o.push(c(be(e.lastActivity,t))),`<h1>${c(n)} ${r}${J(e.worktreePath)}</h1>
+  <div class="header-meta">${o.map(d=>`<span>${d}</span>`).join("")}</div>`}function rt(e){if(e.tools.total===0)return"";let t=e.tools.top.map(r=>{let o=r.failed>0?" failed":"",s=r.count>1?`${r.name} \xD7${r.count}`:r.name;return`<span class="chip${o}">${c(s)}</span>`}),n=e.tools.top.reduce((r,o)=>r+o.count,0);return e.tools.total>n&&t.push(`<span class="chip">+${e.tools.total-n} more</span>`),`<div class="chips">${t.join("")}</div>`}function ot(e,t,n){let r=[R("dur",A(e.durationMs)),R("usd",B(e.usdTotal)),e.model?R("model",e.model):""].join(""),o=`a:${t}:${e.agentId||e.agentType}`;return`<div class="node agent${K(o,n)}" data-node="${c(o)}" data-state="${e.state}">
+    <div class="node-row">
+      <span class="node-label"><span class="state-dot" data-state="${e.state}"></span> <span class="glyph">\u25C9</span> ${c(e.agentType)}${J(e.worktreeBadge?e.worktreePath:void 0)}</span>
+      <span class="node-side">${r}</span>
+    </div>
+  </div>`}function K(e,t){return e===t?" selected":""}function ve(e){return e.promptText?e.promptText:e.kind==="preamble"?"(session setup)":"(uncaptured turn)"}function st(e,t){let r=[e.state==="interrupted"?'<span class="turn-tag interrupted">interrupted</span>':e.state==="failed"?'<span class="turn-tag failed">failed</span>':"",R("dur",A(e.durationMs)),R("usd",B(e.usdTotal))].join(""),o=e.subagents.map(i=>ot(i,e.id,t)).join(""),s=o?`<div class="children" data-parent="t:${c(e.id)}">${o}</div>`:"";return`<div class="node turn${K(`t:${e.id}`,t)}" data-node="t:${c(e.id)}" data-state="${e.state}" title="${c(e.promptText??"")}">
+    <div class="node-row">
+      <span class="node-label"><span class="state-dot" data-state="${e.state}"></span> <span class="glyph">\u25B6</span> ${c(ve(e))}</span>
+      <span class="node-side">${r}</span>
+    </div>
+    ${rt(e)}
+  </div>
+  ${s}`}function it(e,t){let n=e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session",r=[R("usd",B(e.usdTotal))].join(""),o=e.droppedTurns>0?`<div class="stub">\u2026 ${e.droppedTurns} earlier turn${e.droppedTurns===1?"":"s"} (full history in <code>~/.promptconduit/events.jsonl</code>)</div>`:"",s=e.live?"running":"completed";return`<div id="tree" class="tree">
+    <svg class="wires" aria-hidden="true"></svg>
+    <div class="node session${K("session",t)}" data-node="session" data-state="${s}">
+      <div class="node-row">
+        <span class="node-label"><span class="state-dot" data-state="${e.live?"running":"completed"}"></span> ${c(n)}${J(e.worktreePath)}</span>
+        <span class="node-side">${r}</span>
+      </div>
+    </div>
+    <div class="children" data-parent="session">
+      ${o}
+      ${e.turns.map(i=>st(i,t)).join("")}
+    </div>
+  </div>`}function p(e,t){return!t||t==="\u2014"?"":`<div class="kv"><span class="k">${c(e)}</span><span class="v">${t}</span></div>`}function b(e,t){return t.trim()?`<section class="dsec"><h3>${c(e)}</h3>${t}</section>`:""}function ke(e,t){if(!t||t.length===0)return"";let n=t.map(r=>`<span class="chip">${c(r)}</span>`).join("");return`<div class="kv col"><span class="k">${c(e)}</span><div class="chips">${n}</div></div>`}function Q(e,t){if(!e)return"";let n=e.input+e.output+e.cacheRead+e.cacheWrite,r=(o,s,i,d="")=>`<div class="tok-row ${d}">
+       <span class="tok-label">${c(o)}</span>
+       <span class="tok-count mono">${E(s)}</span>
+       <span class="tok-usd mono">${t?$(i):""}</span>
+     </div>`;return`<div class="tok-table">
+    ${r("Input (fresh)",e.input,t?.input)}
+    ${r("Output",e.output,t?.output)}
+    ${r("Cache read",e.cacheRead,t?.cacheRead,"mem")}
+    ${r("Cache write",e.cacheWrite,t?.cacheWrite,"mem")}
+    <div class="tok-row total">
+      <span class="tok-label">Total</span>
+      <span class="tok-count mono">${E(n)}</span>
+      <span class="tok-usd mono">${t?$(t.total):""}</span>
+    </div>
+  </div>`}function Y(e){if(!e||e.readTokens===0&&e.writeTokens===0)return"";let t=e.savingsUsd!==void 0&&e.savingsUsd>0?`<div class="savings">\u2248 ${c($(e.savingsUsd))} saved by prompt cache</div>`:"";return`${p("Cache hit rate",et(e.hitRate))}
+    ${p("Read from cache",`${E(e.readTokens)} tok`)}
+    ${p("Written to cache",`${E(e.writeTokens)} tok`)}
+    ${t}`}function we(e){return!e||e.length===0?"":`<table class="dtable">
+    <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Fail</th><th class="num">Time</th></tr></thead>
+    <tbody>${e.map(n=>{let r=n.mcpServer?`${n.name} <span class="tool-anno">${c(n.mcpServer)}</span>`:n.skill?`${n.name} <span class="tool-anno">skill:${c(n.skill)}</span>`:c(n.name),o=n.failed>0?`<span class="bad">${n.failed}</span>`:"0",s=n.totalMs!==void 0?A(n.totalMs):"";return`<tr><td>${r}</td><td class="num mono">${n.count}</td><td class="num mono">${o}</td><td class="num mono">${c(s)}</td></tr>`}).join("")}</tbody>
+  </table>`}function at(e){return!e||e.length===0?"":e.map(n=>{let r=n.toolName?` \xB7 ${c(n.toolName)}`:"";return`<div class="kv"><span class="k ${/deni/i.test(n.decision)?"bad":""}">${c(n.decision)}</span><span class="v">${r}</span></div>`}).join("")}function dt(e,t){let n=p("Repo",c(e.repo??"\u2014"))+p("Branch",c(e.branch??"\u2014"))+p("Tool",c(e.tool||"\u2014"))+ke("Models",e.models)+p("Directory",e.cwd?c(e.cwd):"")+p("Host",e.host?c(e.host):"")+p("OS",e.os?c(`${e.os}${e.arch?` \xB7 ${e.arch}`:""}`):"")+p("Worktree",e.worktreePath?c(e.worktreePath):""),r=p("Status",e.live?"live":e.ended?"ended":"idle")+p("Started",$e(e.startedAt))+p("Active",A(e.durationMs))+p("Last event",be(e.lastActivity,t))+p("Turns",E(e.turns.length+e.droppedTurns));return`<div class="detail-title">${c(ut(e))}</div>
+    ${b("Session",n)}
+    ${b("Timing",r)}
+    ${b("Cost",ye(e.usdTotal,e.cost))}
+    ${b("Tokens",Q(e.tokens,e.cost))}
+    ${b("Memory (prompt cache)",Y(e.cache))}
+    ${b("Tools",we(e.toolStats))}
+    ${V("MCP servers",e.mcpServers)}
+    ${V("Skills",e.skills)}`}function ct(e,t){let n=p("State",Se(e.state))+p("Mode",e.permissionMode?c(e.permissionMode):"")+p("Started",$e(e.startedAt))+p("Duration",A(e.durationMs))+ke("Models",e.models)+p("Requests",e.requests!==void 0?E(e.requests):"")+p("Prompt size",e.promptChars!==void 0?`${E(e.promptChars)} chars \xB7 ${E(e.promptWords)} words`:"")+p("Attachments",e.hasAttachments?"yes":""),r=e.promptFull?`<div class="prompt-box">${c(e.promptFull)}</div>`:"",o=e.subagents.length>0?e.subagents.map(s=>`<div class="kv"><span class="k">${c(s.agentType)}</span><span class="v mono">${c([A(s.durationMs),B(s.usdTotal)].filter(Boolean).join(" \xB7 "))}</span></div>`).join(""):"";return`<div class="detail-title">\u25B6 ${c(ve(e))}</div>
+    ${r?b("Prompt",r):""}
+    ${b("Turn",n)}
+    ${b("Cost",ye(e.usdTotal,e.cost))}
+    ${b("Tokens",Q(e.tokens,e.cost))}
+    ${b("Memory (prompt cache)",Y(e.cache))}
+    ${b("Tools",we(e.toolStats))}
+    ${V("MCP servers",e.mcpServers)}
+    ${V("Skills",e.skills)}
+    ${b(`Subagents (${e.subagents.length})`,o)}
+    ${b("Permissions",at(e.permissions))}`}function lt(e){let t=p("Type",c(e.agentType))+p("State",Se(e.state))+p("Model",e.model?c(e.model):"")+p("Duration",A(e.durationMs))+p("Requests",e.requests!==void 0?E(e.requests):"")+p("Ran alongside",e.concurrent!==void 0&&e.concurrent>1?`${e.concurrent} agents`:"")+p("Worktree",e.worktreeBadge&&e.worktreePath?c(e.worktreePath):"")+p("Agent id",`<span class="mono small">${c(e.agentId)}</span>`)+(e.orphanStop?p("Note","start not captured (duration estimated)"):"");return`<div class="detail-title">\u25C9 ${c(e.agentType)}</div>
+    ${b("Subagent",t)}
+    ${b("Cost",p("Total",$(e.usdTotal)))}
+    ${b("Tokens",Q(e.tokens,void 0))}
+    ${b("Memory (prompt cache)",Y(e.cache))}`}function ye(e,t){let n=p("Total",$(e));if(!t)return n;let r=(e??t.total)-t.total;return n+p("Input",$(t.input))+p("Output",$(t.output))+p("Cache read",$(t.cacheRead))+p("Cache write",$(t.cacheWrite))+(r>1e-4?p("Subagents",$(r)):"")}function V(e,t){return!t||t.length===0?"":b(e,`<div class="chips">${t.map(n=>`<span class="chip">${c(n)}</span>`).join("")}</div>`)}function Se(e){return`<span class="state-dot" data-state="${c(e)}"></span> ${c(e)}`}function ut(e){return e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session"}function $e(e){if(!e)return"\u2014";let t=new Date(e);return Number.isNaN(t.getTime())?e:t.toLocaleTimeString()}function pt(e,t,n){let r=e.session,o='<div class="detail-hint">Click any node \u2014 the session, a turn, or a subagent \u2014 to inspect its full detail: prompt, tokens, cost, cache/memory savings, every tool call.</div>';if(!r||!n)return o;if(n==="session")return dt(r,t);for(let s of r.turns){if(`t:${s.id}`===n)return ct(s,t);for(let i of s.subagents)if(`a:${s.id}:${i.agentId||i.agentType}`===n)return lt(i)}return o}function mt(e){return e.logDisabled?`<div class="empty muted">
+    <p>The local event log is <strong>disabled</strong> (<code>PROMPTCONDUIT_EVENT_LOG=0</code>).</p>
+    <p>Unset that variable and restart your AI tool to start streaming events.</p>
+  </div>`:`<div class="empty muted">
+    <p>No sessions yet. Run an AI coding session (Claude Code or a Cursor agent) with the
+    <code>promptconduit</code> CLI hooks installed and it will appear here, growing live \u2014
+    prompts, tools, subagents, worktrees.</p>
+    <p>Waiting on <code>~/.promptconduit/events.jsonl</code>\u2026</p>
+  </div>`}function _e(e,t=Date.now(),n){let r=e.session?`<div class="layout">
+        <div class="graph-col">${nt(e.session,t)}${it(e.session,n)}</div>
+        <aside class="detail-col">${pt(e,t,n)}</aside>
+      </div>`:mt(e);return`${tt(e)}
+  ${r}
+  <footer>
+    Read straight from the local log on your machine. None of your data is sent anywhere.
+  </footer>`}function Z(e){let t=e.querySelector("svg.wires");if(!t)return;let n=e.getBoundingClientRect(),r=[];e.querySelectorAll("[data-parent]").forEach(o=>{let s=o.dataset.parent,i=e.querySelector(`[data-node="${ft(s)}"]`);if(!i)return;let d=i.getBoundingClientRect(),a=d.left-n.left+16,l=d.bottom-n.top;o.querySelectorAll(":scope > [data-node]").forEach(m=>{let g=m.getBoundingClientRect(),v=g.left-n.left,S=g.top-n.top+g.height/2;if(S<=l||v<=a)return;let P=Math.min(6,v-a,S-l),M=`M ${a} ${l} V ${S-P} Q ${a} ${S} ${a+P} ${S} H ${v}`,C=m.dataset.state==="running"?' data-state="running"':"";r.push(`<path d="${M}"${C} />`)})}),t.innerHTML=r.join("")}function ft(e){let t=globalThis.CSS;return t?.escape?t.escape(e):e.replace(/["\\\]]/g,"\\$&")}function Te(e){let t,n,r=()=>{if(!t)return;let a=document.scrollingElement??document.documentElement,l=a.scrollTop;e.innerHTML=_e(t,Date.now(),n),a.scrollTop=l;let m=e.querySelector("#tree");m&&Z(m)},o={update(a){t=a,r()},dispose(){window.removeEventListener("resize",s),e.removeEventListener("change",i),e.removeEventListener("click",d)}},s=()=>{let a=e.querySelector("#tree");a&&Z(a)},i=a=>{let l=a.target.closest("select[data-picker]");l&&o.onPickSession?.(l.value)},d=a=>{let l=a.target;if(l.closest("button[data-cmd]")?.dataset.cmd==="refresh"){o.onRefresh?.();return}let g=l.closest("[data-node]");if(g){let v=g.dataset.node;n=n===v?void 0:v,r()}};return window.addEventListener("resize",s),e.addEventListener("change",i),e.addEventListener("click",d),o}var ht=1e3,gt=5e3,xe=document.createElement("style");xe.textContent=ge;document.head.appendChild(xe);var Pe=document.createElement("div");document.body.appendChild(Pe);var Ce=new F,te=Te(Pe),Ae;te.onPickSession=e=>{Ae=e,ne()};te.onRefresh=()=>{re()};var Ee=0,ee=!1;function ne(){let e={revision:Date.now(),logDisabled:!1,...Ce.snapshot(Ae)};te.update(e)}async function re(){if(!ee){ee=!0;try{for(;;){let e=await fetch(`/api/events?after=${Ee}&limit=${gt}`);if(!e.ok)break;let t=await e.json();for(let n of t.lines){let r=se(n);r&&Ce.ingest(r)}if(Ee=t.cursor,ne(),!t.more)break}}catch{}finally{ee=!1}}}ne();re();setInterval(()=>{re()},ht);})();
+</script>
+</body>
+</html>

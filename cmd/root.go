@@ -65,6 +65,7 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(eventsCmd)
 	rootCmd.AddCommand(costCmd)
+	rootCmd.AddCommand(graphCmd)
 	rootCmd.AddCommand(pruneCmd)
 }
 
@@ -238,7 +239,7 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "upgrade", "watch", "collect", "cost", "sessions", "resume":
+	case "hook", "upgrade", "watch", "collect", "cost", "graph", "sessions", "resume":
 		// sessions/resume are called programmatically (the editor extension's
 		// auto-restore) and resume execs straight into claude — keep them quiet
 		// and fast, no update banner.
