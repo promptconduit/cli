@@ -66,6 +66,7 @@ func init() {
 	rootCmd.AddCommand(eventsCmd)
 	rootCmd.AddCommand(costCmd)
 	rootCmd.AddCommand(graphCmd)
+	rootCmd.AddCommand(feedbackCmd)
 	rootCmd.AddCommand(pruneCmd)
 }
 
