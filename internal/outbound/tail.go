@@ -163,10 +163,17 @@ func readLastLines(f *os.File, n int) (int64, [][]byte, error) {
 		return 0, nil, nil
 	}
 
+	// Read fixed-size chunks backwards from EOF until we've seen more than n
+	// newlines (or hit the start). Collect the chunks in reverse order and join
+	// them once at the end — prepending to a growing []byte each iteration (and
+	// re-counting its newlines) is O(bytes²), which is pathological when a large
+	// backfill on a large file walks most of the file.
 	const chunkSize = int64(4096)
-	var accumulated []byte
+	var chunks [][]byte // reverse file order: chunks[0] is nearest EOF
+	var total int
+	var newlines int
 	pos := size
-	for pos > 0 && bytes.Count(accumulated, []byte{'\n'}) <= n {
+	for pos > 0 && newlines <= n {
 		readSize := chunkSize
 		if pos < readSize {
 			readSize = pos
@@ -176,7 +183,13 @@ func readLastLines(f *os.File, n int) (int64, [][]byte, error) {
 		if _, err := f.ReadAt(buf, pos); err != nil {
 			return 0, nil, err
 		}
-		accumulated = append(buf, accumulated...)
+		newlines += bytes.Count(buf, []byte{'\n'})
+		chunks = append(chunks, buf)
+		total += len(buf)
+	}
+	accumulated := make([]byte, 0, total)
+	for i := len(chunks) - 1; i >= 0; i-- {
+		accumulated = append(accumulated, chunks[i]...)
 	}
 
 	// Split into lines and take the last n.

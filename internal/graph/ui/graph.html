@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PromptConduit — Session Graph</title>
+<!-- Rendered by the portable graph core (shared with the editor extension).
+     No --vscode-* variables defined: the panel CSS falls back to literals. -->
+<style>body{margin:0;background:#1e1e1e;color:#ccc;font-family:-apple-system,"Segoe UI",sans-serif;padding:0 1.5rem;}</style>
+</head>
+<body>
+<script>"use strict";(()=>{var Re=2;function l(e){return typeof e=="string"?e:""}function h(e,t=0){return typeof e=="number"&&Number.isFinite(e)?e:t}function w(e){return typeof e=="object"&&e!==null&&!Array.isArray(e)?e:{}}function oe(e){let t=e.trim();if(!t)return null;let n;try{n=JSON.parse(t)}catch{return null}let r=w(n);if(h(r.schema,0)<Re)return null;let o=w(r.enrichments),s=w(r.raw_event),i=w(o.vcs),a=w(i.commit),d=w(i.worktree),u=w(i.pr),f=w(o.trace);return{schema:h(r.schema),eventId:l(r.event_id),sessionId:l(r.session_id),promptId:l(r.prompt_id),tool:l(r.tool),hookEvent:l(r.hook_event),capturedAt:l(r.captured_at),raw:s,vcs:{type:l(i.type)||void 0,repo:l(i.repo)||void 0,repo_url:l(i.repo_url)||void 0,branch:l(i.branch)||void 0,branch_url:l(i.branch_url)||void 0,default_branch:l(i.default_branch)||void 0,pr:Object.keys(u).length>0?{number:h(u.number)||void 0,title:l(u.title)||void 0,state:l(u.state)||void 0}:void 0,pr_url:l(u.url)||void 0,commit_hash:l(a.hash)||void 0,commit_message:l(a.message)||void 0,remote_url:l(i.remote_url)||void 0,is_worktree:d.is_worktree===!0||void 0,worktree_path:l(d.path)||void 0,dirty:i.dirty===!0||void 0,staged:h(i.staged)||void 0,unstaged:h(i.unstaged)||void 0,untracked:h(i.untracked)||void 0,ahead:h(i.ahead)||void 0,behind:h(i.behind)||void 0},trace:{trace_id:l(f.trace_id)||void 0,span_id:l(f.span_id)||void 0,parent_span_id:l(f.parent_span_id)||void 0},enrichments:o}}function Ne(e){if(!e||Object.keys(e).length===0)return;let t=w(e.tokens),n=w(e.usd);return{agent_id:l(e.agent_id)||void 0,agent_type:l(e.agent_type)||void 0,phase:l(e.phase)||void 0,concurrent:h(e.concurrent)||void 0,duration_ms:h(e.duration_ms)||void 0,requests:h(e.requests)||void 0,model:l(e.model)||void 0,tokens:Object.keys(t).length>0?{input:h(t.input),output:h(t.output),cache_read:h(t.cache_read),cache_write:h(t.cache_write)}:void 0,usd:Object.keys(n).length>0?{input:h(n.input),output:h(n.output),cache_read:h(n.cache_read),cache_write:h(n.cache_write),total:h(n.total),currency:l(n.currency)||"USD"}:void 0}}function Ge(e){if(!e||Object.keys(e).length===0)return;let t=Array.isArray(e.calls)?e.calls.map(n=>{let r=w(n);return{name:l(r.name)||void 0,ok:r.ok===!0?!0:r.ok===!1?!1:void 0,duration_ms:h(r.duration_ms)||void 0,mcp_server:l(r.mcp_server)||void 0,skill:l(r.skill)||void 0,agent_type:l(r.agent_type)||void 0}}):void 0;return{total:h(e.total)||void 0,failed:h(e.failed)||void 0,calls:t}}function qe(e){if(!(!e||Object.keys(e).length===0))return{host:l(e.host)||void 0,os:l(e.os)||void 0,os_version:l(e.os_version)||void 0,arch:l(e.arch)||void 0,cwd:l(e.cwd)||void 0}}function D(e){return Ne(w(e.enrichments.subagent))}function se(e){return Ge(w(e.enrichments.tools))}function ie(e){return qe(w(e.enrichments.env))}function Le(e){let t=e.replace(/[\\/]+$/,""),n=Math.max(t.lastIndexOf("/"),t.lastIndexOf("\\"));return n>=0?t.slice(n+1):t}function ae(e){let t=w(e.enrichments.cost),n=Array.isArray(t.requests)?t.requests:[],r=[];for(let o of n){let s=w(o),i=w(s.tokens),a=w(s.usd),d=l(s.request_id);if(!d)continue;let u={tool:e.tool,session_id:e.sessionId||l(e.raw.session_id),conversation_id:l(s.conversation_id)||void 0,request_id:d,ts:l(s.ts)||e.capturedAt,model:l(s.model),model_priced:s.model_priced===!0,source:l(s.source),tokens:{input:h(i.input),output:h(i.output),cache_read:h(i.cache_read),cache_write:h(i.cache_write)},cost:{input:h(a.input),output:h(a.output),cache_read:h(a.cache_read),cache_write:h(a.cache_write),total:h(a.total),currency:l(a.currency)||"USD"},cwd_base:e.raw.cwd?Le(l(e.raw.cwd)):"",tools:s.tools&&typeof s.tools=="object"?s.tools:void 0,signals:s.signals&&typeof s.signals=="object"?s.signals:void 0};u.session_id&&r.push(u)}return r}var Oe=8e3,Be=3e4,je=2e3,Fe=500,de=100,We=60,ce=32*1024,z=8*1024*1024,De=300;function _(e){return typeof e=="string"?e:""}function H(e){return typeof e=="number"&&Number.isFinite(e)?e:void 0}function G(e){return typeof e=="object"&&e!==null&&!Array.isArray(e)?e:{}}function V(e){if(!e)return NaN;let t=Date.parse(e);return Number.isNaN(t)?NaN:t}function ze(e){let t=_(e.raw.conversation_id);return t||e.sessionId||_(e.raw.session_id)}function q(e){return e.vcs.is_worktree?e.vcs.worktree_path:void 0}var j=class{constructor(t={}){this.opts=t;this.convs=new Map;this.groupOrder=[];this.rawBytes=0}record(t,n){let r=ze(t);if(!r)return;let o=this.ensure(r);if(t.eventId){if(o.seen.has(t.eventId))return;o.seen.add(t.eventId),o.seenOrder.push(t.eventId),o.seenOrder.length>Oe&&o.seen.delete(o.seenOrder.shift())}switch(t.hookEvent){case"UserPromptSubmit":this.onPrompt(o,t);break;case"PostToolUse":case"PostToolBatch":case"PostToolUseFailure":this.onTools(o,t);break;case"SubagentStart":this.onSubagentStart(o,t);break;case"SubagentStop":this.onSubagentStop(o,t);break;case"Stop":case"stop":case"StopFailure":this.onStop(o,t,n);break;case"PermissionRequest":case"PermissionDenied":this.onPermission(o,t);break;default:break}}groupsFor(t){let n=this.convs.get(t);if(!n)return[];let r=[];for(let o of n.order){let s=n.byId.get(o);s&&r.push(s)}return r}droppedFor(t){return this.convs.get(t)?.dropped??0}ensure(t){let n=this.convs.get(t);return n||(n={key:t,order:[],byId:new Map,seen:new Set,seenOrder:[],dropped:0},this.convs.set(t,n)),n}pidOf(t){if(t.promptId)return t.promptId;if(t.hookEvent==="Stop"||t.hookEvent==="stop"||t.hookEvent==="StopFailure"){let n=_(G(t.enrichments.turn).prompt_id);if(n)return n}}newGroup(t,n){return{id:t,kind:n,requests:[],toolCalls:[],subagents:[],permissions:[],rawEvents:[],rev:0}}addGroup(t,n){for(t.byId.set(n.id,n),t.order.push(n.id),this.groupOrder.push(n);t.order.length>De;){let r=t.order.shift(),o=t.byId.get(r);if(t.byId.delete(r),t.dropped+=1,o){for(let i of o.rawEvents)i.json!==void 0&&(this.rawBytes-=i.json.length,i.json=void 0,i.evicted=!0);let s=this.groupOrder.indexOf(o);s>=0&&this.groupOrder.splice(s,1)}t.openId===r&&(t.openId=void 0),t.lastClosedId===r&&(t.lastClosedId=void 0)}return n}closeGroup(t,n){t.openId===n.id&&(t.openId=void 0),t.lastClosedId=n.id}target(t,n){let r=this.pidOf(n);if(r){let s=t.byId.get(r);if(s)return s}if(t.openId){let s=t.byId.get(t.openId);if(s)return s}let o=t.lastClosedId?t.byId.get(t.lastClosedId):void 0;return o&&this.withinTrail(n.capturedAt,o.endedAt)?o:this.ensurePreamble(t)}withinTrail(t,n){let r=V(t),o=V(n);return Number.isNaN(r)||Number.isNaN(o)?!0:r-o<Be}ensurePreamble(t){let n="pre:"+t.key,r=t.byId.get(n);return r||this.addGroup(t,this.newGroup(n,"preamble"))}onPrompt(t,n){if(t.openId){let f=t.byId.get(t.openId);f?(f.endedAt=n.capturedAt,G(n.enrichments.prompt).is_interrupt===!0&&(f.interrupted=!0),f.rev+=1,this.closeGroup(t,f)):t.openId=void 0}let o=this.pidOf(n)??"t:"+n.eventId,s=t.byId.get(o);s||(s=this.addGroup(t,this.newGroup(o,"prompt")));let i=_(n.raw.prompt);i&&(s.promptText=i.slice(0,je));let a=_(n.raw.permission_mode);a&&(s.permissionMode=a);let d=G(n.enrichments.prompt);Object.keys(d).length>0&&(s.promptStats={chars:H(d.chars),words:H(d.words),hasAttachments:d.has_attachments===!0||void 0}),s.startedAt=n.capturedAt;let u=q(n);u&&(s.worktreePath=u),t.openId=s.id,s.rev+=1,this.attachRaw(s,n)}onTools(t,n){let r=this.target(t,n),o=q(n);o&&(r.worktreePath=o);let s=se(n)?.calls??[];for(let i of s){if(r.toolCalls.length>=Fe){r.droppedToolCalls=(r.droppedToolCalls??0)+1;continue}r.toolCalls.push({name:i.name??"",ok:i.ok??n.hookEvent!=="PostToolUseFailure",durationMs:i.duration_ms,mcpServer:i.mcp_server,skill:i.skill,agentType:i.agent_type})}r.rev+=1,this.attachRaw(r,n)}onSubagentStart(t,n){let r=this.target(t,n),o=D(n),s=o?.agent_id||_(n.raw.agent_id);if(s){let i=r.subagents.find(a=>a.agentId===s);if(!i&&r.subagents.length<de&&(i={agentId:s,agentType:""},r.subagents.push(i)),i){i.agentType=o?.agent_type||_(n.raw.agent_type)||i.agentType,i.startedAt=n.capturedAt,o?.concurrent!==void 0&&(i.concurrent=o.concurrent);let a=q(n);a&&(i.worktreePath=a)}}r.rev+=1,this.attachRaw(r,n)}onSubagentStop(t,n){let r=this.target(t,n),o=D(n),s=o?.agent_id||_(n.raw.agent_id),i=[r];if(t.openId){let f=t.byId.get(t.openId);f&&!i.includes(f)&&i.push(f)}for(let f of t.order.slice(-3).reverse()){let b=t.byId.get(f);b&&!i.includes(b)&&i.push(b)}let a=r,d;if(s)for(let f of i){let b=f.subagents.find(k=>k.agentId===s&&k.endedAt===void 0)??f.subagents.find(k=>k.agentId===s);if(b){a=f,d=b;break}}if(!d){d={agentId:s||"",agentType:"",orphanStop:!0};let f=V(n.capturedAt);!Number.isNaN(f)&&o?.duration_ms!==void 0&&(d.startedAt=new Date(f-o.duration_ms).toISOString()),a.subagents.length<de&&a.subagents.push(d)}d.agentType=o?.agent_type||_(n.raw.agent_type)||d.agentType,o?.duration_ms!==void 0&&(d.durationMs=o.duration_ms),o?.requests!==void 0&&(d.requests=o.requests),o?.model&&(d.model=o.model),o?.tokens&&(d.tokens={input:o.tokens.input??0,output:o.tokens.output??0,cache_read:o.tokens.cache_read??0,cache_write:o.tokens.cache_write??0}),o?.usd?.total!==void 0&&(d.usdTotal=o.usd.total),d.endedAt=n.capturedAt;let u=q(n);u&&(d.worktreePath=u),a.rev+=1,this.attachRaw(a,n)}onStop(t,n,r){let o=this.pidOf(n),s=o?t.byId.get(o):void 0;!s&&t.openId&&(s=t.byId.get(t.openId)),s||(s=this.addGroup(t,this.newGroup("r:"+n.eventId,"uncaptured")));for(let d of r)d.request_id&&s.requests.some(u=>u.request_id===d.request_id)||s.requests.push(d);let i=H(G(n.enrichments.turn).duration_ms);i!==void 0&&(s.turnDurationMs=i),n.hookEvent==="StopFailure"&&(s.stopFailed=!0);let a=q(n);a&&(s.worktreePath=a),s.endedAt=n.capturedAt,this.closeGroup(t,s),s.rev+=1,this.attachRaw(s,n)}onPermission(t,n){let r=this.target(t,n),o=G(n.enrichments.permission);r.permissions.push({decision:_(o.decision)||(n.hookEvent==="PermissionDenied"?"denied":"requested"),toolName:_(o.tool_name)||_(n.raw.tool_name)||void 0,mcpServer:_(o.mcp_server)||void 0}),r.rev+=1,this.attachRaw(r,n)}attachRaw(t,n){if(this.opts.retainRaw===!1||t.rawEvents.length>=We)return;let r,o=!1;try{r=JSON.stringify({hook_event:n.hookEvent,prompt_id:n.promptId||void 0,captured_at:n.capturedAt,raw_event:n.raw,enrichments:n.enrichments},null,2)}catch{r=void 0}r!==void 0&&r.length>ce&&(r=r.slice(0,ce),o=!0),t.rawEvents.push({eventId:n.eventId,hookEvent:n.hookEvent,capturedAt:n.capturedAt,json:r,truncated:o,evicted:!1}),r!==void 0&&(this.rawBytes+=r.length,this.enforceRawBudget()),t.rev+=1}enforceRawBudget(){if(!(this.rawBytes<=z))for(let t of this.groupOrder){let n=!1;for(let r of t.rawEvents)if(r.json!==void 0&&(this.rawBytes-=r.json.length,r.json=void 0,r.evicted=!0,n=!0,this.rawBytes<=z))break;if(n&&(t.rev+=1),this.rawBytes<=z)return}}};var He=5*6e4,Ve=30,le=50,Ue=120,Xe=6;function X(e){return typeof e=="string"?e:""}function L(e){if(!e)return NaN;let t=Date.parse(e);return Number.isNaN(t)?NaN:t}function Ke(e){let t=X(e.raw.conversation_id);return t||e.sessionId||X(e.raw.session_id)}var fe=()=>({input:0,output:0,cacheRead:0,cacheWrite:0});function U(e){let t=fe();for(let n of e)t.input+=n.tokens.input,t.output+=n.tokens.output,t.cacheRead+=n.tokens.cache_read,t.cacheWrite+=n.tokens.cache_write;return t}function ue(e){let t={input:0,output:0,cacheRead:0,cacheWrite:0,total:0};for(let n of e)t.input+=n.cost.input,t.output+=n.cost.output,t.cacheRead+=n.cost.cache_read,t.cacheWrite+=n.cost.cache_write,t.total+=n.cost.total;return t}function pe(e,t){let n=0,r=!1;for(let s of e)if(s.tokens.input>0&&s.cost.input>0&&s.tokens.cache_read>0){let i=s.cost.input/s.tokens.input;n+=Math.max(0,s.tokens.cache_read*i-s.cost.cache_read),r=!0}let o=t.cacheRead+t.input;return{hitRate:o>0?t.cacheRead/o:void 0,readTokens:t.cacheRead,writeTokens:t.cacheWrite,savingsUsd:r?n:void 0}}function me(e){let t=new Map;for(let n of e){let r=n.name||"tool",o=t.get(r);o||(o={name:r,count:0,failed:0,mcpServer:n.mcpServer,skill:n.skill,agentType:n.agentType},t.set(r,o)),o.count+=1,n.ok||(o.failed+=1),n.durationMs!==void 0&&(o.totalMs=(o.totalMs??0)+n.durationMs)}return[...t.values()].sort((n,r)=>r.count-n.count)}function R(e){let t=[];for(let n of e)n&&!t.includes(n)&&t.push(n);return t}function Je(e,t){e.input+=t.input,e.output+=t.output,e.cacheRead+=t.cacheRead,e.cacheWrite+=t.cacheWrite}function Ye(e,t){for(let n of t){let r=e.get(n.name);r?(r.count+=n.count,r.failed+=n.failed,n.totalMs!==void 0&&(r.totalMs=(r.totalMs??0)+n.totalMs)):e.set(n.name,{...n})}}function Qe(e){if(e.permissions.length!==0)return e.permissions.map(t=>({decision:t.decision,toolName:t.toolName,mcpServer:t.mcpServer}))}function M(e){return e.length>0?e:void 0}var F=class{constructor(){this.store=new j({retainRaw:!1});this.meta=new Map}ingest(t){let n=Ke(t);if(!n)return;let r=this.ensure(n,t);t.tool&&(r.tool=t.tool);let o=X(t.raw.model);o&&(r.model=o),t.vcs.repo&&(r.repo=t.vcs.repo),t.vcs.branch&&(r.branch=t.vcs.branch);let s=ie(t);s&&(s.cwd&&(r.cwd=s.cwd),s.host&&(r.host=s.host),s.os&&(r.os=s.os_version?`${s.os} ${s.os_version}`:s.os),s.arch&&(r.arch=s.arch)),r.startedAt||(r.startedAt=t.capturedAt),t.hookEvent==="SessionEnd"?r.ended=!0:t.hookEvent==="SessionStart"&&(r.ended=!1);let i=L(t.capturedAt),a=Number.isNaN(i)?Math.max(Date.now(),r.lastActivity):i;a>r.lastActivity&&(r.lastActivity=a),this.store.record(t,ae(t))}snapshot(t,n=Date.now()){let r=[...this.meta.values()].sort((i,a)=>a.lastActivity-i.lastActivity),o=r.map(i=>({key:i.key,tool:i.tool,repo:i.repo,branch:i.branch,lastActivity:i.lastActivity,live:this.isLive(i,n),turnCount:this.store.groupsFor(i.key).length})),s=t!==void 0?r.find(i=>i.key===t):void 0;return s||(s=r.find(i=>this.isLive(i,n))??r[0]),{sessions:o,selectedKey:s?.key,session:s?this.buildSession(s,n):void 0}}ensure(t,n){let r=this.meta.get(t);return r||(r={key:t,tool:"",baseWorktreePath:n.vcs.is_worktree?n.vcs.worktree_path??"":"",lastActivity:-1/0,ended:!1},this.meta.set(t,r),this.evict(r)),r}evict(t){for(;this.meta.size>Ve;){let n;for(let r of this.meta.values())r!==t&&(!n||r.lastActivity<n.lastActivity)&&(n=r);if(!n)return;this.meta.delete(n.key)}}isLive(t,n){return!t.ended&&n-t.lastActivity<=He}buildSession(t,n){let r=this.isLive(t,n),o=this.store.groupsFor(t.key),s=o.length>le?o.slice(o.length-le):o,i=s.map((y,P)=>this.buildTurn(y,t,r,P===s.length-1)),a=0;for(let y of i)a+=y.usdTotal??0;let d=fe(),u={input:0,output:0,cacheRead:0,cacheWrite:0,total:0},f=new Map,b=[t.model],k=[],S=[],$=0,T=!1;for(let y of s){Je(d,U(y.requests));let P=ue(y.requests);u.input+=P.input,u.output+=P.output,u.cacheRead+=P.cacheRead,u.cacheWrite+=P.cacheWrite,u.total+=P.total,Ye(f,me(y.toolCalls));for(let B of y.requests)b.push(B.model);for(let B of y.toolCalls)k.push(B.mcpServer),S.push(B.skill);let re=pe(y.requests,U(y.requests));re.savingsUsd!==void 0&&($+=re.savingsUsd,T=!0)}let g=d.input+d.output+d.cacheRead+d.cacheWrite>0,m=d.cacheRead+d.input,E=[...f.values()].sort((y,P)=>P.count-y.count),A=t.startedAt!==void 0&&t.lastActivity>0&&!Number.isNaN(L(t.startedAt))?Math.max(0,t.lastActivity-L(t.startedAt)):void 0;return{key:t.key,tool:t.tool,repo:t.repo,branch:t.branch,model:t.model,live:r,ended:t.ended,startedAt:t.startedAt,lastActivity:t.lastActivity,worktreePath:t.baseWorktreePath||void 0,turns:i,droppedTurns:this.store.droppedFor(t.key)+(o.length-s.length),usdTotal:a>0?a:void 0,cwd:t.cwd,host:t.host,os:t.os,arch:t.arch,durationMs:A,models:M(R(b)),tokens:g?d:void 0,cost:g?u:void 0,cache:g?{hitRate:m>0?d.cacheRead/m:void 0,readTokens:d.cacheRead,writeTokens:d.cacheWrite,savingsUsd:T?$:void 0}:void 0,toolStats:M(E),mcpServers:M(R(k)),skills:M(R(S))}}buildTurn(t,n,r,o){let s=t.subagents.map(m=>this.buildSubagent(m,t,n,r)),i=new Map,a=0;for(let m of t.toolCalls){let E=m.name||"tool",A=i.get(E)??{count:0,failed:0};A.count+=1,m.ok||(A.failed+=1,a+=1),i.set(E,A)}let d=[...i.entries()].sort((m,E)=>E[1].count-m[1].count).slice(0,Xe).map(([m,E])=>({name:m,count:E.count,failed:E.failed})),u,f=t.endedAt===void 0&&(t.kind!=="preamble"||o);t.interrupted?u="interrupted":t.stopFailed?u="failed":f&&r?u="running":u="completed";let b=0;for(let m of t.requests)b+=m.cost.total;for(let m of s)b+=m.usdTotal??0;let k=t.turnDurationMs;if(k===void 0&&t.startedAt&&t.endedAt){let m=L(t.endedAt)-L(t.startedAt);Number.isFinite(m)&&m>=0&&(k=m)}let S=U(t.requests),$=ue(t.requests),T=pe(t.requests,S),g=me(t.toolCalls);return{id:t.id,kind:t.kind,promptText:t.promptText?t.promptText.slice(0,Ue):void 0,state:u,startedAt:t.startedAt,endedAt:t.endedAt,durationMs:k,tools:{total:t.toolCalls.length+(t.droppedToolCalls??0),failed:a,top:d},subagents:s,usdTotal:b>0?b:void 0,worktreeBadge:this.badge(t.worktreePath,n)||void 0,worktreePath:t.worktreePath,promptFull:t.promptText||void 0,permissionMode:t.permissionMode,promptChars:t.promptStats?.chars,promptWords:t.promptStats?.words,hasAttachments:t.promptStats?.hasAttachments,models:M(R(t.requests.map(m=>m.model))),requests:t.requests.length||void 0,tokens:t.requests.length>0?S:void 0,cost:t.requests.length>0?$:void 0,cache:t.requests.length>0?T:void 0,toolStats:M(g),mcpServers:M(R(t.toolCalls.map(m=>m.mcpServer))),skills:M(R(t.toolCalls.map(m=>m.skill))),permissions:Qe(t)}}buildSubagent(t,n,r,o){let s=t.endedAt!==void 0&&t.agentType!==""&&n.toolCalls.some(u=>u.agentType===t.agentType&&!u.ok),i;t.startedAt!==void 0&&t.endedAt===void 0&&o?i="running":s?i="failed":i="completed";let a,d;if(t.tokens){a={input:t.tokens.input,output:t.tokens.output,cacheRead:t.tokens.cache_read,cacheWrite:t.tokens.cache_write};let u=a.cacheRead+a.input;d={hitRate:u>0?a.cacheRead/u:void 0,readTokens:a.cacheRead,writeTokens:a.cacheWrite}}return{agentId:t.agentId,agentType:t.agentType||"subagent",state:i,durationMs:t.durationMs,usdTotal:t.usdTotal,model:t.model,worktreeBadge:this.badge(t.worktreePath,r)||void 0,worktreePath:t.worktreePath,requests:t.requests,concurrent:t.concurrent,orphanStop:t.orphanStop,tokens:a,cache:d}}badge(t,n){return t!==void 0&&t!==""&&t!==n.baseWorktreePath}};var he=`
+:root {
+  --ink: var(--vscode-editor-foreground, #ccc);
+  --paper: var(--vscode-editor-background, #1e1e1e);
+  --muted: var(--vscode-descriptionForeground, #8b8b8b);
+  --hairline: color-mix(in srgb, var(--vscode-panel-border, #333) 70%, transparent);
+  --accent: var(--vscode-textLink-foreground, #4daafc);
+  --good: var(--vscode-charts-green, #89d185);
+  --bad: var(--vscode-charts-red, #f14c4c);
+  --warn: var(--vscode-charts-yellow, #cca700);
+  --agent: var(--vscode-charts-purple, #a78bfa);
+  --box: var(--vscode-textCodeBlock-background, #262626);
+  --wire: color-mix(in srgb, var(--vscode-panel-border, #444) 90%, transparent);
+}
+* { box-sizing: border-box; }
+body {
+  font-family: var(--vscode-font-family, -apple-system, "Segoe UI", sans-serif);
+  color: var(--ink);
+  background: var(--paper);
+  margin: 0;
+  padding: 0 1.5rem 4rem;
+  line-height: 1.5;
+}
+code, .mono { font-family: var(--vscode-editor-font-family, Menlo, Consolas, monospace); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 0.85em; }
+
+/* ---- toolbar (mirrors the stream panel) ---- */
+.toolbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.55rem 0;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(6px);
+  border-bottom: 1px solid var(--hairline);
+}
+.toolbar-spacer { flex: 1; }
+.toolbar label { font-size: 0.78rem; color: var(--muted); }
+select.picker {
+  font: inherit; font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  border: 1px solid var(--hairline);
+  border-radius: 3px; padding: 0.15rem 0.4rem;
+  max-width: 24rem;
+}
+button.tb {
+  font: inherit; font-size: 0.78rem;
+  color: var(--vscode-button-secondaryForeground, var(--ink));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 3px; padding: 0.15rem 0.6rem; cursor: pointer;
+}
+button.tb:hover { background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.15)); }
+
+/* ---- header ---- */
+h1 { font-size: 1.05rem; margin: 1rem 0 0.15rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.header-meta { display: flex; gap: 0.9rem; flex-wrap: wrap; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.4rem; }
+
+/* Live dot: the session-level heartbeat. */
+.dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); }
+.dot.live { background: var(--good); animation: breathe 1.6s ease-in-out infinite; }
+.live-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.live-label.on { color: var(--good); }
+
+.pill { display: inline-block; font-size: 0.72rem; padding: 0.05rem 0.45rem; border-radius: 0.6rem;
+        background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #fff); }
+.pill.worktree { background: color-mix(in srgb, var(--accent) 25%, transparent); color: var(--accent); border: 1px solid var(--accent); }
+
+/* ---- two-column layout: graph left, resizable detail right ---- */
+.layout { display: flex; align-items: flex-start; }
+.graph-col { flex: 1; min-width: 0; padding-right: 0.4rem; }
+.detail-col {
+  width: 24rem; flex: 0 0 24rem;
+  position: sticky; top: 3rem;
+  max-height: calc(100vh - 4rem); overflow-y: auto;
+  padding: 0.2rem 0 1rem 1.2rem;
+  font-size: 0.85rem;
+}
+/* Drag handle between the columns; a hairline that thickens on hover/drag. */
+.divider {
+  flex: 0 0 auto; align-self: stretch;
+  width: 9px; margin: 0 -1px; cursor: col-resize;
+  position: relative; z-index: 6;
+  background: transparent;
+}
+.divider::before {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px;
+  background: var(--hairline);
+}
+.divider:hover::before, body.pc-graph-resizing .divider::before { width: 2px; background: var(--accent); }
+body.pc-graph-resizing { cursor: col-resize; user-select: none; }
+@media (max-width: 62rem) {
+  .layout { flex-direction: column; }
+  .divider { display: none; }
+  .detail-col { width: 100% !important; flex: 0 0 auto !important; position: static; max-height: none;
+                border-top: 1px solid var(--hairline); padding: 1rem 0 0; }
+}
+
+/* ---- detail panel ---- */
+.detail-hint { color: var(--muted); font-style: italic; padding-top: 0.6rem; }
+.detail-title {
+  font-weight: 600; font-size: 0.95rem; margin: 0.2rem 0 0.6rem;
+  word-break: break-word; line-height: 1.35;
+}
+.dsec { margin: 0 0 0.9rem; }
+.dsec > h3 {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 0.35rem; padding-bottom: 0.2rem;
+  border-bottom: 1px solid var(--hairline);
+}
+.kv { display: flex; justify-content: space-between; gap: 0.8rem; padding: 0.12rem 0; align-items: baseline; }
+.kv.col { flex-direction: column; align-items: stretch; gap: 0.25rem; }
+.kv .k { color: var(--muted); white-space: nowrap; }
+.kv .v { text-align: right; word-break: break-word; }
+.kv .k.bad, .bad { color: var(--bad); }
+
+.prompt-box {
+  background: var(--box); border: 1px solid var(--hairline); border-radius: 4px;
+  padding: 0.5rem 0.6rem; max-height: 12rem; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+  font-family: var(--vscode-editor-font-family, Menlo, monospace); font-size: 0.8rem;
+}
+
+/* token table: label \xB7 count \xB7 usd, cache rows tinted as "memory" */
+.tok-table { display: flex; flex-direction: column; gap: 0.1rem; }
+.tok-row { display: grid; grid-template-columns: 1fr auto auto; gap: 0.6rem; padding: 0.1rem 0; align-items: baseline; }
+.tok-row .tok-label { color: var(--muted); }
+.tok-row .tok-count { text-align: right; min-width: 5rem; }
+.tok-row .tok-usd { text-align: right; min-width: 4.5rem; color: var(--muted); }
+.tok-row.mem .tok-label { color: var(--accent); }
+.tok-row.total { border-top: 1px solid var(--hairline); margin-top: 0.15rem; padding-top: 0.25rem; font-weight: 600; }
+.tok-row.total .tok-label { color: var(--ink); }
+
+.savings {
+  margin-top: 0.4rem; padding: 0.3rem 0.5rem; border-radius: 4px;
+  background: color-mix(in srgb, var(--good) 15%, transparent);
+  color: var(--good); font-weight: 600; text-align: center;
+}
+
+/* detail tables (tools) */
+.dtable { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.dtable th { text-align: left; color: var(--muted); font-weight: 600; font-size: 0.72rem;
+             text-transform: uppercase; letter-spacing: 0.08em; padding: 0.15rem 0.3rem; }
+.dtable td { padding: 0.15rem 0.3rem; border-top: 1px solid var(--hairline); vertical-align: top; }
+.dtable th.num, .dtable td.num { text-align: right; white-space: nowrap; }
+.tool-anno { color: var(--agent); font-size: 0.9em; }
+
+/* ---- the tree ---- */
+.tree { position: relative; margin-top: 0.9rem; }
+svg.wires {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; overflow: visible;
+}
+svg.wires path { fill: none; stroke: var(--wire); stroke-width: 1.5; }
+svg.wires path[data-state="running"] { stroke: var(--accent); }
+
+.children { margin-left: 2.2rem; }
+
+/* ---- nodes: graphviz-style boxes ---- */
+.node {
+  position: relative;
+  background: var(--box);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 0.4rem 0.7rem;
+  margin: 0.55rem 0;
+  max-width: 46rem;
+  cursor: pointer;
+}
+.node:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--hairline)); }
+.node.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.node[data-state="running"] {
+  border-color: var(--accent);
+}
+.node[data-state="failed"] { border-color: var(--bad); }
+.node[data-state="interrupted"] { border-style: dashed; border-color: var(--warn); }
+
+/* The breathing: a soft pulse on anything currently running. */
+@media (prefers-reduced-motion: no-preference) {
+  .node[data-state="running"] {
+    animation: breathe-box 1.6s ease-in-out infinite;
+  }
+  @keyframes breathe-box {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent); }
+    50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}
+
+.node-row { display: flex; align-items: baseline; gap: 0.6rem; }
+.node-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.88rem; }
+.node-side { display: flex; gap: 0.7rem; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.node-side .usd { color: var(--ink); }
+
+.node.session { border-width: 1.5px; max-width: 46rem; }
+.node.session .node-label { font-weight: 600; }
+
+.node.turn .glyph { color: var(--accent); }
+.node.turn[data-state="failed"] .glyph { color: var(--bad); }
+.node.turn[data-state="interrupted"] .glyph { color: var(--warn); }
+.turn-tag { font-size: 0.72rem; padding: 0.02rem 0.4rem; border-radius: 0.5rem; }
+.turn-tag.interrupted { color: var(--warn); border: 1px solid var(--warn); }
+.turn-tag.failed { color: var(--bad); border: 1px solid var(--bad); }
+
+/* Tool chips: aggregated per turn ("Read \xD712"). */
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.chip {
+  font-size: 0.74rem; padding: 0.05rem 0.45rem; border-radius: 0.5rem;
+  background: var(--vscode-badge-background, #4d4d4d); color: var(--vscode-badge-foreground, #fff);
+}
+.chip.failed { background: color-mix(in srgb, var(--bad) 30%, transparent); color: var(--bad); }
+
+.node.agent { border-left: 3px solid var(--agent); max-width: 42rem; }
+.node.agent .glyph { color: var(--agent); }
+.node.agent[data-state="running"] { border-color: var(--accent); border-left-color: var(--agent); }
+
+.state-dot { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%; margin-right: 0.15rem; vertical-align: 0.05rem; }
+.state-dot[data-state="running"] { background: var(--accent); animation: breathe 1.6s ease-in-out infinite; }
+.state-dot[data-state="completed"] { background: var(--good); }
+.state-dot[data-state="failed"] { background: var(--bad); }
+.state-dot[data-state="interrupted"] { background: var(--warn); }
+
+/* "N earlier turns" stub. */
+.stub { font-size: 0.78rem; color: var(--muted); margin: 0.55rem 0; padding-left: 0.2rem; }
+
+/* ---- empty state / footer ---- */
+.empty { margin-top: 1.2rem; }
+footer { margin-top: 1.4rem; font-size: 0.8rem; color: var(--muted); }
+`;var Ze={"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"};function c(e){return e.replace(/[&<>"']/g,t=>Ze[t])}function et(e){return e.length>12?`\u2026${e.slice(-8)}`:e}function tt(e){let t=e.replace(/[\\/]+$/,""),n=Math.max(t.lastIndexOf("/"),t.lastIndexOf("\\"));return n>=0?t.slice(n+1):t}function O(e){return e===void 0||e<=0?"":e<.01?"<$0.01":`$${e.toFixed(2)}`}function x(e){return e===void 0?"\u2014":e===0?"$0":e<1e-4?"<$0.0001":`$${e.toFixed(4)}`}function C(e){return e===void 0?"\u2014":e.toLocaleString("en-US")}function nt(e){return e===void 0?"\u2014":`${Math.round(e*100)}%`}function I(e){if(e===void 0||e<0)return"";let t=Math.round(e/1e3);if(t<60)return`${t}s`;let n=Math.floor(t/60);return n<60?`${n}m ${t%60}s`:`${Math.floor(n/60)}h ${n%60}m`}function ge(e,t){let n=Math.max(0,Math.round((t-e)/1e3));if(n<60)return`${n}s ago`;let r=Math.floor(n/60);if(r<60)return`${r}m ago`;let o=Math.floor(r/60);return o<24?`${o}h ago`:`${Math.floor(o/24)}d ago`}function K(e){return e?` <span class="pill worktree" title="${c(e)}">\u2442 ${c(tt(e))}</span>`:""}function N(e,t,n=""){if(!t)return"";let r=n?` title="${c(n)}"`:"";return`<span class="${e} mono"${r}>${c(t)}</span>`}function rt(e){let t=e.sessions.map(r=>{let o=r.live?"\u25CF ":"",s=r.repo?` \u2014 ${r.repo}${r.branch?` @ ${r.branch}`:""}`:"",i=r.key===e.selectedKey?" selected":"";return`<option value="${c(r.key)}"${i}>${c(`${o}${r.tool||"session"} ${et(r.key)}${s}`)}</option>`}).join("");return`<nav class="toolbar">
+    ${e.sessions.length?`<label for="picker">session</label>
+       <select id="picker" class="picker" data-picker>${t}</select>`:""}
+    <span class="toolbar-spacer"></span>
+    <button type="button" class="tb" data-cmd="refresh" title="Reload this panel to pick up an extension update \u2014 no window reload">\u21BB Refresh</button>
+  </nav>`}function ot(e,t){let n=e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session",r=e.live?'<span class="dot live"></span><span class="live-label on">live</span>':e.ended?'<span class="dot"></span><span class="live-label">ended</span>':'<span class="dot"></span><span class="live-label">idle</span>',o=[];e.tool&&o.push(c(e.tool)),e.model&&o.push(c(e.model));let s=e.turns.length+e.droppedTurns;o.push(`${s} turn${s===1?"":"s"}`);let i=O(e.usdTotal);return i&&o.push(`${i} total`),o.push(c(ge(e.lastActivity,t))),`<h1>${c(n)} ${r}${K(e.worktreePath)}</h1>
+  <div class="header-meta">${o.map(a=>`<span>${a}</span>`).join("")}</div>`}function st(e){if(e.tools.total===0)return"";let t=e.tools.top.map(r=>{let o=r.failed>0?" failed":"",s=r.count>1?`${r.name} \xD7${r.count}`:r.name;return`<span class="chip${o}">${c(s)}</span>`}),n=e.tools.top.reduce((r,o)=>r+o.count,0);return e.tools.total>n&&t.push(`<span class="chip">+${e.tools.total-n} more</span>`),`<div class="chips">${t.join("")}</div>`}function it(e,t,n){let r=[N("dur",I(e.durationMs)),N("usd",O(e.usdTotal)),e.model?N("model",e.model):""].join(""),o=`a:${t}:${e.agentId||e.agentType}`;return`<div class="node agent${J(o,n)}" data-node="${c(o)}" data-state="${e.state}">
+    <div class="node-row">
+      <span class="node-label"><span class="state-dot" data-state="${e.state}"></span> <span class="glyph">\u25C9</span> ${c(e.agentType)}${K(e.worktreeBadge?e.worktreePath:void 0)}</span>
+      <span class="node-side">${r}</span>
+    </div>
+  </div>`}function J(e,t){return e===t?" selected":""}function be(e){return e.promptText?e.promptText:e.kind==="preamble"?"(session setup)":"(uncaptured turn)"}function at(e,t){let r=[e.state==="interrupted"?'<span class="turn-tag interrupted">interrupted</span>':e.state==="failed"?'<span class="turn-tag failed">failed</span>':"",N("dur",I(e.durationMs)),N("usd",O(e.usdTotal))].join(""),o=e.subagents.map(i=>it(i,e.id,t)).join(""),s=o?`<div class="children" data-parent="t:${c(e.id)}">${o}</div>`:"";return`<div class="node turn${J(`t:${e.id}`,t)}" data-node="t:${c(e.id)}" data-state="${e.state}" title="${c(e.promptText??"")}">
+    <div class="node-row">
+      <span class="node-label"><span class="state-dot" data-state="${e.state}"></span> <span class="glyph">\u25B6</span> ${c(be(e))}</span>
+      <span class="node-side">${r}</span>
+    </div>
+    ${st(e)}
+  </div>
+  ${s}`}function dt(e,t){let n=e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session",r=[N("usd",O(e.usdTotal))].join(""),o=e.droppedTurns>0?`<div class="stub">\u2026 ${e.droppedTurns} earlier turn${e.droppedTurns===1?"":"s"} (full history in <code>~/.promptconduit/events.jsonl</code>)</div>`:"",s=e.live?"running":"completed";return`<div id="tree" class="tree">
+    <svg class="wires" aria-hidden="true"></svg>
+    <div class="node session${J("session",t)}" data-node="session" data-state="${s}">
+      <div class="node-row">
+        <span class="node-label"><span class="state-dot" data-state="${e.live?"running":"completed"}"></span> ${c(n)}${K(e.worktreePath)}</span>
+        <span class="node-side">${r}</span>
+      </div>
+    </div>
+    <div class="children" data-parent="session">
+      ${o}
+      ${e.turns.map(i=>at(i,t)).join("")}
+    </div>
+  </div>`}function p(e,t){return!t||t==="\u2014"?"":`<div class="kv"><span class="k">${c(e)}</span><span class="v">${t}</span></div>`}function v(e,t){return t.trim()?`<section class="dsec"><h3>${c(e)}</h3>${t}</section>`:""}function ve(e,t){if(!t||t.length===0)return"";let n=t.map(r=>`<span class="chip">${c(r)}</span>`).join("");return`<div class="kv col"><span class="k">${c(e)}</span><div class="chips">${n}</div></div>`}function Y(e,t){if(!e)return"";let n=e.input+e.output+e.cacheRead+e.cacheWrite,r=(o,s,i,a="")=>`<div class="tok-row ${a}">
+       <span class="tok-label">${c(o)}</span>
+       <span class="tok-count mono">${C(s)}</span>
+       <span class="tok-usd mono">${t?x(i):""}</span>
+     </div>`;return`<div class="tok-table">
+    ${r("Input (fresh)",e.input,t?.input)}
+    ${r("Output",e.output,t?.output)}
+    ${r("Cache read",e.cacheRead,t?.cacheRead,"mem")}
+    ${r("Cache write",e.cacheWrite,t?.cacheWrite,"mem")}
+    <div class="tok-row total">
+      <span class="tok-label">Total</span>
+      <span class="tok-count mono">${C(n)}</span>
+      <span class="tok-usd mono">${t?x(t.total):""}</span>
+    </div>
+  </div>`}function Q(e){if(!e||e.readTokens===0&&e.writeTokens===0)return"";let t=e.savingsUsd!==void 0&&e.savingsUsd>0?`<div class="savings">\u2248 ${c(x(e.savingsUsd))} saved by prompt cache</div>`:"";return`${p("Cache hit rate",nt(e.hitRate))}
+    ${p("Read from cache",`${C(e.readTokens)} tok`)}
+    ${p("Written to cache",`${C(e.writeTokens)} tok`)}
+    ${t}`}function ke(e){return!e||e.length===0?"":`<table class="dtable">
+    <thead><tr><th>Tool</th><th class="num">Calls</th><th class="num">Fail</th><th class="num">Time</th></tr></thead>
+    <tbody>${e.map(n=>{let r=n.mcpServer?`${n.name} <span class="tool-anno">${c(n.mcpServer)}</span>`:n.skill?`${n.name} <span class="tool-anno">skill:${c(n.skill)}</span>`:c(n.name),o=n.failed>0?`<span class="bad">${n.failed}</span>`:"0",s=n.totalMs!==void 0?I(n.totalMs):"";return`<tr><td>${r}</td><td class="num mono">${n.count}</td><td class="num mono">${o}</td><td class="num mono">${c(s)}</td></tr>`}).join("")}</tbody>
+  </table>`}function ct(e){return!e||e.length===0?"":e.map(n=>{let r=n.toolName?` \xB7 ${c(n.toolName)}`:"";return`<div class="kv"><span class="k ${/deni/i.test(n.decision)?"bad":""}">${c(n.decision)}</span><span class="v">${r}</span></div>`}).join("")}function lt(e,t){let n=p("Repo",c(e.repo??"\u2014"))+p("Branch",c(e.branch??"\u2014"))+p("Tool",c(e.tool||"\u2014"))+ve("Models",e.models)+p("Directory",e.cwd?c(e.cwd):"")+p("Host",e.host?c(e.host):"")+p("OS",e.os?c(`${e.os}${e.arch?` \xB7 ${e.arch}`:""}`):"")+p("Worktree",e.worktreePath?c(e.worktreePath):""),r=p("Status",e.live?"live":e.ended?"ended":"idle")+p("Started",Se(e.startedAt))+p("Active",I(e.durationMs))+p("Last event",ge(e.lastActivity,t))+p("Turns",C(e.turns.length+e.droppedTurns));return`<div class="detail-title">${c(mt(e))}</div>
+    ${v("Session",n)}
+    ${v("Timing",r)}
+    ${v("Cost",we(e.usdTotal,e.cost))}
+    ${v("Tokens",Y(e.tokens,e.cost))}
+    ${v("Memory (prompt cache)",Q(e.cache))}
+    ${v("Tools",ke(e.toolStats))}
+    ${W("MCP servers",e.mcpServers)}
+    ${W("Skills",e.skills)}`}function ut(e,t){let n=p("State",ye(e.state))+p("Mode",e.permissionMode?c(e.permissionMode):"")+p("Started",Se(e.startedAt))+p("Duration",I(e.durationMs))+ve("Models",e.models)+p("Requests",e.requests!==void 0?C(e.requests):"")+p("Prompt size",e.promptChars!==void 0?`${C(e.promptChars)} chars \xB7 ${C(e.promptWords)} words`:"")+p("Attachments",e.hasAttachments?"yes":""),r=e.promptFull?`<div class="prompt-box">${c(e.promptFull)}</div>`:"",o=e.subagents.length>0?e.subagents.map(s=>`<div class="kv"><span class="k">${c(s.agentType)}</span><span class="v mono">${c([I(s.durationMs),O(s.usdTotal)].filter(Boolean).join(" \xB7 "))}</span></div>`).join(""):"";return`<div class="detail-title">\u25B6 ${c(be(e))}</div>
+    ${r?v("Prompt",r):""}
+    ${v("Turn",n)}
+    ${v("Cost",we(e.usdTotal,e.cost))}
+    ${v("Tokens",Y(e.tokens,e.cost))}
+    ${v("Memory (prompt cache)",Q(e.cache))}
+    ${v("Tools",ke(e.toolStats))}
+    ${W("MCP servers",e.mcpServers)}
+    ${W("Skills",e.skills)}
+    ${v(`Subagents (${e.subagents.length})`,o)}
+    ${v("Permissions",ct(e.permissions))}`}function pt(e){let t=p("Type",c(e.agentType))+p("State",ye(e.state))+p("Model",e.model?c(e.model):"")+p("Duration",I(e.durationMs))+p("Requests",e.requests!==void 0?C(e.requests):"")+p("Ran alongside",e.concurrent!==void 0&&e.concurrent>1?`${e.concurrent} agents`:"")+p("Worktree",e.worktreeBadge&&e.worktreePath?c(e.worktreePath):"")+p("Agent id",`<span class="mono small">${c(e.agentId)}</span>`)+(e.orphanStop?p("Note","start not captured (duration estimated)"):"");return`<div class="detail-title">\u25C9 ${c(e.agentType)}</div>
+    ${v("Subagent",t)}
+    ${v("Cost",p("Total",x(e.usdTotal)))}
+    ${v("Tokens",Y(e.tokens,void 0))}
+    ${v("Memory (prompt cache)",Q(e.cache))}`}function we(e,t){let n=p("Total",x(e));if(!t)return n;let r=(e??t.total)-t.total;return n+p("Input",x(t.input))+p("Output",x(t.output))+p("Cache read",x(t.cacheRead))+p("Cache write",x(t.cacheWrite))+(r>1e-4?p("Subagents",x(r)):"")}function W(e,t){return!t||t.length===0?"":v(e,`<div class="chips">${t.map(n=>`<span class="chip">${c(n)}</span>`).join("")}</div>`)}function ye(e){return`<span class="state-dot" data-state="${c(e)}"></span> ${c(e)}`}function mt(e){return e.repo?`${e.repo}${e.branch?` @ ${e.branch}`:""}`:e.tool||"session"}function Se(e){if(!e)return"\u2014";let t=new Date(e);return Number.isNaN(t.getTime())?e:t.toLocaleTimeString()}function ft(e,t,n){let r=e.session,o='<div class="detail-hint">Click any node \u2014 the session, a turn, or a subagent \u2014 to inspect its full detail: prompt, tokens, cost, cache/memory savings, every tool call.</div>';if(!r||!n)return o;if(n==="session")return lt(r,t);for(let s of r.turns){if(`t:${s.id}`===n)return ut(s,t);for(let i of s.subagents)if(`a:${s.id}:${i.agentId||i.agentType}`===n)return pt(i)}return o}function ht(e){return e.logDisabled?`<div class="empty muted">
+    <p>The local event log is <strong>disabled</strong> (<code>PROMPTCONDUIT_EVENT_LOG=0</code>).</p>
+    <p>Unset that variable and restart your AI tool to start streaming events.</p>
+  </div>`:`<div class="empty muted">
+    <p>No sessions yet. Run an AI coding session (Claude Code or a Cursor agent) with the
+    <code>promptconduit</code> CLI hooks installed and it will appear here, growing live \u2014
+    prompts, tools, subagents, worktrees.</p>
+    <p>Waiting on <code>~/.promptconduit/events.jsonl</code>\u2026</p>
+  </div>`}function _e(e,t=Date.now(),n){let r=e.session?`<div class="layout">
+        <div class="graph-col">${ot(e.session,t)}${dt(e.session,n)}</div>
+        <div class="divider" data-divider role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+        <aside class="detail-col">${ft(e,t,n)}</aside>
+      </div>`:ht(e);return`${rt(e)}
+  ${r}
+  <footer>
+    Read straight from the local log on your machine. None of your data is sent anywhere.
+  </footer>`}function $e(e){let t=e.querySelector("svg.wires");if(!t)return;let n=e.getBoundingClientRect(),r=[];e.querySelectorAll("[data-parent]").forEach(o=>{let s=o.dataset.parent,i=e.querySelector(`[data-node="${gt(s)}"]`);if(!i)return;let a=i.getBoundingClientRect(),d=a.left-n.left+16,u=a.bottom-n.top;o.querySelectorAll(":scope > [data-node]").forEach(f=>{let b=f.getBoundingClientRect(),k=b.left-n.left,S=b.top-n.top+b.height/2;if(S<=u||k<=d)return;let $=Math.min(6,k-d,S-u),T=`M ${d} ${u} V ${S-$} Q ${d} ${S} ${d+$} ${S} H ${k}`,g=f.dataset.state==="running"?' data-state="running"':"";r.push(`<path d="${T}"${g} />`)})}),t.innerHTML=r.join("")}function gt(e){let t=globalThis.CSS;return t?.escape?t.escape(e):e.replace(/["\\\]]/g,"\\$&")}var bt=16,vt=60,kt=30,Te="promptconduit.graph.detailPct",wt=992;function yt(){try{let e=window.localStorage?.getItem(Te),t=e?parseFloat(e):NaN;if(Number.isFinite(t))return Ee(t)}catch{}return kt}function St(e){try{window.localStorage?.setItem(Te,String(Math.round(e*10)/10))}catch{}}function Ee(e){return Math.min(vt,Math.max(bt,e))}function xe(e){let t,n,r=yt(),o=!1,s=0,i=()=>{let g=e.querySelector(".detail-col");g&&(g.style.flex=`0 0 ${r}vw`,g.style.width=`${r}vw`)},a=()=>{let g=e.querySelector("#tree");g&&$e(g)},d=()=>{if(!t)return;let g=document.scrollingElement??document.documentElement,m=g.scrollTop;e.innerHTML=_e(t,Date.now(),n),g.scrollTop=m,i(),a()},u={update(g){t=g,o||d()},dispose(){window.removeEventListener("resize",f),window.removeEventListener("pointermove",$),window.removeEventListener("pointerup",T),e.removeEventListener("change",b),e.removeEventListener("click",k),e.removeEventListener("pointerdown",S)}},f=()=>{i(),a()},b=g=>{let m=g.target.closest("select[data-picker]");m&&u.onPickSession?.(m.value)},k=g=>{let m=g.target;if(m.closest("button[data-cmd]")?.dataset.cmd==="refresh"){u.onRefresh?.();return}let A=m.closest("[data-node]");if(A){let y=A.dataset.node;n=n===y?void 0:y,d()}},S=g=>{!g.target.closest("[data-divider]")||window.innerWidth<wt||(o=!0,document.body.classList.add("pc-graph-resizing"),window.addEventListener("pointermove",$),window.addEventListener("pointerup",T),g.preventDefault())},$=g=>{if(!o)return;let m=(window.innerWidth-g.clientX)/window.innerWidth*100;r=Ee(m),s||(s=window.requestAnimationFrame(()=>{s=0,i(),a()}))},T=()=>{o&&(o=!1,document.body.classList.remove("pc-graph-resizing"),window.removeEventListener("pointermove",$),window.removeEventListener("pointerup",T),s&&(window.cancelAnimationFrame(s),s=0),St(r),d())};return window.addEventListener("resize",f),e.addEventListener("change",b),e.addEventListener("click",k),e.addEventListener("pointerdown",S),u}var _t=1e3,$t=5e3,Ce=document.createElement("style");Ce.textContent=he;document.head.appendChild(Ce);var Ae=document.createElement("div");document.body.appendChild(Ae);var Me=new F,ee=xe(Ae),Ie;ee.onPickSession=e=>{Ie=e,te()};ee.onRefresh=()=>{ne()};var Pe=0,Z=!1;function te(){let e={revision:Date.now(),logDisabled:!1,...Me.snapshot(Ie)};ee.update(e)}async function ne(){if(!Z){Z=!0;try{for(;;){let e=await fetch(`/api/events?after=${Pe}&limit=${$t}`);if(!e.ok)break;let t=await e.json();for(let n of t.lines){let r=oe(n);r&&Me.ingest(r)}if(Pe=t.cursor,te(),!t.more)break}}catch{}finally{Z=!1}}}te();ne();setInterval(()=>{ne()},_t);})();
+</script>
+</body>
+</html>

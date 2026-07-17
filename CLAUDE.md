@@ -164,6 +164,36 @@ the one it's running, offers a one-click **Reload Window** — a reload (not a r
 pty host survives and terminals running Claude Code keep their sessions. Keep the JSON field names in
 sync with `editor-extension/src/updatePrompt.ts`.
 
+## Live session graph (`promptconduit graph`)
+
+`promptconduit graph` serves a live, "breathing" Session Graph in the browser —
+one AI coding session as a tree of session → turns → subagents, updating in
+place as your agent works. Free-tier and editor-independent: it reads
+`~/.promptconduit/events.jsonl` locally, nothing is sent anywhere.
+
+**Decoupled by design — the graph LOGIC lives in exactly one place.** The
+rendering + state-building code is the editor-extension's *portable* TypeScript
+core (`src/graphPanel/sessionTree.ts` + `webview/graphPanel/{render,mount,…}` —
+zero vscode imports). Both the editor extension and this CLI consume it; neither
+owns it. `internal/graph/` is a thin **tail-and-serve** shell:
+
+- `internal/graph/server.go` — one `http.Server`: `GET /` serves the embedded
+  page, `GET /api/events?after=<n>&limit=<m>` returns new raw envelope lines.
+- `internal/graph/hub.go` — tails `events.jsonl` once (`outbound.Tail`) into an
+  in-memory ring; the browser polls `/api/events` and builds the graph itself.
+- `internal/graph/ui/graph.html` — the embedded page (`go:embed`), a
+  self-contained build of the portable core. Committed artifact (like the
+  `.vsix`); **not** in `dist/` (which `.gitignore` excludes).
+
+Refresh the embedded page after the graph's TypeScript changes:
+```bash
+make refresh-graph                       # uses ../editor-extension by default
+make refresh-graph EXTENSION_DIR=/path   # or point at a checkout
+```
+esbuild output is deterministic, so the **Refresh graph bundle** workflow
+(`.github/workflows/refresh-graph.yml`) byte-diffs the rebuilt page and opens a
+PR when it changed — no version bookkeeping needed (unlike the `.vsix` refresh).
+
 ## Key Design Decisions
 
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
