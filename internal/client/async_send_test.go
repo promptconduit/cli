@@ -66,7 +66,29 @@ func buildCLI(t *testing.T) string {
 // HOME (so the event log lands in a temp dir) and a config pointing at srvURL.
 func asyncHookEnv(t *testing.T, srvURL string) (home string, env []string) {
 	t.Helper()
-	home = t.TempDir()
+	// Deliberately NOT t.TempDir(): its automatic RemoveAll runs the moment the
+	// test returns, but the DETACHED sender child keeps writing status.json /
+	// events.jsonl into home for a beat after the server has the body — that
+	// race surfaces as a flaky "unlinkat …: directory not empty" cleanup
+	// failure. Use a manual dir with a retrying cleanup that lets the child
+	// quiesce first.
+	dir, err := os.MkdirTemp("", "pc-asynchome")
+	if err != nil {
+		t.Fatalf("mkdir temp home: %v", err)
+	}
+	home = dir
+	t.Cleanup(func() {
+		// The child finishes within ~a second; retry RemoveAll until it wins.
+		for i := 0; i < 60; i++ {
+			if err := os.RemoveAll(home); err == nil {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if err := os.RemoveAll(home); err != nil {
+			t.Logf("temp home cleanup (async child still writing?): %v", err)
+		}
+	})
 
 	xdg := filepath.Join(home, ".config")
 	cfgDir := filepath.Join(xdg, ConfigDirName)
