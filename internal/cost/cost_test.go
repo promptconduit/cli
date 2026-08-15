@@ -51,6 +51,28 @@ func TestResolvePrice(t *testing.T) {
 		t.Fatal("composer-2.5-fast must not resolve to the Standard rate")
 	}
 
+	// Claude 5 and Cursor Grok models.
+	if _, ok := tbl.ResolvePrice("claude-sonnet-5"); !ok {
+		t.Fatal("claude-sonnet-5 should resolve")
+	}
+	if _, ok := tbl.ResolvePrice("claude-sonnet-5-thinking-high"); !ok {
+		t.Fatal("claude-sonnet-5-thinking-high should resolve via suffix trim")
+	}
+	grokFast, ok := tbl.ResolvePrice("cursor-grok-4.6-high-fast")
+	if !ok {
+		t.Fatal("cursor-grok-4.6-high-fast should resolve via alias")
+	}
+	grokStd, ok := tbl.ResolvePrice("cursor-grok-4.6")
+	if !ok {
+		t.Fatal("cursor-grok-4.6 should resolve")
+	}
+	if grokFast.Input != 0.000004 || grokStd.Input != 0.000002 {
+		t.Fatalf("grok rates wrong: fast=%v std=%v", grokFast.Input, grokStd.Input)
+	}
+	if grokFast.Input == grokStd.Input {
+		t.Fatal("cursor-grok-4.6-high-fast must not resolve to the standard rate")
+	}
+
 	// Unknown model must report not-priced, not panic or guess.
 	if _, ok := tbl.ResolvePrice("some-other-llm-9"); ok {
 		t.Fatal("unknown model should not resolve")
@@ -276,8 +298,8 @@ func TestSessionSummaryToolAggregation(t *testing.T) {
 func TestParseCursorHookPayload(t *testing.T) {
 	tbl := mustTable(t)
 
-	// composer-2.5-fast is priced from Cursor's published input/output rates
-	// ($3/$15 per M); Cursor publishes no cache rate, so cache_read is priced 0.
+	// composer-2.5-fast is priced from Cursor's published input/output/cache-read
+	// rates ($3/$15/$0.50 per M); cache_write is priced at 0.
 	composer := []byte(`{"hook_event_name":"afterAgentResponse","model":"composer-2.5-fast","conversation_id":"conv1","generation_id":"gen1","session_id":"conv1","input_tokens":17072,"output_tokens":92,"cache_read_tokens":6048,"cache_write_tokens":0,"workspace_roots":["/Users/x/tolken"]}`)
 	ev, cwd, ok := ParseCursorHookPayload(composer, tbl)
 	if !ok {
@@ -289,7 +311,7 @@ func TestParseCursorHookPayload(t *testing.T) {
 	if !ev.ModelPriced {
 		t.Fatal("composer-2.5-fast should be priced")
 	}
-	const wantComposer = 17072*3e-6 + 92*15e-6 // cache_read priced at 0 (no Cursor cache rate)
+	const wantComposer = 17072*3e-6 + 92*15e-6 + 6048*5e-7
 	if math.Abs(ev.Cost.Total-wantComposer) > 1e-9 {
 		t.Fatalf("composer cost = %v, want %v", ev.Cost.Total, wantComposer)
 	}

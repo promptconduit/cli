@@ -58,6 +58,10 @@ var modelAliases = map[string]string{
 	"composer-1":            "cursor-composer-1",
 	"claude-4.5-sonnet":     "claude-sonnet-4-5",
 	"claude-4.5-opus":       "claude-opus-4-5",
+	// Cursor Grok fast slugs include effort + speed suffixes; suffix-trim would
+	// land on the cheaper standard rate without these aliases.
+	"cursor-grok-4.6-high-fast": "cursor-grok-4.6-fast",
+	"cursor-grok-4.5-high-fast": "cursor-grok-4.5-fast",
 }
 
 // LoadBundledPriceTable parses the embedded snapshot only. Tests use this for
