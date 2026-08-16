@@ -80,6 +80,29 @@ func TestResolvePrice(t *testing.T) {
 	if _, ok := tbl.ResolvePrice(""); ok {
 		t.Fatal("empty model should not resolve")
 	}
+
+	// composer-1 must price via the alias target (cli#127).
+	mp, ok := tbl.ResolvePrice("composer-1")
+	if !ok {
+		t.Fatal("composer-1 should resolve via cursor-composer-1 alias")
+	}
+	if mp.Input != 0.00000125 || mp.Output != 0.00001 {
+		t.Fatalf("composer-1 rates wrong: input=%v output=%v", mp.Input, mp.Output)
+	}
+}
+
+// TestModelAliasTargets asserts every alias maps to a real table key so dangling
+// aliases can't silently unprice sessions (cli#127).
+func TestModelAliasTargets(t *testing.T) {
+	tbl := mustTable(t)
+	for alias, target := range modelAliases {
+		if _, ok := tbl.models[target]; !ok {
+			t.Errorf("alias %q points at %q which is not in the pricing table", alias, target)
+		}
+		if _, ok := tbl.ResolvePrice(alias); !ok {
+			t.Errorf("alias %q should resolve through target %q", alias, target)
+		}
+	}
 }
 
 // TestResolvePrice_CurrentClaudeFamily pins every model in the current Claude
