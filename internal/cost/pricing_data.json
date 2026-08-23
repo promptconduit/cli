@@ -15,11 +15,11 @@
     "cache_read_input_token_cost": 0.000001
   },
   "claude-sonnet-5": {
-    "input_cost_per_token": 0.000003,
-    "output_cost_per_token": 0.000015,
-    "cache_creation_input_token_cost": 0.00000375,
-    "cache_creation_input_token_cost_1h": 0.000006,
-    "cache_read_input_token_cost": 0.0000003
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.00001,
+    "cache_creation_input_token_cost": 0.0000025,
+    "cache_creation_input_token_cost_1h": 0.000004,
+    "cache_read_input_token_cost": 0.0000002
   },
   "claude-opus-5": {
     "input_cost_per_token": 0.000005,
@@ -27,6 +27,20 @@
     "cache_creation_input_token_cost": 0.00000625,
     "cache_creation_input_token_cost_1h": 0.00001,
     "cache_read_input_token_cost": 0.0000005
+  },
+  "claude-opus-5-fast": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
+  },
+  "claude-opus-4-8-fast": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
   },
   "claude-opus-4-8": {
     "input_cost_per_token": 0.000005,
@@ -126,17 +140,64 @@
     "cache_read_input_token_cost": 0.00000026
   },
   "gpt-5.6-sol": {
+    "input_cost_per_token": 0.000004,
+    "output_cost_per_token": 0.00002,
+    "cache_creation_input_token_cost": 0.000005,
+    "cache_read_input_token_cost": 0.0000004
+  },
+  "gpt-5.6-terra": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012,
+    "cache_creation_input_token_cost": 0.0000025,
+    "cache_read_input_token_cost": 0.0000002
+  },
+  "gpt-5.6-luna": {
+    "input_cost_per_token": 0.0000002,
+    "output_cost_per_token": 0.0000012,
+    "cache_creation_input_token_cost": 0.00000025,
+    "cache_read_input_token_cost": 0.00000002
+  },
+  "gpt-5.5": {
     "input_cost_per_token": 0.000005,
     "output_cost_per_token": 0.00003,
-    "cache_creation_input_token_cost": 0.00000625,
     "cache_read_input_token_cost": 0.0000005
+  },
+  "gpt-5.4": {
+    "input_cost_per_token": 0.0000025,
+    "output_cost_per_token": 0.000015,
+    "cache_read_input_token_cost": 0.00000025
+  },
+  "gemini-2.5-flash": {
+    "input_cost_per_token": 0.0000003,
+    "output_cost_per_token": 0.0000025,
+    "cache_read_input_token_cost": 0.00000003
+  },
+  "gemini-3-flash": {
+    "input_cost_per_token": 0.0000005,
+    "output_cost_per_token": 0.000003,
+    "cache_read_input_token_cost": 0.00000005
+  },
+  "gemini-3-pro": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012,
+    "cache_read_input_token_cost": 0.0000002
+  },
+  "gemini-3.1-pro": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012,
+    "cache_read_input_token_cost": 0.0000002
+  },
+  "kimi-k2.7-code": {
+    "input_cost_per_token": 0.00000095,
+    "output_cost_per_token": 0.000004,
+    "cache_read_input_token_cost": 0.00000019
   },
   "kimi-k3": {
     "input_cost_per_token": 0.000003,
     "output_cost_per_token": 0.000015,
     "cache_read_input_token_cost": 0.0000003
   },
-  "_cursor_comment": "Cursor first-party and third-party model rates from cursor.com/docs/models-and-pricing (2026-08-15). Composer/Grok publish cache-read only (no cache-write column). The exact -fast key must precede the prefix-trim fallback so it doesn't resolve to the cheaper standard rate; Grok fast slugs (cursor-grok-*-high-fast) are aliased in pricing.go.",
+  "_cursor_comment": "Cursor first-party and third-party model rates from cursor.com/docs/models-and-pricing (2026-08-23). Composer/Grok publish cache-read only (no cache-write column). The exact -fast key must precede the prefix-trim fallback so it doesn't resolve to the cheaper standard rate; Grok fast slugs (cursor-grok-*-high-fast) are aliased in pricing.go.",
   "cursor-grok-4.6-fast": {
     "input_cost_per_token": 0.000004,
     "output_cost_per_token": 0.000012,
@@ -149,7 +210,7 @@
   },
   "cursor-grok-4.5-fast": {
     "input_cost_per_token": 0.000004,
-    "output_cost_per_token": 0.000012,
+    "output_cost_per_token": 0.000018,
     "cache_read_input_token_cost": 0.000001
   },
   "cursor-grok-4.5": {
