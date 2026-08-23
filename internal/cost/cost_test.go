@@ -119,7 +119,8 @@ func TestResolvePrice_CurrentClaudeFamily(t *testing.T) {
 		model     string
 		wantInput float64 // USD per input token
 	}{
-		{"claude-sonnet-5", 0.000003},
+		{"claude-sonnet-5", 0.000002},
+		{"claude-opus-5", 0.000005},
 		{"claude-fable-5", 0.00001},
 		{"claude-mythos-5", 0.00001},
 		{"claude-opus-4-8", 0.000005},
@@ -520,7 +521,7 @@ func TestLoadPriceTableMerge(t *testing.T) {
 
 	cache := `{
       "claude-opus-4-8": {"input_cost_per_token": 0.999, "output_cost_per_token": 0.999},
-      "gpt-5.5": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008},
+      "gpt-5.3-codex": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008},
       "text-embedding-x": {"input_cost_per_token": 0, "output_cost_per_token": 0}
     }`
 	path := CachedPricingPath()
@@ -542,7 +543,7 @@ func TestLoadPriceTableMerge(t *testing.T) {
 		t.Fatalf("curated opus rate should win; got %v ok=%v", opus.Input, ok)
 	}
 	// A model only in the cache is added.
-	gpt, ok := tbl.ResolvePrice("gpt-5.5")
+	gpt, ok := tbl.ResolvePrice("gpt-5.3-codex")
 	if !ok || gpt.Input != 0.000002 {
 		t.Fatalf("cache-only model should resolve; got %v ok=%v", gpt.Input, ok)
 	}
