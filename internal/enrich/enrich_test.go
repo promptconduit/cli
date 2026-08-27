@@ -70,6 +70,13 @@ func TestRun_EmptyIsNil(t *testing.T) {
 	}
 }
 
+func TestPromptEnricher_AppliesToCursorBeforeSubmit(t *testing.T) {
+	e := promptEnricher{}
+	if !e.Applies(&Context{HookEvent: "beforeSubmitPrompt"}) {
+		t.Fatal("prompt enricher must apply to beforeSubmitPrompt")
+	}
+}
+
 func TestPromptEnricher_CountsPerSession(t *testing.T) {
 	SetStateDirForTest(t.TempDir())
 	t.Cleanup(func() { SetStateDirForTest("") })

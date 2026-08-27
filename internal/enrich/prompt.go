@@ -28,7 +28,7 @@ func init() { Register(promptEnricher{}) }
 func (promptEnricher) Slug() string { return "prompt" }
 
 func (promptEnricher) Applies(ctx *Context) bool {
-	return ctx.HookEvent == "UserPromptSubmit"
+	return ctx.HookEvent == "UserPromptSubmit" || ctx.HookEvent == "beforeSubmitPrompt"
 }
 
 func (promptEnricher) Enrich(ctx *Context) (any, error) {
