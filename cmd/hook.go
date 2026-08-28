@@ -309,16 +309,39 @@ func getHookEventName(event map[string]interface{}) string {
 	return ""
 }
 
+// firstStringArrayEntry returns the first non-empty string in a JSON-decoded
+// array (Unmarshal into map[string]interface{} yields []interface{}).
+func firstStringArrayEntry(v interface{}) string {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, item := range arr {
+		if s, ok := item.(string); ok && s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // getWorkingDirectory extracts working directory from native event
 func getWorkingDirectory(event map[string]interface{}) string {
 	// Claude Code uses cwd
-	if cwd, ok := event["cwd"].(string); ok {
+	if cwd, ok := event["cwd"].(string); ok && cwd != "" {
 		return cwd
 	}
 
 	// Cursor might use workspace_dir
-	if dir, ok := event["workspace_dir"].(string); ok {
+	if dir, ok := event["workspace_dir"].(string); ok && dir != "" {
 		return dir
+	}
+
+	// Cursor agent hooks send workspace_roots (the open folder(s)), not cwd.
+	// Prefer that over os.Getwd(): the hook subprocess cwd is often whichever
+	// folder Cursor last launched from (e.g. a config repo), not the workspace
+	// the agent is actually editing — which then mis-tags git/vcs on every event.
+	if root := firstStringArrayEntry(event["workspace_roots"]); root != "" {
+		return root
 	}
 
 	// Fallback to current directory
