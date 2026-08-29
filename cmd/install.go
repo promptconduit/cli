@@ -33,6 +33,7 @@ Supported tools:
   - gemini-cli:  Gemini CLI                 (~/.gemini/settings.json; also accepts "gemini")
   - codex:       OpenAI Codex CLI           (~/.codex/hooks.json)
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
+  - grok:        Grok Build (xAI)           (~/.grok/hooks/promptconduit.json; also accepts "grok-build")
 
 The hooks capture events locally and realtime cost tracking works immediately.
 This is the Free tier: 100% local — every event is captured to
@@ -91,6 +92,7 @@ var installableTools = []struct{ name, label string }{
 	{"gemini-cli", "Gemini CLI"},
 	{"codex", "OpenAI Codex"},
 	{"copilot", "GitHub Copilot"},
+	{"grok", "Grok Build"},
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
@@ -166,6 +168,8 @@ func installTool(name, exePath string) error {
 		return installCodex(exePath)
 	case "copilot":
 		return installCopilot(exePath)
+	case "grok", "grok-build":
+		return installGrok(exePath)
 	default:
 		return fmt.Errorf("installation not implemented for: %s", name)
 	}
@@ -255,6 +259,9 @@ func parseToolSelection(input string) ([]string, error) {
 func normalizeToolName(s string) string {
 	if s == "gemini" {
 		return "gemini-cli"
+	}
+	if s == "grok-build" {
+		return "grok"
 	}
 	return s
 }
@@ -874,5 +881,95 @@ func buildCopilotHooks(hookCmd string) map[string]interface{} {
 		// System / errors
 		"notification":  makeMatcherCmd("*"),
 		"errorOccurred": makeCmd(),
+	}
+}
+
+// GrokHookFile is the basename we write into ~/.grok/hooks/. Grok reads
+// every *.json under that directory, so we own a dedicated file —
+// uninstall is a `rm` and idempotency is automatic.
+const GrokHookFile = "promptconduit.json"
+
+// installGrok registers our hook handler with Grok Build (xAI).
+//
+// Spec: https://docs.x.ai/build/features/hooks
+//
+// Grok also scans ~/.claude/settings.json and ~/.cursor/hooks.json. We
+// still write a native file so Grok-only users get capture, and we pass
+// `--tool grok` so attribution is correct even if the payload looks like
+// Claude's. Timeout is in seconds (default 5); we use 10.
+func installGrok(exePath string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	hooksDir := filepath.Join(homeDir, ".grok", "hooks")
+	settingsPath := filepath.Join(hooksDir, GrokHookFile)
+
+	hookCmd := fmt.Sprintf("%s hook --tool grok", exePath)
+	doc := map[string]interface{}{
+		"hooks": buildGrokHooks(hookCmd),
+	}
+
+	if err := os.MkdirAll(hooksDir, 0755); err != nil {
+		return fmt.Errorf("failed to create hooks directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal hooks: %w", err)
+	}
+
+	if err := os.WriteFile(settingsPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write hooks file: %w", err)
+	}
+
+	fmt.Println("✓ Installed PromptConduit hooks for Grok Build")
+	fmt.Printf("  %s\n", settingsPath)
+	fmt.Println()
+	fmt.Println("If you also install PromptConduit for Claude Code or Cursor, Grok may")
+	fmt.Println("fire those hooks too (it loads their config by default). Duplicate events")
+	fmt.Println("are tagged grok via GROK_* env; we do not disable Grok's compat scanners.")
+	fmt.Println()
+	fmt.Println("Optional — sync events to the PromptConduit platform:")
+	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+
+	return nil
+}
+
+// buildGrokHooks registers every documented Grok Build hook event.
+// Config keys are PascalCase; stdin payloads use camelCase fields and
+// snake_case hookEventName values. Matchers are omitted (match everything).
+func buildGrokHooks(hookCmd string) map[string]interface{} {
+	plainEvent := func() []map[string]interface{} {
+		return []map[string]interface{}{
+			{
+				"hooks": []map[string]interface{}{
+					{
+						"type":    "command",
+						"command": hookCmd,
+						"timeout": 10,
+					},
+				},
+			},
+		}
+	}
+
+	return map[string]interface{}{
+		"SessionStart":       plainEvent(),
+		"SessionEnd":         plainEvent(),
+		"UserPromptSubmit":   plainEvent(),
+		"PreToolUse":         plainEvent(),
+		"PostToolUse":        plainEvent(),
+		"PostToolUseFailure": plainEvent(),
+		"PermissionDenied":   plainEvent(),
+		"Stop":               plainEvent(),
+		"StopFailure":        plainEvent(),
+		"StopCancelled":      plainEvent(),
+		"Notification":       plainEvent(),
+		"SubagentStart":      plainEvent(),
+		"SubagentStop":       plainEvent(),
+		"PreCompact":         plainEvent(),
+		"PostCompact":        plainEvent(),
 	}
 }
