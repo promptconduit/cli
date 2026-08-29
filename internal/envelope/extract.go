@@ -9,6 +9,7 @@ package envelope
 //   - cursor: session_id (conversation_id fallback) + generation_id as the
 //     prompt-scoped id — it identifies one generation, the closest Cursor
 //     equivalent of a prompt id
+//   - grok: sessionId + promptId (camelCase; prompt_id accepted as fallback)
 //   - anything else: the generic session_id / sessionId keys
 func ExtractIDs(tool string, rawEvent map[string]interface{}) (sessionID, promptID string) {
 	sessionID = firstString(rawEvent, "session_id", "sessionId")
@@ -19,6 +20,8 @@ func ExtractIDs(tool string, rawEvent map[string]interface{}) (sessionID, prompt
 			sessionID = firstString(rawEvent, "conversation_id")
 		}
 		promptID = firstString(rawEvent, "generation_id")
+	case "grok":
+		promptID = firstString(rawEvent, "promptId", "prompt_id")
 	default:
 		promptID = firstString(rawEvent, "prompt_id")
 	}

@@ -32,6 +32,7 @@ Supported tools:
   - Gemini CLI
   - Codex
   - GitHub Copilot
+  - Grok Build
 
 Get started:
   1. Install: curl -fsSL https://promptconduit.dev/install | bash

@@ -6,6 +6,9 @@ import (
 )
 
 func TestDetectTool(t *testing.T) {
+	t.Setenv("GROK_HOOK_EVENT", "")
+	t.Setenv("GROK_SESSION_ID", "")
+
 	tests := []struct {
 		name  string
 		event map[string]interface{}
@@ -34,6 +37,11 @@ func TestDetectTool(t *testing.T) {
 			want:  "gemini-cli",
 		},
 		{
+			name:  "grok native hookEventName",
+			event: map[string]interface{}{"hookEventName": "pre_tool_use", "sessionId": "abc-123"},
+			want:  "grok",
+		},
+		{
 			name:  "unknown generic event",
 			event: map[string]interface{}{"event": "something"},
 			want:  "unknown",
@@ -44,6 +52,41 @@ func TestDetectTool(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := detectTool(tt.event); got != tt.want {
 				t.Errorf("detectTool() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetectTool_GrokEnv(t *testing.T) {
+	t.Setenv("GROK_HOOK_EVENT", "pre_tool_use")
+	t.Setenv("GROK_SESSION_ID", "sess-1")
+	got := detectTool(map[string]interface{}{"hook_event_name": "PreToolUse"})
+	if got != "grok" {
+		t.Errorf("detectTool() = %q, want grok (GROK_* env overrides Claude payload)", got)
+	}
+}
+
+func TestGetHookEventName(t *testing.T) {
+	tests := []struct {
+		name  string
+		event map[string]interface{}
+		want  string
+	}{
+		{
+			name:  "claude hook_event_name",
+			event: map[string]interface{}{"hook_event_name": "PreToolUse"},
+			want:  "PreToolUse",
+		},
+		{
+			name:  "grok hookEventName",
+			event: map[string]interface{}{"hookEventName": "pre_tool_use"},
+			want:  "pre_tool_use",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getHookEventName(tt.event); got != tt.want {
+				t.Errorf("getHookEventName() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -74,6 +117,11 @@ func TestGetWorkingDirectory(t *testing.T) {
 			name:  "cursor workspace_dir",
 			event: map[string]interface{}{"workspace_dir": "/tmp/from-dir"},
 			want:  "/tmp/from-dir",
+		},
+		{
+			name:  "grok workspaceRoot",
+			event: map[string]interface{}{"workspaceRoot": "/tmp/grok-ws"},
+			want:  "/tmp/grok-ws",
 		},
 		{
 			name: "cursor workspace_roots (not hook process cwd)",

@@ -121,6 +121,13 @@ func TestExtractIDs(t *testing.T) {
 			event:       map[string]interface{}{"sessionId": "s2"},
 			wantSession: "s2",
 		},
+		{
+			name:        "grok camelCase ids",
+			tool:        "grok",
+			event:       map[string]interface{}{"sessionId": "g-sess", "promptId": "g-prompt"},
+			wantSession: "g-sess",
+			wantPrompt:  "g-prompt",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -16,11 +16,12 @@ func TestParseToolSelection(t *testing.T) {
 		err  bool
 	}{
 		{"", nil, false},
-		{"all", []string{"claude-code", "cursor", "gemini-cli", "codex", "copilot"}, false},
-		{"*", []string{"claude-code", "cursor", "gemini-cli", "codex", "copilot"}, false},
+		{"all", []string{"claude-code", "cursor", "gemini-cli", "codex", "copilot", "grok"}, false},
+		{"*", []string{"claude-code", "cursor", "gemini-cli", "codex", "copilot", "grok"}, false},
 		{"1,2", []string{"claude-code", "cursor"}, false},
 		{"cursor, gemini", []string{"cursor", "gemini-cli"}, false}, // alias normalized
-		{"1,cursor,1", []string{"claude-code", "cursor"}, false},    // dedupe
+		{"grok-build", []string{"grok"}, false},
+		{"1,cursor,1", []string{"claude-code", "cursor"}, false}, // dedupe
 		{"9", nil, true},
 		{"bogus", nil, true},
 	}

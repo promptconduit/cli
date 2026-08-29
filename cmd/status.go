@@ -57,6 +57,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	checkGeminiInstallation()
 	checkCodexInstallation()
 	checkCopilotInstallation()
+	checkGrokInstallation()
 
 	return nil
 }
@@ -279,6 +280,29 @@ func checkCopilotInstallation() {
 		fmt.Printf("  Copilot:     Installed (%d hooks)\n", count)
 	} else {
 		fmt.Println("  Copilot:     Not installed")
+	}
+}
+
+func checkGrokInstallation() {
+	homeDir, _ := os.UserHomeDir()
+	hooksPath := filepath.Join(homeDir, ".grok", "hooks", GrokHookFile)
+
+	data, err := os.ReadFile(hooksPath)
+	if err != nil {
+		fmt.Println("  Grok Build:  Not installed (no hooks file)")
+		return
+	}
+
+	var hook map[string]interface{}
+	if err := json.Unmarshal(data, &hook); err != nil {
+		fmt.Println("  Grok Build:  Not installed (invalid hooks file)")
+		return
+	}
+
+	if containsPromptConduitString(hook) {
+		fmt.Println("  Grok Build:  Installed")
+	} else {
+		fmt.Println("  Grok Build:  Not installed")
 	}
 }
 

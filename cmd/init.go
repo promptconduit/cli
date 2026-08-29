@@ -246,6 +246,7 @@ func detectInstalledTools() []string {
 		{"gemini-cli", []string{".gemini/settings.json"}},
 		{"codex", []string{".codex/hooks.json"}},
 		{"copilot", []string{".copilot/hooks"}},
+		{"grok", []string{".grok/hooks", ".grok"}},
 	}
 
 	var detected []string

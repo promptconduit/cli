@@ -40,6 +40,7 @@ PromptConduit CLI captures prompts, tool executions, and session events from AI 
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
 | [OpenAI Codex CLI](https://github.com/openai/codex) | Prompts, Tools, Permissions, Sessions |
 | [GitHub Copilot CLI](https://github.com/github/copilot-cli) | Prompts, Tools, Subagents, Errors, Sessions |
+| [Grok Build](https://docs.x.ai/build/features/hooks) | Prompts, Tools, Sessions, Subagents |
 
 **Local skill generation** (no account required):
 
@@ -131,7 +132,7 @@ promptconduit status
 
 ```bash
 promptconduit login                  # browser sign-in; saves your key to config
-promptconduit install claude-code    # or: cursor | gemini-cli | codex | copilot
+promptconduit install claude-code    # or: cursor | gemini-cli | codex | copilot | grok
 promptconduit status
 ```
 
@@ -552,7 +553,7 @@ Field reference:
 | --- | --- |
 | `envelope_version` | Schema version. Currently `1.2`. |
 | `cli_version` | Version of `promptconduit` that produced the event. |
-| `tool` | `claude-code`, `cursor`, `gemini-cli`, `codex`, `copilot`, or `unknown`. |
+| `tool` | `claude-code`, `cursor`, `gemini-cli`, `codex`, `copilot`, `grok`, or `unknown`. |
 | `hook_event` | The tool's native hook event name (e.g. `UserPromptSubmit`, `preToolUse`). Not canonicalized — that happens server-side. |
 | `captured_at` | ISO 8601 timestamp at the moment the hook fired. |
 | `native_payload` | Raw JSON the tool wrote to the hook's stdin. Pass-through. |

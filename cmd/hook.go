@@ -263,11 +263,23 @@ func detectTool(event map[string]interface{}) string {
 		return tool
 	}
 
+	// Grok Build injects GROK_* even when firing Claude/Cursor compat hooks.
+	if os.Getenv("GROK_HOOK_EVENT") != "" || os.Getenv("GROK_SESSION_ID") != "" {
+		return "grok"
+	}
+
 	// Cursor: has cursor_version field. Must precede the hook_event_name check —
 	// Cursor hooks also carry hook_event_name, so checking that first would
 	// mislabel every Cursor event as claude-code.
 	if _, ok := event["cursor_version"]; ok {
 		return "cursor"
+	}
+
+	// Grok native payloads use camelCase hookEventName (snake_case value).
+	if _, ok := event["hookEventName"]; ok {
+		if _, hasClaude := event["hook_event_name"]; !hasClaude {
+			return "grok"
+		}
 	}
 
 	// Claude Code: has hook_event_name or hook_event field
@@ -301,6 +313,11 @@ func getHookEventName(event map[string]interface{}) string {
 		return name
 	}
 
+	// Grok Build uses camelCase hookEventName (value is snake_case).
+	if name, ok := event["hookEventName"].(string); ok {
+		return name
+	}
+
 	// Generic event field
 	if name, ok := event["event"].(string); ok {
 		return name
@@ -329,6 +346,10 @@ func getWorkingDirectory(event map[string]interface{}) string {
 	// Claude Code uses cwd
 	if cwd, ok := event["cwd"].(string); ok && cwd != "" {
 		return cwd
+	}
+
+	if dir, ok := event["workspaceRoot"].(string); ok && dir != "" {
+		return dir
 	}
 
 	// Cursor might use workspace_dir

@@ -21,7 +21,8 @@ Supported tools:
   - cursor:      Cursor IDE
   - gemini-cli:  Gemini CLI (also accepts "gemini")
   - codex:       OpenAI Codex CLI
-  - copilot:     GitHub Copilot CLI`,
+  - copilot:     GitHub Copilot CLI
+  - grok:        Grok Build (xAI) (also accepts "grok-build")`,
 	Args: cobra.ExactArgs(1),
 	RunE: runUninstall,
 }
@@ -44,6 +45,8 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		return uninstallCodex()
 	case "copilot":
 		return uninstallCopilot()
+	case "grok", "grok-build":
+		return uninstallGrok()
 	default:
 		return fmt.Errorf("uninstallation not implemented for: %s", toolName)
 	}
@@ -332,5 +335,27 @@ func uninstallCopilot() error {
 	}
 
 	fmt.Printf("Successfully removed PromptConduit hooks from Copilot CLI (%s)\n", settingsPath)
+	return nil
+}
+
+// uninstallGrok removes our dedicated hooks file. Grok reads every *.json
+// under ~/.grok/hooks/, so uninstall is just a delete.
+func uninstallGrok() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	settingsPath := filepath.Join(homeDir, ".grok", "hooks", GrokHookFile)
+
+	if err := os.Remove(settingsPath); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("No PromptConduit hooks file found for Grok Build - nothing to uninstall")
+			return nil
+		}
+		return fmt.Errorf("failed to remove hooks file: %w", err)
+	}
+
+	fmt.Printf("Successfully removed PromptConduit hooks from Grok Build (%s)\n", settingsPath)
 	return nil
 }
