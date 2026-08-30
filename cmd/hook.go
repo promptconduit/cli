@@ -85,6 +85,14 @@ func processHookEvent() error {
 		return nil
 	}
 
+	// Grok also fires Claude/Cursor hooks. If the native Grok hook is
+	// installed, that path already captured the event with --tool grok —
+	// skip this compat invocation so prod does not get duplicates.
+	if skipGrokCompatDuplicate() {
+		logger.Debug("Skipping Claude/Cursor compat hook; native grok hook already captured this event")
+		return nil
+	}
+
 	previewLen := len(rawInput)
 	if previewLen > 200 {
 		previewLen = 200
@@ -301,6 +309,26 @@ func detectTool(event map[string]interface{}) string {
 	}
 
 	return "unknown"
+}
+
+// skipGrokCompatDuplicate is true when Grok is running a Claude/Cursor
+// PromptConduit hook and the dedicated ~/.grok/hooks/promptconduit.json
+// install already covers the same event. Native grok hooks pass --tool grok
+// and must still send. Users with only Claude/Cursor hooks (no grok install)
+// still capture via GROK_* detection.
+func skipGrokCompatDuplicate() bool {
+	if toolOverride == "grok" {
+		return false
+	}
+	if os.Getenv("GROK_HOOK_EVENT") == "" && os.Getenv("GROK_SESSION_ID") == "" {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(home, ".grok", "hooks", GrokHookFile))
+	return err == nil
 }
 
 // getHookEventName extracts the hook event name from native event

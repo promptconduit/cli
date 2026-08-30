@@ -57,6 +57,53 @@ func TestDetectTool(t *testing.T) {
 	}
 }
 
+func TestSkipGrokCompatDuplicate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("GROK_HOOK_EVENT", "")
+	t.Setenv("GROK_SESSION_ID", "")
+	origOverride := toolOverride
+	t.Cleanup(func() { toolOverride = origOverride })
+
+	t.Run("no grok env", func(t *testing.T) {
+		toolOverride = ""
+		if skipGrokCompatDuplicate() {
+			t.Fatal("expected false without GROK_*")
+		}
+	})
+
+	t.Run("grok env without native hook", func(t *testing.T) {
+		t.Setenv("GROK_HOOK_EVENT", "user_prompt_submit")
+		toolOverride = ""
+		if skipGrokCompatDuplicate() {
+			t.Fatal("expected false when grok hook file is missing (compat-only users)")
+		}
+	})
+
+	t.Run("native grok hook still sends", func(t *testing.T) {
+		t.Setenv("GROK_HOOK_EVENT", "user_prompt_submit")
+		if err := os.MkdirAll(home+"/.grok/hooks", 0755); err != nil {
+			t.Fatal(err)
+		}
+		path := home + "/.grok/hooks/" + GrokHookFile
+		if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		toolOverride = "grok"
+		if skipGrokCompatDuplicate() {
+			t.Fatal("native --tool grok must not skip")
+		}
+	})
+
+	t.Run("compat hook skipped when native install exists", func(t *testing.T) {
+		t.Setenv("GROK_HOOK_EVENT", "user_prompt_submit")
+		toolOverride = ""
+		if !skipGrokCompatDuplicate() {
+			t.Fatal("expected skip for Claude/Cursor hook while grok is installed")
+		}
+	})
+}
+
 func TestDetectTool_GrokEnv(t *testing.T) {
 	t.Setenv("GROK_HOOK_EVENT", "pre_tool_use")
 	t.Setenv("GROK_SESSION_ID", "sess-1")
