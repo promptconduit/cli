@@ -73,6 +73,51 @@ func TestResolvePrice(t *testing.T) {
 		t.Fatal("cursor-grok-4.6-high-fast must not resolve to the standard rate")
 	}
 
+	// Live Cursor hook slugs (cli#148): High-effort stop events send
+	// cursor-grok-4.6-high; tool events send the short grok-4.6 form.
+	grokHigh, ok := tbl.ResolvePrice("cursor-grok-4.6-high")
+	if !ok {
+		t.Fatal("cursor-grok-4.6-high should trim to cursor-grok-4.6")
+	}
+	if grokHigh.Input != grokStd.Input {
+		t.Fatalf("cursor-grok-4.6-high input=%v, want standard %v", grokHigh.Input, grokStd.Input)
+	}
+	shortStd, ok := tbl.ResolvePrice("grok-4.6")
+	if !ok {
+		t.Fatal("grok-4.6 should resolve via cursor- prefix retry")
+	}
+	if shortStd.Input != grokStd.Input {
+		t.Fatalf("grok-4.6 input=%v, want standard %v", shortStd.Input, grokStd.Input)
+	}
+	shortHigh, ok := tbl.ResolvePrice("grok-4.6-high")
+	if !ok {
+		t.Fatal("grok-4.6-high should prefix+trim to cursor-grok-4.6")
+	}
+	if shortHigh.Input != grokStd.Input {
+		t.Fatalf("grok-4.6-high input=%v, want standard %v", shortHigh.Input, grokStd.Input)
+	}
+	shortFast, ok := tbl.ResolvePrice("grok-4.6-high-fast")
+	if !ok {
+		t.Fatal("grok-4.6-high-fast should prefix then hit the fast alias")
+	}
+	if shortFast.Input != grokFast.Input {
+		t.Fatalf("grok-4.6-high-fast input=%v, want fast %v", shortFast.Input, grokFast.Input)
+	}
+	if shortFast.Input == grokStd.Input {
+		t.Fatal("grok-4.6-high-fast must not resolve to the standard rate")
+	}
+	xhigh, ok := tbl.ResolvePrice("grok-4.5-fast-xhigh")
+	if !ok {
+		t.Fatal("grok-4.5-fast-xhigh should prefix+trim to cursor-grok-4.5-fast")
+	}
+	grok45Fast, ok := tbl.ResolvePrice("cursor-grok-4.5-fast")
+	if !ok {
+		t.Fatal("cursor-grok-4.5-fast should resolve")
+	}
+	if xhigh.Input != grok45Fast.Input {
+		t.Fatalf("grok-4.5-fast-xhigh input=%v, want fast %v", xhigh.Input, grok45Fast.Input)
+	}
+
 	// Unknown model must report not-priced, not panic or guess.
 	if _, ok := tbl.ResolvePrice("some-other-llm-9"); ok {
 		t.Fatal("unknown model should not resolve")

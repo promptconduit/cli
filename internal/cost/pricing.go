@@ -59,7 +59,9 @@ var modelAliases = map[string]string{
 	"claude-4.5-sonnet":     "claude-sonnet-4-5",
 	"claude-4.5-opus":       "claude-opus-4-5",
 	// Cursor Grok fast slugs include effort + speed suffixes; suffix-trim would
-	// land on the cheaper standard rate without these aliases.
+	// land on the cheaper standard rate without these aliases. Short grok-*
+	// payloads (grok-4.6-high-fast) reach these via the cursor- prefix retry
+	// in ResolvePrice.
 	"cursor-grok-4.6-high-fast": "cursor-grok-4.6-fast",
 	"cursor-grok-4.5-high-fast": "cursor-grok-4.5-fast",
 }
@@ -142,12 +144,26 @@ func parsePriceTable(data []byte) (*PriceTable, error) {
 // ResolvePrice looks up a model's rates. Resolution order: exact key, alias
 // map, then progressively shorter dash-delimited prefixes (so a dated or
 // suffixed variant like "claude-opus-4-8-20260101" still resolves to
-// "claude-opus-4-8"). The bool is false when nothing matches — callers should
-// flag the event ModelPriced=false and charge zero rather than guess.
+// "claude-opus-4-8"). Cursor hook payloads often send the short Grok slug
+// (grok-4.6, grok-4.6-high) instead of the table key (cursor-grok-4.6); when
+// the first pass misses and the slug starts with "grok-", we retry as
+// "cursor-"+slug so the same exact/alias/trim path applies. The bool is false
+// when nothing matches — callers should flag the event ModelPriced=false and
+// charge zero rather than guess.
 func (t *PriceTable) ResolvePrice(model string) (ModelPrice, bool) {
 	if model == "" {
 		return ModelPrice{}, false
 	}
+	if mp, ok := t.lookup(model); ok {
+		return mp, true
+	}
+	if strings.HasPrefix(model, "grok-") {
+		return t.lookup("cursor-" + model)
+	}
+	return ModelPrice{}, false
+}
+
+func (t *PriceTable) lookup(model string) (ModelPrice, bool) {
 	if mp, ok := t.models[model]; ok {
 		return mp, true
 	}
