@@ -197,7 +197,7 @@
     "output_cost_per_token": 0.000015,
     "cache_read_input_token_cost": 0.0000003
   },
-  "_cursor_comment": "Cursor first-party and third-party model rates from cursor.com/docs/models-and-pricing (2026-08-23). Composer/Grok publish cache-read only (no cache-write column). The exact -fast key must precede the prefix-trim fallback so it doesn't resolve to the cheaper standard rate; Grok fast slugs (cursor-grok-*-high-fast) are aliased in pricing.go.",
+  "_cursor_comment": "Cursor first-party and third-party model rates from cursor.com/docs/models-and-pricing (2026-08-23). Composer/Grok publish cache-read only (no cache-write column). The exact -fast key must precede the prefix-trim fallback so it doesn't resolve to the cheaper standard rate; Grok fast slugs (cursor-grok-*-high-fast) are aliased in pricing.go. Short hook slugs (grok-4.6) retry as cursor-grok-4.6 in ResolvePrice.",
   "cursor-grok-4.6-fast": {
     "input_cost_per_token": 0.000004,
     "output_cost_per_token": 0.000012,
