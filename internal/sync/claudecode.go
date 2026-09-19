@@ -488,8 +488,10 @@ func parseGenericMessage(raw map[string]json.RawMessage, msgType string, sequenc
 	}
 }
 
-// FindTranscriptBySessionID locates the transcript file for a given session ID
-// Claude Code transcript files are named with the session ID (e.g., ~/.claude/projects/foo/sessionid.jsonl)
+// FindTranscriptBySessionID locates the transcript file for a given session ID.
+// Search order: Claude Code (~/.claude/projects) then Cursor
+// (~/.cursor/projects/**/agent-transcripts). Files are named
+// <session-id>.jsonl. Used by auto-sync after SessionEnd/Stop.
 func FindTranscriptBySessionID(sessionID string) (string, error) {
 	if sessionID == "" {
 		return "", fmt.Errorf("session ID is empty")
@@ -500,36 +502,57 @@ func FindTranscriptBySessionID(sessionID string) (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	projectsDir := filepath.Join(homeDir, ".claude", "projects")
-
-	// Check if projects directory exists
-	if _, err := os.Stat(projectsDir); os.IsNotExist(err) {
-		return "", fmt.Errorf("projects directory does not exist: %s", projectsDir)
-	}
-
 	expectedFilename := sessionID + ".jsonl"
-	var foundPath string
+	searches := []struct {
+		root         string
+		pathContains string
+	}{
+		{filepath.Join(homeDir, ".claude", "projects"), ""},
+		{filepath.Join(homeDir, ".cursor", "projects"), "agent-transcripts"},
+	}
 
-	err = filepath.Walk(projectsDir, func(path string, info os.FileInfo, err error) error {
+	for _, s := range searches {
+		path, err := findJSONLNamed(s.root, expectedFilename, s.pathContains)
 		if err != nil {
-			return nil // Skip files with errors
+			return "", fmt.Errorf("error searching for transcript: %w", err)
 		}
-		if !info.IsDir() && filepath.Base(path) == expectedFilename {
-			foundPath = path
-			return filepath.SkipAll // Found it, stop walking
+		if path != "" {
+			return path, nil
 		}
-		return nil
+	}
+
+	return "", fmt.Errorf("transcript file not found for session ID: %s", sessionID)
+}
+
+// findJSONLNamed walks root for a file with the given basename. If
+// pathContains is non-empty, the slash-normalized path must include it
+// (used to restrict Cursor hits to agent-transcripts). A missing root
+// is not an error.
+func findJSONLNamed(root, filename, pathContains string) (string, error) {
+	if _, err := os.Stat(root); os.IsNotExist(err) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+
+	var found string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() || filepath.Base(path) != filename {
+			return nil
+		}
+		if pathContains != "" && !strings.Contains(filepath.ToSlash(path), pathContains) {
+			return nil
+		}
+		found = path
+		return filepath.SkipAll
 	})
-
 	if err != nil {
-		return "", fmt.Errorf("error searching for transcript: %w", err)
+		return "", err
 	}
-
-	if foundPath == "" {
-		return "", fmt.Errorf("transcript file not found for session ID: %s", sessionID)
-	}
-
-	return foundPath, nil
+	return found, nil
 }
 
 func calculateFileHash(path string) (string, error) {
