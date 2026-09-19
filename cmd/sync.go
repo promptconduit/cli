@@ -43,10 +43,12 @@ to avoid duplicate uploads.
 
 Supported tools:
   - claude-code: Claude Code transcripts from ~/.claude/projects/
+  - cursor: Cursor transcripts from ~/.cursor/projects/*/agent-transcripts/
 
 Examples:
   promptconduit sync              # Sync all supported tools
   promptconduit sync claude-code  # Sync only Claude Code
+  promptconduit sync cursor       # Sync only Cursor
   promptconduit sync --dry-run    # Show what would be synced
   promptconduit sync --force      # Re-sync already synced files
   promptconduit sync --since 2025-01-01
@@ -90,7 +92,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// Determine which tools to sync
-	toolsToSync := []string{"claude-code"} // Default: all supported
+	toolsToSync := []string{"claude-code", "cursor"} // Default: all supported
 	if len(args) > 0 {
 		toolsToSync = args
 	}
@@ -335,6 +337,8 @@ func getParser(tool string) (sync.Parser, error) {
 	switch strings.ToLower(tool) {
 	case "claude-code", "claude":
 		return sync.NewClaudeCodeParser()
+	case "cursor":
+		return sync.NewCursorParser()
 	default:
 		return nil, fmt.Errorf("unsupported tool: %s", tool)
 	}
@@ -487,8 +491,7 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 		}
 	}
 
-	// Determine tool from path (claude-code for now)
-	parser, err := sync.NewClaudeCodeParser()
+	parser, err := sync.NewParserForPath(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to create parser: %w", err)
 	}
