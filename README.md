@@ -216,6 +216,9 @@ promptconduit sync
 # Sync only Claude Code transcripts
 promptconduit sync claude-code
 
+# Sync only Cursor transcripts
+promptconduit sync cursor
+
 # Preview what would be synced (no uploads)
 promptconduit sync --dry-run
 
@@ -230,9 +233,10 @@ promptconduit sync --limit 10
 ```
 
 **How it works:**
-- Discovers JSONL transcript files from `~/.claude/projects/`
-- Extracts conversation metadata, messages, and git context
+- Discovers JSONL transcript files from `~/.claude/projects/` and `~/.cursor/projects/*/agent-transcripts/` (parent sessions and subagents)
+- Uploads each line as raw JSON via the public transcript sync API (`tool: "claude-code"` or `tool: "cursor"`)
 - Tracks synced files in `~/.config/promptconduit/sync_state.json` to avoid duplicates
+- Plan files from `~/.claude/plans/` ride along with Claude Code sync only
 - Use `--dry-run` first to preview, then run without flags to sync
 
 **Hooks vs Sync:**

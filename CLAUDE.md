@@ -33,7 +33,7 @@ cli/
 │   ├── extension/    # Bundled cost editor extension (.vsix go:embed) + sideload into Cursor
 │   ├── git/          # Git context extraction
 │   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
-│   ├── sync/         # Transcript + plan sync and parsing (Claude Code parser, state management)
+│   ├── sync/         # Transcript + plan sync and parsing (Claude Code + Cursor parsers, state management)
 │   ├── transcript/   # Transcript parsing and attachment extraction
 │   └── updater/      # GitHub-release version check + self-replace upgrade
 ├── scripts/          # Install scripts
@@ -108,8 +108,9 @@ Cache file: `~/.config/promptconduit/update.json`.
 The `sync` command manually uploads AI assistant conversation transcripts to the platform. **There is no automatic sync** - you must run this command when you want to upload transcripts.
 
 ```bash
-promptconduit sync              # Sync all supported tools
+promptconduit sync              # Sync all supported tools (claude-code then cursor)
 promptconduit sync claude-code  # Sync only Claude Code
+promptconduit sync cursor       # Sync only Cursor
 promptconduit sync --dry-run    # Preview what would be synced
 promptconduit sync --force      # Re-sync already synced files
 promptconduit sync --since 2025-01-01  # Filter by date
@@ -118,14 +119,17 @@ promptconduit sync --limit 10   # Sync only N most recent
 
 ### How Sync Works
 
-1. Discovers transcript files from `~/.claude/projects/**/*.jsonl`
-2. Parses each file to extract conversation metadata and messages
+1. Discovers transcript files from `~/.claude/projects/**/*.jsonl` and
+   `~/.cursor/projects/**/agent-transcripts/**/*.jsonl`
+2. Parses each file, keeping every JSONL line as `RawJSON` for server-side
+   categorization (`tool` is `claude-code` or `cursor`)
 3. Calculates SHA256 hash to detect changes
-4. Uploads to platform via `POST /v1/transcripts/sync`
+4. Uploads via the public transcript sync API (`POST /v1/transcripts/sync/raw`,
+   plus the chunked path for large files)
 5. Tracks synced files in `~/.config/promptconduit/sync_state.json`
-6. Rides along plan files from `~/.claude/plans/*.md` via `POST /v1/plans/sync`,
-   associating each plan to its session by finding the plan path inside a
-   transcript (`internal/sync/plans.go`)
+6. Rides along plan files from `~/.claude/plans/*.md` via `POST /v1/plans/sync`
+   (Claude Code only), associating each plan to its session by finding the plan
+   path inside a transcript (`internal/sync/plans.go`)
 
 ### Hooks vs Sync
 
