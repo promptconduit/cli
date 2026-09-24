@@ -31,7 +31,7 @@ PromptConduit CLI captures prompts, tool executions, and session events from AI 
 
 ### Supported Tools
 
-**Real-time hooks** (requires [platform account](https://promptconduit.dev)):
+**Real-time hooks** (written to `~/.promptconduit/events.jsonl` with no account; a [platform account](https://promptconduit.dev) is only required to sync events to the cloud):
 
 | Tool | Events Captured |
 |------|-----------------|
@@ -207,7 +207,7 @@ bodies are capped at 64KB per row and the file rotates to
 
 ### Sync Command
 
-The `sync` command uploads historical conversation transcripts to the platform. **This is a manual process** - there is no automatic syncing of transcripts.
+The `sync` command uploads conversation transcripts to the platform. With an API key, SessionEnd and Stop hooks upload that session's transcript automatically. `promptconduit sync` with no flags is the backfill for history that was never uploaded — local-only mode, or sessions from before you signed in.
 
 ```bash
 # Sync all supported tools
