@@ -87,35 +87,48 @@ func CachedPricingPath() string {
 	return filepath.Join(StoreDir(), "pricing.json")
 }
 
-// LoadPriceTable returns the curated embedded rates with the user's refreshed
-// cache (if present) layered in as a fallback for models the curated table
-// doesn't cover. Curated entries always win — they carry knowledge the upstream
-// table lacks (Anthropic's 1-hour cache rate, Cursor Composer rates). This read
-// is purely local; the network fetch lives behind the explicit
-// `cost refresh-pricing` command.
+// LoadPriceTable returns the embedded snapshot, then a LiteLLM gap-fill cache,
+// then a published PromptConduit card. The card overrides embedded rows when
+// its _updated date is the same or newer. The LiteLLM cache never overrides a
+// row the embed or the card already has. This read is local; downloads happen
+// outside the hook.
 func LoadPriceTable() (*PriceTable, error) {
-	base, err := parsePriceTable(bundledPricingJSON)
+	models, embedMeta, err := parsePriceDocument(bundledPricingJSON)
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(CachedPricingPath())
+	base := &PriceTable{models: models}
+	mergePriceFile(base, CachedPricingPath(), false, embedMeta.Updated)
+	mergePriceFile(base, PublishedCardPath(), true, embedMeta.Updated)
+	return base, nil
+}
+
+// mergePriceFile layers a cache file onto base. override allows a published
+// PromptConduit card to replace embedded rows. A gap-fill file only adds
+// models base does not already know.
+func mergePriceFile(base *PriceTable, path string, override bool, embedUpdated string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return base, nil // no cache yet — embedded only
+		return
 	}
-	cached, err := parsePriceTable(data)
+	models, meta, err := parsePriceDocument(data)
 	if err != nil {
-		return base, nil // corrupt cache — ignore, fall back to embedded
+		return
 	}
-	for key, mp := range cached.models {
-		if _, exists := base.models[key]; exists {
-			continue // curated entry wins
+	if override {
+		if meta.Source != publishedSource || meta.Updated == "" || meta.Updated < embedUpdated {
+			return
+		}
+	}
+	for key, mp := range models {
+		if _, exists := base.models[key]; exists && !override {
+			continue
 		}
 		if mp.Input == 0 && mp.Output == 0 {
-			continue // skip free/non-chat entries (embeddings, etc.)
+			continue
 		}
 		base.models[key] = mp
 	}
-	return base, nil
 }
 
 // ValidatePricingData parses raw pricing JSON and returns how many priced
@@ -129,15 +142,35 @@ func ValidatePricingData(data []byte) (int, error) {
 	return len(t.models), nil
 }
 
+type priceMeta struct {
+	Updated string
+	Source  string
+}
+
 func parsePriceTable(data []byte) (*PriceTable, error) {
+	models, _, err := parsePriceDocument(data)
+	if err != nil {
+		return nil, err
+	}
+	return &PriceTable{models: models}, nil
+}
+
+func parsePriceDocument(data []byte) (map[string]ModelPrice, priceMeta, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
+		return nil, priceMeta{}, err
+	}
+	var meta priceMeta
+	if b, ok := raw["_updated"]; ok {
+		_ = json.Unmarshal(b, &meta.Updated)
+	}
+	if b, ok := raw["_source"]; ok {
+		_ = json.Unmarshal(b, &meta.Source)
 	}
 	models := make(map[string]ModelPrice, len(raw))
 	for key, val := range raw {
 		if strings.HasPrefix(key, "_") {
-			continue // skip "_comment" and other metadata keys
+			continue // skip "_comment", "_updated", "_source"
 		}
 		var mp ModelPrice
 		if err := json.Unmarshal(val, &mp); err != nil {
@@ -145,7 +178,7 @@ func parsePriceTable(data []byte) (*PriceTable, error) {
 		}
 		models[key] = mp
 	}
-	return &PriceTable{models: models}, nil
+	return models, meta, nil
 }
 
 // ResolvePrice looks up a model's rates. Resolution order: exact key, alias

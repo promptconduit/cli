@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ Subcommands:
   session         Same as running 'cost' with no subcommand
   history         Aggregate cost over the last N days
   refresh-pricing Fetch the latest public model-price table (opt-in)
+  refresh-card    Download the PromptConduit rate card (also runs once a day)
 
 Cost tracking is part of the standard setup: 'promptconduit install cursor'
 wires the hooks that capture Cursor's exact token usage, and Claude Code cost
@@ -79,9 +81,11 @@ var costRefreshPricingCmd = &cobra.Command{
 take precedence; the cache only adds coverage for models the built-in table
 doesn't include.
 
-This is the only command that touches the network, it is never run
-automatically, and it sends none of your data — it's a plain GET of a public
-file.`,
+The cache only fills models the built-in table and the published PromptConduit
+card do not already price. It never overrides those rows.
+
+This sends none of your data — it's a plain GET of a public file. It does not
+run from the hook.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE:          runCostRefreshPricing,
@@ -101,6 +105,34 @@ func init() {
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
 	costCmd.AddCommand(costRefreshPricingCmd)
+	costCmd.AddCommand(costRefreshCardCmd)
+}
+
+var costRefreshCardCmd = &cobra.Command{
+	Use:   "refresh-card",
+	Short: "Download the PromptConduit rate card (also runs in the background once a day)",
+	Long: `Download https://promptconduit.dev/model-rates.json and store it at
+~/.config/promptconduit/cost/pricing-card.json. When the card's date is the
+same or newer than the rates embedded in this binary, its rows override the
+embed. The hook never calls the network; it reads this file if it is present.
+
+A failed download leaves the previous card in place. The same download starts
+in the background about once a day from other promptconduit commands, unless
+auto-update is disabled. It sends none of your data.`,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE:          runCostRefreshCard,
+}
+
+func runCostRefreshCard(cmd *cobra.Command, args []string) error {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Second)
+	defer cancel()
+	n, err := cost.RefreshPublishedCard(ctx, cost.PublishedPricingURL)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Saved %d model prices to %s\n", n, cost.PublishedCardPath())
+	return nil
 }
 
 func runCostRefreshPricing(cmd *cobra.Command, args []string) error {

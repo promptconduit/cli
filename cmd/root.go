@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/cost"
 	"github.com/promptconduit/cli/internal/extension"
 	"github.com/promptconduit/cli/internal/updater"
 	"github.com/spf13/cobra"
@@ -84,19 +85,19 @@ var versionCmd = &cobra.Command{
 // HTTP timeout (5s), and when auto-update is enabled it spawns a detached
 // `promptconduit upgrade` subprocess so the swap happens in the background.
 //
-// Skipped for:
-//   - the `hook` subcommand (runs per-event; must stay fast)
-//   - the `upgrade` subcommand (it checks itself)
-//   - dev builds (Version=="dev"): nothing to compare against
-//   - when we're already a spawned child of another check
+// The release check is skipped for hook, upgrade, watch, collect, cost,
+// graph, sessions, and resume, for a spawned child, and for dev builds.
+// The public rate-card refresh uses that same command skip list, including
+// dev builds, and still honors DisableAutoUpdate. The hook never fetches.
 func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 	// Clean up any leftover .old binary from a prior Windows upgrade.
 	updater.CleanupOldBinary()
 
-	if Version == "dev" {
+	if skipUpdateCheckFor(cmd) {
 		return
 	}
-	if skipUpdateCheckFor(cmd) {
+	maybeBackgroundCardRefresh()
+	if Version == "dev" {
 		return
 	}
 
@@ -203,6 +204,38 @@ func notifyUpgraded(cmd *cobra.Command, from, to, releaseURL string) {
 	_, _ = fmt.Fprintf(w, "promptconduit: upgraded %s → %s\n", from, to)
 	if releaseURL != "" {
 		_, _ = fmt.Fprintf(w, "  release notes: %s\n", releaseURL)
+	}
+}
+
+// maybeBackgroundCardRefresh starts a detached download of the public rate
+// card about once a day. The hook never reaches this: skipUpdateCheckFor
+// returns first. A failed download leaves the previous card in place, and the
+// parent records the attempt before spawn so the next commands back off.
+func maybeBackgroundCardRefresh() {
+	cfg := client.LoadConfig()
+	if cfg.DisableAutoUpdate {
+		return
+	}
+	if !cost.PublishedCardStale(cost.PublishedCardTTL) {
+		return
+	}
+	if err := cost.MarkPublishedCardChecked(); err != nil {
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	c := exec.Command(exe, "cost", "refresh-card")
+	c.Stdin = nil
+	c.Stdout = nil
+	c.Stderr = nil
+	c.Env = append(os.Environ(), "PROMPTCONDUIT_AUTO_UPDATE_CHILD=1")
+	if err := c.Start(); err != nil {
+		return
+	}
+	if c.Process != nil {
+		_ = c.Process.Release()
 	}
 }
 
