@@ -106,6 +106,49 @@ func TestResolvePrice(t *testing.T) {
 	if shortFast.Input == grokStd.Input {
 		t.Fatal("grok-4.6-high-fast must not resolve to the standard rate")
 	}
+
+	// Grok 4.7 long-context fast must not collapse onto the non-fast 500k rate.
+	grok47Fast, ok := tbl.ResolvePrice("grok-4.7-500k-high-fast")
+	if !ok {
+		t.Fatal("grok-4.7-500k-high-fast should prefix then hit the 500k-fast alias")
+	}
+	grok47Long, ok := tbl.ResolvePrice("cursor-grok-4.7-500k")
+	if !ok {
+		t.Fatal("cursor-grok-4.7-500k should resolve")
+	}
+	if grok47Fast.Input != 0.000006 || grok47Long.Input != 0.000004 {
+		t.Fatalf("grok 4.7 long rates wrong: fast=%v long=%v", grok47Fast.Input, grok47Long.Input)
+	}
+	if grok47Fast.Input == grok47Long.Input {
+		t.Fatal("grok-4.7-500k-high-fast must not resolve to the non-fast 500k rate")
+	}
+	fable51, ok := tbl.ResolvePrice("claude-fable-5.1")
+	if !ok {
+		t.Fatal("claude-fable-5.1 should resolve via alias")
+	}
+	if fable51.CacheRead != 0.00000025 {
+		t.Fatalf("fable 5.1 cache read=%v, want 2.5e-7", fable51.CacheRead)
+	}
+	gem36, ok := tbl.ResolvePrice("gemini-3.6-flash")
+	if !ok {
+		t.Fatal("gemini-3.6-flash should resolve")
+	}
+	if gem36.Input != 0.00000075 || gem36.Output != 0.00000375 {
+		t.Fatalf("gemini 3.6 rates wrong: in=%v out=%v", gem36.Input, gem36.Output)
+	}
+	if _, ok := tbl.ResolvePrice("gemini-3.8-flash"); !ok {
+		t.Fatal("gemini-3.8-flash should resolve")
+	}
+	if _, ok := tbl.ResolvePrice("gpt-6-sol"); !ok {
+		t.Fatal("gpt-6-sol should resolve")
+	}
+	build, ok := tbl.ResolvePrice("grok-build-0.1")
+	if !ok {
+		t.Fatal("grok-build-0.1 should resolve as an exact key")
+	}
+	if build.Input != 0.000001 || build.Output != 0.000002 {
+		t.Fatalf("grok-build-0.1 rates wrong: in=%v out=%v", build.Input, build.Output)
+	}
 	xhigh, ok := tbl.ResolvePrice("grok-4.5-fast-xhigh")
 	if !ok {
 		t.Fatal("grok-4.5-fast-xhigh should prefix+trim to cursor-grok-4.5-fast")
@@ -166,8 +209,11 @@ func TestResolvePrice_CurrentClaudeFamily(t *testing.T) {
 	}{
 		{"claude-sonnet-5", 0.000002},
 		{"claude-opus-5", 0.000005},
+		{"claude-opus-5-5", 0.000004},
 		{"claude-fable-5", 0.00001},
+		{"claude-fable-5-1", 0.00001},
 		{"claude-mythos-5", 0.00001},
+		{"claude-mythos-5-1", 0.00001},
 		{"claude-opus-4-8", 0.000005},
 		{"claude-sonnet-4-6", 0.000003},
 		{"claude-haiku-4-5", 0.000001},
@@ -566,7 +612,7 @@ func TestLoadPriceTableMerge(t *testing.T) {
 
 	cache := `{
       "claude-opus-4-8": {"input_cost_per_token": 0.999, "output_cost_per_token": 0.999},
-      "gpt-5.3-codex": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008},
+      "gpt-6-astra": {"input_cost_per_token": 0.000002, "output_cost_per_token": 0.000008},
       "text-embedding-x": {"input_cost_per_token": 0, "output_cost_per_token": 0}
     }`
 	path := CachedPricingPath()
@@ -588,7 +634,7 @@ func TestLoadPriceTableMerge(t *testing.T) {
 		t.Fatalf("curated opus rate should win; got %v ok=%v", opus.Input, ok)
 	}
 	// A model only in the cache is added.
-	gpt, ok := tbl.ResolvePrice("gpt-5.3-codex")
+	gpt, ok := tbl.ResolvePrice("gpt-6-astra")
 	if !ok || gpt.Input != 0.000002 {
 		t.Fatalf("cache-only model should resolve; got %v ok=%v", gpt.Input, ok)
 	}
