@@ -50,20 +50,27 @@ var modelAliases = map[string]string{
 	"claude-3-5-haiku-20241022": "claude-3-5-haiku",
 	"claude-3-5-haiku-latest":   "claude-3-5-haiku",
 	// Common passthrough strings from Claude Code / Cursor hooks (cli#63).
-	"claude-sonnet-4":       "claude-sonnet-4-6",
-	"claude-sonnet-4-5":     "claude-sonnet-4-5",
-	"claude-opus-4":         "claude-opus-4-6",
-	"claude-opus-4-8":       "claude-opus-4-8",
-	"claude-haiku-4-5":      "claude-haiku-4-5",
-	"composer-1":            "cursor-composer-1",
-	"claude-4.5-sonnet":     "claude-sonnet-4-5",
-	"claude-4.5-opus":       "claude-opus-4-5",
+	"claude-sonnet-4":   "claude-sonnet-4-6",
+	"claude-sonnet-4-5": "claude-sonnet-4-5",
+	"claude-opus-4":     "claude-opus-4-6",
+	"claude-opus-4-8":   "claude-opus-4-8",
+	"claude-haiku-4-5":  "claude-haiku-4-5",
+	"composer-1":        "cursor-composer-1",
+	"claude-4.5-sonnet": "claude-sonnet-4-5",
+	"claude-4.5-opus":   "claude-opus-4-5",
+	// Dotted Cursor/API display ids for the 5.1 / 5.5 generation.
+	"claude-fable-5.1":  "claude-fable-5-1",
+	"claude-mythos-5.1": "claude-mythos-5-1",
+	"claude-opus-5.5":   "claude-opus-5-5",
 	// Cursor Grok fast slugs include effort + speed suffixes; suffix-trim would
 	// land on the cheaper standard rate without these aliases. Short grok-*
 	// payloads (grok-4.6-high-fast) reach these via the cursor- prefix retry
-	// in ResolvePrice.
-	"cursor-grok-4.6-high-fast": "cursor-grok-4.6-fast",
-	"cursor-grok-4.5-high-fast": "cursor-grok-4.5-fast",
+	// in ResolvePrice. 500k-fast must be aliased too: trim would stop on the
+	// cheaper cursor-grok-4.7-500k key.
+	"cursor-grok-4.7-500k-high-fast": "cursor-grok-4.7-500k-fast",
+	"cursor-grok-4.7-high-fast":      "cursor-grok-4.7-fast",
+	"cursor-grok-4.6-high-fast":      "cursor-grok-4.6-fast",
+	"cursor-grok-4.5-high-fast":      "cursor-grok-4.5-fast",
 }
 
 // LoadBundledPriceTable parses the embedded snapshot only. Tests use this for
