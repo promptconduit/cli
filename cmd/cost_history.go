@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,66 +45,52 @@ type historyEnvelope struct {
 	} `json:"enrichments"`
 }
 
+// costEnrichmentKey cheaply pre-filters event-log lines: most envelopes carry
+// no cost enrichment, and full JSON decoding of large tool payloads is wasted.
+var costEnrichmentKey = []byte(`"cost":`)
+
+// requestTime returns the request's timestamp: its own `ts`, else the
+// envelope's captured_at (also when `ts` is present but unparseable).
+func requestTime(ts, capturedAt string) (time.Time, bool) {
+	for _, s := range []string{ts, capturedAt} {
+		if s == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // aggregateCostHistory sums the `cost` enrichment in an events.jsonl stream into
 // per-day totals for the last `days` calendar days (today included), newest
-// first. A request repeated across envelopes is counted once by request_id
-// (first seen wins), matching the editor extension's month-spend reader.
-// Malformed lines are skipped. Days are bucketed in loc.
+// first. It mirrors the editor extension's month-spend reader: requests without
+// a request_id are skipped, and a request repeated across envelopes is counted
+// once (first in-window occurrence wins). Malformed lines are skipped and lines
+// have no length cap (raw tool payloads can be very large). Days are bucketed
+// in loc. days must be >= 1.
 func aggregateCostHistory(r io.Reader, now time.Time, days int, loc *time.Location) ([]costDay, error) {
 	if days < 1 {
-		days = 1
+		return nil, fmt.Errorf("days must be at least 1, got %d", days)
 	}
 	nowLocal := now.In(loc)
 	start := time.Date(nowLocal.Year(), nowLocal.Month(), nowLocal.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -(days - 1))
 
 	byDay := map[string]*costDay{}
-	seen := map[string]bool{}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		var env historyEnvelope
-		if err := json.Unmarshal(scanner.Bytes(), &env); err != nil || env.Enrichments.Cost == nil {
-			continue
+	seen := map[string]bool{} // in-window request ids only
+	br := bufio.NewReader(r)
+	for {
+		line, readErr := br.ReadBytes('\n')
+		if len(line) > 0 && bytes.Contains(line, costEnrichmentKey) {
+			aggregateLine(line, start, nowLocal, loc, seen, byDay)
 		}
-		for _, req := range env.Enrichments.Cost.Requests {
-			if req.RequestID != "" {
-				if seen[req.RequestID] {
-					continue
-				}
-				seen[req.RequestID] = true
-			}
-			stamp := req.Timestamp
-			if stamp == "" {
-				stamp = env.CapturedAt
-			}
-			ts, err := time.Parse(time.RFC3339Nano, stamp)
-			if err != nil {
-				continue
-			}
-			ts = ts.In(loc)
-			if ts.Before(start) || ts.After(nowLocal) {
-				continue
-			}
-			key := ts.Format("2006-01-02")
-			d := byDay[key]
-			if d == nil {
-				d = &costDay{Day: key, Currency: cost.Currency}
-				byDay[key] = d
-			}
-			d.Requests++
-			d.Input += req.Tokens.Input
-			d.Output += req.Tokens.Output
-			d.CacheRead += req.Tokens.CacheRead
-			d.CacheWrite += req.Tokens.CacheWrite
-			if req.ModelPriced {
-				d.CostTotal += req.USD.Total
-			} else {
-				d.Unpriced++
-			}
+		if readErr == io.EOF {
+			break
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
+		if readErr != nil {
+			return nil, readErr
+		}
 	}
 
 	out := make([]costDay, 0, len(byDay))
@@ -114,8 +101,50 @@ func aggregateCostHistory(r io.Reader, now time.Time, days int, loc *time.Locati
 	return out, nil
 }
 
+// aggregateLine adds one envelope's in-window, not-yet-seen requests to byDay.
+func aggregateLine(line []byte, start, nowLocal time.Time, loc *time.Location, seen map[string]bool, byDay map[string]*costDay) {
+	var env historyEnvelope
+	if err := json.Unmarshal(line, &env); err != nil || env.Enrichments.Cost == nil {
+		return
+	}
+	for _, req := range env.Enrichments.Cost.Requests {
+		if req.RequestID == "" || seen[req.RequestID] {
+			continue
+		}
+		ts, ok := requestTime(req.Timestamp, env.CapturedAt)
+		if !ok {
+			continue
+		}
+		ts = ts.In(loc)
+		if ts.Before(start) || ts.After(nowLocal) {
+			continue
+		}
+		// Mark only once counted, so an unusable copy can't shadow a good one.
+		seen[req.RequestID] = true
+		key := ts.Format("2006-01-02")
+		d := byDay[key]
+		if d == nil {
+			d = &costDay{Day: key, Currency: cost.Currency}
+			byDay[key] = d
+		}
+		d.Requests++
+		d.Input += req.Tokens.Input
+		d.Output += req.Tokens.Output
+		d.CacheRead += req.Tokens.CacheRead
+		d.CacheWrite += req.Tokens.CacheWrite
+		if req.ModelPriced {
+			d.CostTotal += req.USD.Total
+		} else {
+			d.Unpriced++
+		}
+	}
+}
+
 func runCostHistory(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
+	if costDays < 1 {
+		return fmt.Errorf("--days must be at least 1, got %d", costDays)
+	}
 
 	var days []costDay
 	f, err := os.Open(eventlog.EventsJSONLPath())

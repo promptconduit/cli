@@ -61,11 +61,12 @@ var costSessionCmd = &cobra.Command{
 }
 
 var costHistoryCmd = &cobra.Command{
-	Use:           "history",
-	Short:         "Daily cost over recent days, from the local event log",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostHistory,
+	Use:          "history",
+	Short:        "Daily cost over recent days, from the local event log",
+	SilenceUsage: true,
+	// Errors are printed (main exits silently), so a bad --days or an
+	// unreadable log says why instead of just exiting 1.
+	RunE: runCostHistory,
 }
 
 // litellmPricingURL is the public, maintained model-price table the optional

@@ -100,6 +100,42 @@ func TestAggregateCostHistoryEmpty(t *testing.T) {
 	}
 }
 
+func TestAggregateCostHistoryReviewEdgeCases(t *testing.T) {
+	loc := time.UTC
+	now := time.Date(2026, 10, 8, 15, 0, 0, 0, loc)
+
+	// A line over bufio.Scanner's old 16 MiB cap must not abort the read.
+	huge := `{"schema":2,"captured_at":"2026-10-08T09:00:00Z","raw_event":{"tool_response":"` +
+		strings.Repeat("x", 17*1024*1024) + `"}}`
+
+	log := strings.Join([]string{
+		huge,
+		// r1: first copy has an unparseable ts AND captured_at, so it can't be
+		// counted; it must not shadow the later valid copy.
+		`{"schema":2,"captured_at":"garbage","enrichments":{"cost":{"requests":[` +
+			costReq("r1", "also-garbage", true, 1.00, 10, 1, 0) + `]}}}`,
+		costLine("2026-10-08T10:00:00Z", costReq("r1", "2026-10-08T10:00:00Z", true, 1.00, 10, 1, 0)),
+		// r2: unparseable ts falls back to a valid captured_at.
+		costLine("2026-10-08T11:00:00Z", costReq("r2", "Oct 8 11:00", true, 2.00, 20, 2, 0)),
+		// No request_id: skipped, like the extension's reader.
+		costLine("2026-10-08T12:00:00Z", costReq("", "2026-10-08T12:00:00Z", true, 9.99, 1, 1, 0)),
+	}, "\n")
+
+	got, err := aggregateCostHistory(strings.NewReader(log), now, 1, loc)
+	if err != nil {
+		t.Fatalf("oversized line should not fail the read: %v", err)
+	}
+	if len(got) != 1 || got[0].Requests != 2 || !approx(got[0].CostTotal, 3.00) {
+		t.Fatalf("want r1 + r2 only ($3.00, 2 requests), got %+v", got)
+	}
+}
+
+func TestAggregateCostHistoryRejectsBadDays(t *testing.T) {
+	if _, err := aggregateCostHistory(strings.NewReader(""), time.Now(), 0, time.UTC); err == nil {
+		t.Fatal("days=0 should be an error")
+	}
+}
+
 func approx(a, b float64) bool {
 	d := a - b
 	return d < 1e-9 && d > -1e-9
