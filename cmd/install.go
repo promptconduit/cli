@@ -332,7 +332,7 @@ func installClaudeCode(exePath string) error {
 	fmt.Println("Token-cost tracking works for Claude Code too (computed locally on each Stop):")
 	fmt.Println("  This session:  promptconduit cost")
 	fmt.Println("  Recent days:   promptconduit cost history")
-	fmt.Println("  Live spend:    the PromptConduit editor extension's status bar")
+	fmt.Println("  Live spend:    the editor extension (https://promptconduit.dev/docs/editor-extension)")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")

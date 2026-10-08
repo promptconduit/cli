@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/cost"
 	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/spf13/cobra"
@@ -172,9 +173,18 @@ func runCostHistory(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// events.jsonl only guarantees the retention window; older records are
+	// trimmed once the log passes its size ceiling, so a longer window may be
+	// partial. Say so rather than presenting a short total as complete.
+	if retention := client.LoadConfig().RetentionDays(); retention > 0 && costDays > retention {
+		defer func() {
+			_, _ = fmt.Fprintf(out, "Note: local history is kept for at least %d days; days before that may be incomplete.\n", retention)
+		}()
+	}
+
 	if len(days) == 0 {
 		_, _ = fmt.Fprintf(out, "No priced AI requests in the last %d day(s).\n", costDays)
-		_, _ = fmt.Fprintln(out, "Cost is recorded from Claude Code and Cursor hooks; run `promptconduit install claude-code` or `promptconduit install cursor`, then use the assistant.")
+		_, _ = fmt.Fprintln(out, "Cost is recorded by the Claude Code and Cursor hooks; `promptconduit status` shows which are installed.")
 		return nil
 	}
 
