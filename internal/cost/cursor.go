@@ -75,8 +75,21 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 		cwd = p.WorkspaceRoots[0]
 	}
 
+	// Cursor's input_tokens INCLUDES cache reads and writes (it is total
+	// prompt tokens), unlike the Anthropic usage block this package models, where
+	// input is the uncached remainder. Normalize here, the one parse point for
+	// both the cost feed and the cost enrichment, or cached tokens get priced
+	// twice: once at the full input rate and again at the cache rate.
+	// Observed on every cache-bearing Cursor payload (input >= read + write)
+	// across composer, Grok, and Claude models; see issue #168. Clamp at 0 so an
+	// inconsistent payload can't go negative.
+	uncachedInput := p.InputTokens - p.CacheReadTokens - p.CacheWriteTokens
+	if uncachedInput < 0 {
+		uncachedInput = 0
+	}
+
 	usage := Usage{
-		InputTokens:          p.InputTokens,
+		InputTokens:          uncachedInput,
 		OutputTokens:         p.OutputTokens,
 		CacheReadInputTokens: p.CacheReadTokens,
 		CacheCreationInput:   p.CacheWriteTokens, // Cursor reports no TTL split -> 5m rate
@@ -93,7 +106,7 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 	// than emit a wrong or partial count, we leave Tools zero-valued
 	// (Total: 0, ByName omitted) — correctness over completeness (see issue #70).
 	tokens := Tokens{
-		Input:      p.InputTokens,
+		Input:      uncachedInput,
 		Output:     p.OutputTokens,
 		CacheRead:  p.CacheReadTokens,
 		CacheWrite: cacheWriteTokens,

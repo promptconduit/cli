@@ -171,7 +171,8 @@ func TestCostEnricher_ClaudeCodeOffsets(t *testing.T) {
 }
 
 func TestCostEnricher_Cursor(t *testing.T) {
-	raw := []byte(`{"hook_event_name":"stop","cursor_version":"1.0","model":"claude-sonnet-5","conversation_id":"conv-1","generation_id":"gen-1","session_id":"cs-1","input_tokens":500,"output_tokens":100,"cache_read_tokens":2000,"cache_write_tokens":0,"workspace_roots":["/tmp/proj"]}`)
+	// Cursor's input_tokens includes cache: 2500 = 500 uncached + 2000 cache reads.
+	raw := []byte(`{"hook_event_name":"stop","cursor_version":"1.0","model":"claude-sonnet-5","conversation_id":"conv-1","generation_id":"gen-1","session_id":"cs-1","input_tokens":2500,"output_tokens":100,"cache_read_tokens":2000,"cache_write_tokens":0,"workspace_roots":["/tmp/proj"]}`)
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatal(err)

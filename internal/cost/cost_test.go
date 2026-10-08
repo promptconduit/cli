@@ -426,12 +426,14 @@ func TestParseCursorHookPayload(t *testing.T) {
 	if !ev.ModelPriced {
 		t.Fatal("composer-2.5-fast should be priced")
 	}
-	const wantComposer = 17072*3e-6 + 92*15e-6 + 6048*5e-7
+	// input_tokens (17072) includes the 6048 cache reads, so only 11024 are
+	// priced at the input rate.
+	const wantComposer = 11024*3e-6 + 92*15e-6 + 6048*5e-7
 	if math.Abs(ev.Cost.Total-wantComposer) > 1e-9 {
 		t.Fatalf("composer cost = %v, want %v", ev.Cost.Total, wantComposer)
 	}
-	if ev.Tokens.Input != 17072 || ev.Tokens.Output != 92 || ev.Tokens.CacheRead != 6048 {
-		t.Fatalf("tokens not read exactly: %+v", ev.Tokens)
+	if ev.Tokens.Input != 11024 || ev.Tokens.Output != 92 || ev.Tokens.CacheRead != 6048 {
+		t.Fatalf("tokens: want uncached input 11024, got %+v", ev.Tokens)
 	}
 	if cwd != "/Users/x/tolken" || ev.CwdBase != "tolken" {
 		t.Fatalf("cwd handling wrong: cwd=%q base=%q", cwd, ev.CwdBase)
@@ -449,7 +451,8 @@ func TestParseCursorHookPayload(t *testing.T) {
 	}
 
 	// A known passthrough model prices exactly.
-	known := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"c2","generation_id":"g2","input_tokens":1000,"output_tokens":500,"cache_read_tokens":2000,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	// input_tokens 3000 = 1000 uncached + 2000 cache reads (Cursor's inclusive shape).
+	known := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"c2","generation_id":"g2","input_tokens":3000,"output_tokens":500,"cache_read_tokens":2000,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
 	ev2, _, ok := ParseCursorHookPayload(known, tbl)
 	if !ok || !ev2.ModelPriced {
 		t.Fatal("known model should parse and be priced")
@@ -823,7 +826,8 @@ func TestParseClaudeCodeLine_Signals(t *testing.T) {
 // (derived from the exact usage block) even though their tool summary is empty.
 func TestParseCursorHookPayload_Signals(t *testing.T) {
 	tbl := mustTable(t)
-	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":300,"output_tokens":50,"cache_read_tokens":700,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	// input_tokens 1000 includes the 700 cache reads -> 300 uncached.
+	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":1000,"output_tokens":50,"cache_read_tokens":700,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
 	ev, _, ok := ParseCursorHookPayload(payload, tbl)
 	if !ok {
 		t.Fatal("cursor payload should parse")
@@ -909,5 +913,44 @@ func TestPrivacy_NoPlatformSendInCostPackage(t *testing.T) {
 				t.Errorf("%s references forbidden platform-send symbol %q — the cost feature must stay local-only", name, sym)
 			}
 		}
+	}
+}
+
+// Regression for #168: Cursor's input_tokens already includes cache reads and
+// writes. Pricing it as uncached input charged cached tokens twice (full input
+// rate + cache rate), overstating cache-heavy requests several times over.
+func TestParseCursorHookPayload_InputIncludesCache(t *testing.T) {
+	tbl := mustTable(t)
+	// Shape seen in real payloads: input barely above cache_read.
+	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":2696092,"output_tokens":4760,"cache_read_tokens":2535648,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	ev, _, ok := ParseCursorHookPayload(payload, tbl)
+	if !ok {
+		t.Fatal("payload should parse")
+	}
+	const uncached = 2696092 - 2535648 // 160444
+	if ev.Tokens.Input != uncached {
+		t.Fatalf("Tokens.Input = %d, want %d (input minus cache)", ev.Tokens.Input, uncached)
+	}
+	want := uncached*3e-6 + 4760*15e-6 + 2535648*5e-7
+	if math.Abs(ev.Cost.Total-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", ev.Cost.Total, want)
+	}
+	doubleCounted := 2696092*3e-6 + 4760*15e-6 + 2535648*5e-7
+	if ev.Cost.Total >= doubleCounted/2 {
+		t.Fatalf("cost %v still looks double-counted (old value %v)", ev.Cost.Total, doubleCounted)
+	}
+}
+
+// An inconsistent payload (input below cache) clamps uncached input at 0
+// instead of going negative.
+func TestParseCursorHookPayload_ClampsUncachedInput(t *testing.T) {
+	tbl := mustTable(t)
+	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":100,"output_tokens":10,"cache_read_tokens":500,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
+	ev, _, ok := ParseCursorHookPayload(payload, tbl)
+	if !ok {
+		t.Fatal("payload should parse")
+	}
+	if ev.Tokens.Input != 0 || ev.Cost.Input != 0 {
+		t.Fatalf("want uncached input clamped to 0, got tokens=%d cost=%v", ev.Tokens.Input, ev.Cost.Input)
 	}
 }
