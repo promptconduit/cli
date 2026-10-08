@@ -72,7 +72,7 @@ func installCostExtension(e extension.Editor) {
 	switch {
 	case err != nil:
 		fmt.Printf("• Couldn't auto-install the cost extension into %s: %v\n", e.Name, err)
-		fmt.Printf("  Install it later with `promptconduit install cursor`, or use `promptconduit cost watch`.\n")
+		fmt.Printf("  Install it later with `promptconduit install cursor`, or run `promptconduit cost` for the current session.\n")
 		fmt.Println()
 	case res.Installed:
 		fmt.Printf("✓ Installed the cost status-bar extension into %s (v%s)\n", e.Name, res.Version)
@@ -329,9 +329,10 @@ func installClaudeCode(exePath string) error {
 	fmt.Println("✓ Installed PromptConduit hooks for Claude Code")
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
-	fmt.Println("Realtime token-cost tracking works for Claude Code too (from local transcripts):")
-	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("Token-cost tracking works for Claude Code too (computed locally on each Stop):")
 	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println("  Recent days:   promptconduit cost history")
+	fmt.Println("  Live spend:    the PromptConduit editor extension's status bar")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
@@ -478,8 +479,9 @@ func installCursor(exePath string) error {
 	installCostExtension(extension.Cursor)
 
 	fmt.Println("Realtime token-cost tracking is now ON for Cursor — computed 100% locally.")
-	fmt.Println("  Live spend:    promptconduit cost watch")
 	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println("  Recent days:   promptconduit cost history")
+	fmt.Println("  Live spend:    the PromptConduit status bar in Cursor")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
 	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
