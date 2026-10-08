@@ -941,16 +941,35 @@ func TestParseCursorHookPayload_InputIncludesCache(t *testing.T) {
 	}
 }
 
-// An inconsistent payload (input below cache) clamps uncached input at 0
-// instead of going negative.
-func TestParseCursorHookPayload_ClampsUncachedInput(t *testing.T) {
+// A payload that can't be inclusive (input below cache) is taken as already
+// uncached: its input is kept, not clamped away.
+func TestParseCursorHookPayload_ExclusiveShapeKeepsInput(t *testing.T) {
 	tbl := mustTable(t)
 	payload := []byte(`{"hook_event_name":"stop","model":"composer-2.5-fast","conversation_id":"c","generation_id":"g","input_tokens":100,"output_tokens":10,"cache_read_tokens":500,"cache_write_tokens":0,"workspace_roots":["/p"]}`)
 	ev, _, ok := ParseCursorHookPayload(payload, tbl)
 	if !ok {
 		t.Fatal("payload should parse")
 	}
-	if ev.Tokens.Input != 0 || ev.Cost.Input != 0 {
-		t.Fatalf("want uncached input clamped to 0, got tokens=%d cost=%v", ev.Tokens.Input, ev.Cost.Input)
+	if ev.Tokens.Input != 100 || math.Abs(ev.Cost.Input-100*3e-6) > 1e-12 {
+		t.Fatalf("want input kept at 100, got tokens=%d cost=%v", ev.Tokens.Input, ev.Cost.Input)
+	}
+}
+
+// Cache writes are part of input_tokens too. Real Claude-via-Cursor shape:
+// subtracting reads AND writes leaves a few dozen uncached tokens.
+func TestParseCursorHookPayload_InputIncludesCacheWrites(t *testing.T) {
+	tbl := mustTable(t)
+	payload := []byte(`{"hook_event_name":"stop","model":"claude-opus-4-8","conversation_id":"c","generation_id":"g","input_tokens":3759011,"output_tokens":1000,"cache_read_tokens":3555289,"cache_write_tokens":203680,"workspace_roots":["/p"]}`)
+	ev, _, ok := ParseCursorHookPayload(payload, tbl)
+	if !ok {
+		t.Fatal("payload should parse")
+	}
+	if ev.Tokens.Input != 42 || ev.Tokens.CacheWrite != 203680 {
+		t.Fatalf("want 42 uncached input and 203680 cache writes, got %+v", ev.Tokens)
+	}
+	// opus-4-8: input $5/M, output $25/M, 5m cache write $6.25/M, cache read $0.50/M.
+	want := 42*5e-6 + 1000*25e-6 + 203680*6.25e-6 + 3555289*0.5e-6
+	if math.Abs(ev.Cost.Total-want) > 1e-9 {
+		t.Fatalf("cost = %v, want %v", ev.Cost.Total, want)
 	}
 }
