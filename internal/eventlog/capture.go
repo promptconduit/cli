@@ -31,7 +31,7 @@ func RecordCapture(payload []byte) {
 
 	migrateOnce.Do(migrateV1Files)
 	// rotateAt=0: no blind size rotation. Disk is bounded by time-based
-	// retention pruning instead (see prune.go / MaybePrune), which never drops
+	// retention pruning instead (see prune.go), which never drops
 	// records inside the retention window.
 	appendLine(EventsJSONLPath(), line, 0)
 }

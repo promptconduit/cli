@@ -62,10 +62,9 @@ func processHookEvent() error {
 	eventlog.SetEnabled(cfg.EventLogEnabled())
 
 	// Opportunistically enforce local hook-history retention. Runs after the
-	// event is captured (deferred); cheap on the hot path — a couple of stats
-	// unless the log has grown past its size ceiling, in which case expired
-	// records (older than the retention window) are trimmed oldest-first.
-	defer eventlog.MaybePrune(cfg.RetentionDays())
+	// event is captured (deferred); the hot path only stats files — the rewrite
+	// itself runs in a detached subprocess.
+	defer maybeSpawnPrune(cfg.RetentionDays())
 
 	logger.Debug("Hook started")
 
@@ -514,6 +513,29 @@ func triggerAutoSync(sessionID string) {
 
 	// Also retry any previously failed syncs (spawn as separate subprocess)
 	go retryFailedSyncs(exe)
+}
+
+// maybeSpawnPrune hands retention enforcement to a detached `prune-auto`
+// subprocess once a local log is over its size ceiling. Rewriting a 500 MB log
+// inline would stall every hook (and, with many agents running, stack up
+// concurrent rewrites); here the hook pays a few stats and moves on.
+func maybeSpawnPrune(retentionDays int) {
+	if !eventlog.NeedsPrune(retentionDays) {
+		return
+	}
+	// Claim the throttle window before spawning so sibling hooks firing in the
+	// same instant don't each start a pruner.
+	eventlog.MarkPruneAttempt()
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "prune-auto")
+	if err := cmd.Start(); err != nil {
+		logger.Debug("prune: spawn failed: %v", err)
+		return
+	}
+	_ = cmd.Process.Release()
 }
 
 // retryFailedSyncs attempts to sync any previously failed transcripts

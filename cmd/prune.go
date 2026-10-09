@@ -29,6 +29,7 @@ size ceiling; this command lets you reclaim space on demand.`,
 
 func init() {
 	pruneCmd.Flags().BoolVar(&pruneDryRun, "dry-run", false, "Report what would be removed without changing any files")
+	rootCmd.AddCommand(pruneAutoCmd)
 }
 
 func runPrune(cmd *cobra.Command, args []string) error {
@@ -60,7 +61,25 @@ func runPrune(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	removed := eventlog.PruneExpired(days)
+	removed, err := eventlog.PruneExpired(days)
+	if err != nil {
+		return err
+	}
 	cmd.Printf("\nPruned %d expired record(s) older than %d days.\n", removed, days)
 	return nil
+}
+
+// prune-auto is the detached worker the hook spawns once a local log is over
+// its size ceiling (see maybeSpawnPrune). It takes the cross-process prune
+// lock, so a burst of spawns from concurrent agents collapses to one pass.
+var pruneAutoCmd = &cobra.Command{
+	Use:           "prune-auto",
+	Short:         "Enforce local hook-history retention (internal use)",
+	Hidden:        true,
+	SilenceUsage:  true,
+	SilenceErrors: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		eventlog.Prune(client.LoadConfig().RetentionDays())
+		return nil
+	},
 }
