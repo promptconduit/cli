@@ -23,6 +23,10 @@ var statusCmd = &cobra.Command{
 func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("PromptConduit CLI v%s\n\n", Version)
 
+	if self, err := os.Executable(); err == nil {
+		printDuplicateBinaries(os.Stdout, binariesOnPath(os.Getenv("PATH"), "promptconduit"), self)
+	}
+
 	// Mode + API key. Free / local-only is a first-class mode, not an error:
 	// events are captured locally and nothing is sent. Cloud sync requires an
 	// API key and local_only off.
