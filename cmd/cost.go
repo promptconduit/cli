@@ -102,9 +102,11 @@ func init() {
 
 	costHistoryCmd.Flags().IntVar(&costDays, "days", 7, "number of days to include")
 	costHistoryCmd.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a table")
+	costRepriceCmd.Flags().BoolVar(&costRepriceDryRun, "dry-run", false, "show what would change without writing")
 
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
+	costCmd.AddCommand(costRepriceCmd)
 	costCmd.AddCommand(costRefreshPricingCmd)
 	costCmd.AddCommand(costRefreshCardCmd)
 }

@@ -86,16 +86,28 @@ func (costEnricher) Enrich(ctx *Context) (any, error) {
 
 // cursorCost prices a Cursor stop/afterAgentResponse payload (exact tokens).
 func cursorCost(ctx *Context, table *cost.PriceTable) (any, error) {
-	ev, _, ok := cost.ParseCursorHookPayload(ctx.RawJSON, table)
+	ce, ok := CursorCostFromRaw(ctx.RawJSON, table, time.Now().UTC().Format(time.RFC3339))
 	if !ok {
 		return nil, nil // not a token-bearing payload
 	}
-	ev.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	return ce, nil
+}
+
+// CursorCostFromRaw builds the `cost` enrichment for a raw Cursor hook payload,
+// stamping the request with ts. It is what capture records, so re-running it
+// on a stored envelope's raw_event (`cost reprice`) yields exactly what a
+// fresh capture with the current parser and rate table would.
+func CursorCostFromRaw(raw []byte, table *cost.PriceTable, ts string) (*CostEnrichment, bool) {
+	ev, _, ok := cost.ParseCursorHookPayload(raw, table)
+	if !ok {
+		return nil, false
+	}
+	ev.Timestamp = ts
 	req := toRequest(ev)
 	return &CostEnrichment{
 		Requests: []CostRequest{req},
 		Totals:   totalsOf([]CostRequest{req}),
-	}, nil
+	}, true
 }
 
 // claudeCodeCost prices the transcript lines appended since the last Stop we
