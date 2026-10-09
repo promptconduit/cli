@@ -123,15 +123,15 @@ func ParseCursorHookPayload(raw []byte, table *PriceTable) (ev CostEvent, cwd st
 }
 
 // CursorFeedDir is where per-workspace Cursor cost feeds live
-// (~/.config/promptconduit/cost/cursor/). The `cost hook` command appends to
-// these; `cost watch` tails them.
+// (~/.config/promptconduit/cost/cursor/). The Cursor hook appends to these;
+// `cost session` reads them for the current session's summary.
 func CursorFeedDir() string {
 	return filepath.Join(StoreDir(), cursorFeedSubdir)
 }
 
 // CursorFeedPath returns the feed file for a workspace, named by the same
-// encoding Claude Code uses for project folders so `cost watch --cwd` can find
-// it deterministically.
+// encoding Claude Code uses for project folders so `cost session --cwd` can
+// find it deterministically.
 func CursorFeedPath(cwd string) string {
 	return filepath.Join(CursorFeedDir(), encodeProjectPath(cwd)+".ndjson")
 }
