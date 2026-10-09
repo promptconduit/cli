@@ -64,6 +64,19 @@ func TestRepriceCursorLine(t *testing.T) {
 		t.Fatalf("input = %d, want uncached input", req.Tokens.Input)
 	}
 
+	// Only the cost object changed: every byte before it (key order included)
+	// and after it is exactly as captured.
+	costAt := strings.Index(staleCursorEnvelope, `"cost":`) + len(`"cost":`)
+	if string(res.out[:costAt]) != staleCursorEnvelope[:costAt] {
+		t.Fatal("bytes before the cost object changed")
+	}
+	if !strings.HasSuffix(string(res.out), "}}") || strings.Index(string(res.out), `"schema":2`) != 1 {
+		t.Fatalf("envelope shape changed: %s", res.out)
+	}
+	if res.requestID != "g1" {
+		t.Fatalf("requestID = %q, want g1", res.requestID)
+	}
+
 	// Idempotent: repricing the repriced line changes nothing.
 	if again := repriceCursorLine(res.out, tbl); again.changed {
 		t.Fatal("second reprice should be a no-op")
@@ -111,7 +124,9 @@ func TestRepriceCursorLineKeepsHTMLCharacters(t *testing.T) {
 func TestScanReprice(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	other := `{"tool":"claude-code","enrichments":{}}`
-	if err := os.WriteFile(path, []byte(other+"\n"+staleCursorEnvelope+"\n"), 0o644); err != nil {
+	// Cursor records each turn twice (stop + afterAgentResponse, same id).
+	twin := strings.Replace(staleCursorEnvelope, `"hook_event":"stop"`, `"hook_event":"afterAgentResponse"`, 1)
+	if err := os.WriteFile(path, []byte(other+"\n"+staleCursorEnvelope+"\n"+twin+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var got []string
@@ -119,7 +134,11 @@ func TestScanReprice(t *testing.T) {
 		got = append(got, string(line))
 		return nil
 	})
-	if err != nil || s.n != 1 || len(got) != 1 || got[0] != staleCursorEnvelope {
-		t.Fatalf("scan = %+v, %v, %d lines; want exactly the stale envelope", s, err, len(got))
+	if err != nil || s.n != 2 || len(got) != 2 || got[0] != staleCursorEnvelope {
+		t.Fatalf("scan = %+v, %v, %d lines; want both Cursor lines", s, err, len(got))
+	}
+	// Totals count the request once, like cost history.
+	if s.requests != 1 || s.before != 9.43 {
+		t.Fatalf("requests=%d before=%v; want 1 request, $9.43 counted once", s.requests, s.before)
 	}
 }

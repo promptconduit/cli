@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -68,7 +69,12 @@ func hookBinaryPaths(home string) []string {
 			continue
 		}
 		for _, m := range hookCommandRe.FindAllSubmatch(data, -1) {
-			p := string(m[1])
+			// The match is the raw JSON string body: unescape it (Windows
+			// paths are stored with doubled backslashes).
+			var p string
+			if err := json.Unmarshal(append(append([]byte{'"'}, m[1]...), '"'), &p); err != nil {
+				continue
+			}
 			if !seen[resolvePath(p)] {
 				seen[resolvePath(p)] = true
 				out = append(out, p)
@@ -80,9 +86,11 @@ func hookBinaryPaths(home string) []string {
 
 // printDuplicateBinaries warns when more than one promptconduit is on PATH.
 // Typed commands run the first; hooks run the absolute path baked in at
-// install, so the hooks' copy is the one to keep. The removal advice never
-// names it, and is only specific when we know which copy the hooks use.
-func printDuplicateBinaries(w io.Writer, copies []string, self string, hookPaths []string) {
+// install. A specific `sudo rm` is suggested only when exactly one copy on
+// PATH is the hooks' copy AND it can self-update (its directory is writable).
+// If the hooks use a copy that can't update, deleting the others would strand
+// them on stale code, so the advice is to reinstall the hooks instead.
+func printDuplicateBinaries(w io.Writer, copies []string, self string, hookPaths []string, writable func(dir string) bool) {
 	if len(copies) < 2 {
 		return
 	}
@@ -93,7 +101,7 @@ func printDuplicateBinaries(w io.Writer, copies []string, self string, hookPaths
 	selfResolved := resolvePath(self)
 
 	_, _ = fmt.Fprintln(w, "Warning: multiple promptconduit binaries on PATH:")
-	var removable []string
+	var removable, hookCopies []string
 	for i, p := range copies {
 		var notes []string
 		if i == 0 {
@@ -102,6 +110,7 @@ func printDuplicateBinaries(w io.Writer, copies []string, self string, hookPaths
 		r := resolvePath(p)
 		if hookSet[r] {
 			notes = append(notes, "used by your hooks")
+			hookCopies = append(hookCopies, p)
 		} else {
 			removable = append(removable, p)
 		}
@@ -114,10 +123,14 @@ func printDuplicateBinaries(w io.Writer, copies []string, self string, hookPaths
 		}
 		_, _ = fmt.Fprintf(w, "  %s%s\n", p, label)
 	}
-	if len(removable) < len(copies) {
+	switch {
+	case len(hookCopies) == 1 && !writable(filepath.Dir(hookCopies[0])):
+		_, _ = fmt.Fprintf(w, "  Your hooks use %s, which can't self-update (its directory isn't writable).\n", hookCopies[0])
+		_, _ = fmt.Fprintln(w, "  Re-run `promptconduit install <tool>` from the copy you want to keep, then remove the others.")
+	case len(hookCopies) == 1 && len(removable) > 0:
 		_, _ = fmt.Fprintln(w, "  Keep the copy your hooks use and remove the others, so typed commands run the")
 		_, _ = fmt.Fprintf(w, "  same version (a root-owned copy needs sudo): sudo rm %s\n", strings.Join(removable, " "))
-	} else {
+	default:
 		_, _ = fmt.Fprintln(w, "  Remove the copies you don't use so typed commands, hooks, and auto-update agree.")
 	}
 	_, _ = fmt.Fprintln(w)

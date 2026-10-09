@@ -17,21 +17,16 @@ var ErrRewriteBusy = errors.New("event log is busy (a prune or rewrite is runnin
 // its replacement. changed=false keeps the original bytes verbatim.
 type LineTransform func(line []byte) (out []byte, changed bool)
 
-// RewriteEvents applies transform to every record in events.jsonl and
-// atomically replaces the file, returning how many records changed. It reuses
-// the pruner's safety model: the cross-process prune lock (so it never races a
-// background prune), a temp file in the same directory, a verbatim copy of any
-// lines appended by hooks while it ran, and a rename. Lines have no length cap
-// (raw tool payloads can be very large). Nothing is written when no record
-// changes.
-func RewriteEvents(transform LineTransform) (int, error) {
-	return LockedRewrite(nil, transform)
-}
-
-// LockedRewrite is RewriteEvents with a prepare step that runs under the same
-// lock, before the rewrite, with the log path (e.g. a read-only pass that writes
-// a backup). A prepare error aborts with the log untouched. Holding one lock
-// across both means no prune or rewrite can change the file in between.
+// LockedRewrite applies transform to every record in events.jsonl and
+// atomically replaces the file, returning how many records changed. prepare,
+// if set, runs first under the same lock with the log path (e.g. a read-only
+// pass that writes a backup); a prepare error aborts with the log untouched.
+//
+// It reuses the pruner's safety model: the cross-process prune lock (kept
+// fresh, so a long pass is never declared stale and raced), a temp file in the
+// same directory, a verbatim copy of any lines appended by hooks while it ran,
+// and a rename. Lines have no length cap (raw tool payloads can be very
+// large). Nothing is written when no record changes.
 func LockedRewrite(prepare func(path string) error, transform LineTransform) (int, error) {
 	release, ok := tryPruneLock()
 	if !ok {
@@ -170,6 +165,8 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 		_ = os.Remove(tmpName)
 		return 0, err
 	}
+	// Windows can't replace a file that is still open; close the source first.
+	_ = f.Close()
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return 0, err

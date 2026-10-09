@@ -49,11 +49,21 @@ func TestHookBinaryPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Windows paths are JSON-escaped in the config and must come back unescaped.
+	if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	win := `{"hooks":{"stop":[{"command":"C:\\\\pc\\\\promptconduit.exe hook"}]}}`
+	if err := os.WriteFile(filepath.Join(home, ".cursor", "hooks.json"), []byte(win), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	got := hookBinaryPaths(home)
-	if len(got) != 1 || got[0] != "/opt/pc/promptconduit" {
-		t.Fatalf("got %v, want [/opt/pc/promptconduit] once", got)
+	if len(got) != 2 || got[0] != "/opt/pc/promptconduit" || got[1] != `C:\\pc\\promptconduit.exe` {
+		t.Fatalf("got %q, want the unix path once and the unescaped Windows path", got)
 	}
 }
+
+func writableAll(string) bool { return true }
 
 func TestPrintDuplicateBinaries(t *testing.T) {
 	stale, fresh := t.TempDir(), t.TempDir()
@@ -61,7 +71,7 @@ func TestPrintDuplicateBinaries(t *testing.T) {
 
 	// Stale copy first on PATH, hooks use the fresh one: remove only the stale.
 	var buf bytes.Buffer
-	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin, []string{freshBin})
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin, []string{freshBin}, writableAll)
 	out := buf.String()
 	if !strings.Contains(out, staleBin+" (runs when you type `promptconduit`)") ||
 		!strings.Contains(out, freshBin+" (used by your hooks, this one)") ||
@@ -71,21 +81,36 @@ func TestPrintDuplicateBinaries(t *testing.T) {
 
 	// The hooks' copy is FIRST on PATH: advice must never name it.
 	buf.Reset()
-	printDuplicateBinaries(&buf, []string{freshBin, staleBin}, freshBin, []string{freshBin})
+	printDuplicateBinaries(&buf, []string{freshBin, staleBin}, freshBin, []string{freshBin}, writableAll)
 	if strings.Contains(buf.String(), "sudo rm "+freshBin) || !strings.Contains(buf.String(), "sudo rm "+staleBin) {
 		t.Fatalf("must suggest removing only the non-hook copy:\n%s", buf.String())
 	}
 
 	// Hooks' binary unknown: no specific rm command.
 	buf.Reset()
-	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, staleBin, nil)
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, staleBin, nil, writableAll)
 	if strings.Contains(buf.String(), "sudo rm") {
 		t.Fatalf("no specific removal without knowing the hooks' copy:\n%s", buf.String())
 	}
 
+	// Hooks use a copy that can't self-update: no rm; reinstall the hooks.
+	buf.Reset()
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin, []string{staleBin},
+		func(dir string) bool { return dir != stale })
+	if strings.Contains(buf.String(), "sudo rm") || !strings.Contains(buf.String(), "can't self-update") {
+		t.Fatalf("hooks on a non-updatable copy must not get rm advice:\n%s", buf.String())
+	}
+
+	// Hooks split across both copies: nothing is safely removable.
+	buf.Reset()
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin, []string{staleBin, freshBin}, writableAll)
+	if strings.Contains(buf.String(), "sudo rm") {
+		t.Fatalf("no rm when every copy is used by hooks:\n%s", buf.String())
+	}
+
 	// A single copy prints nothing.
 	buf.Reset()
-	printDuplicateBinaries(&buf, []string{freshBin}, freshBin, []string{freshBin})
+	printDuplicateBinaries(&buf, []string{freshBin}, freshBin, []string{freshBin}, writableAll)
 	if buf.Len() != 0 {
 		t.Fatalf("single copy should print nothing, got %q", buf.String())
 	}

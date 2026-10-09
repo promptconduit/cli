@@ -25,7 +25,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	if self, err := os.Executable(); err == nil {
 		home, _ := os.UserHomeDir()
-		printDuplicateBinaries(os.Stdout, binariesOnPath(os.Getenv("PATH"), "promptconduit"), self, hookBinaryPaths(home))
+		printDuplicateBinaries(os.Stdout, binariesOnPath(os.Getenv("PATH"), "promptconduit"), self, hookBinaryPaths(home), func(dir string) bool { return dirWritable(dir) == nil })
 	}
 
 	// Mode + API key. Free / local-only is a first-class mode, not an error:
