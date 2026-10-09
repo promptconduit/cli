@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // ErrRewriteBusy means another process holds the prune lock (a prune or
@@ -29,9 +30,31 @@ func RewriteEvents(transform LineTransform) (int, error) {
 		return 0, ErrRewriteBusy
 	}
 	defer release()
+	// A long pass over a large log could outlive pruneLockStale, letting a
+	// hook-spawned pruner break the lock and race this rewrite. Keep it fresh.
+	stop := keepLockFresh(pruneLockPath(), pruneLockStale/4)
+	defer stop()
 	writeMu.Lock()
 	defer writeMu.Unlock()
 	return rewriteFile(EventsJSONLPath(), transform)
+}
+
+// keepLockFresh bumps the lock file's mtime every interval until stop is called.
+func keepLockFresh(path string, interval time.Duration) (stop func()) {
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case now := <-t.C:
+				_ = os.Chtimes(path, now, now)
+			}
+		}
+	}()
+	return func() { close(done) }
 }
 
 func rewriteFile(path string, transform LineTransform) (int, error) {
@@ -97,20 +120,32 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 		return 0, nil
 	}
 
-	// Carry over lines hooks appended while we ran.
-	if _, err := f.Seek(startSize, io.SeekStart); err != nil {
-		return fail(err)
-	}
-	if _, err := io.Copy(w, f); err != nil {
-		return fail(err)
-	}
-	if err := w.Flush(); err != nil {
-		return fail(err)
+	// Carry over lines hooks appended while we ran. Two rounds: the first copies
+	// the bulk and pays for the slow fsync of the large temp; the second picks up
+	// whatever arrived during that fsync and is renamed immediately, so the
+	// window in which a concurrent append can miss the new file is tiny.
+	copied := startSize
+	carry := func() error {
+		if _, err := f.Seek(copied, io.SeekStart); err != nil {
+			return err
+		}
+		n, err := io.Copy(w, f)
+		copied += n
+		if err != nil {
+			return err
+		}
+		if err := w.Flush(); err != nil {
+			return err
+		}
+		return tmp.Sync()
 	}
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		return fail(err)
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := carry(); err != nil {
+		return fail(err)
+	}
+	if err := carry(); err != nil {
 		return fail(err)
 	}
 	if err := tmp.Close(); err != nil {

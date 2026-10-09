@@ -3,11 +3,10 @@ package cmd
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,17 +21,18 @@ var costRepriceDryRun bool
 
 var costRepriceCmd = &cobra.Command{
 	Use:   "reprice",
-	Short: "Recompute recorded Cursor cost from each event's raw hook payload",
+	Short: "Fix recorded Cursor cost that double-counted cached tokens",
 	Long: `Cost is fixed when an event is recorded, so Cursor events captured before
-v0.21.0 still carry the cache double-count fixed in #169. reprice re-derives
-the cost enrichment of every recorded Cursor event in
-~/.promptconduit/events.jsonl from the raw hook payload stored with it, using
-the current parser and rate table. Request timestamps are kept.
+v0.21.0 still carry the cache double-count fixed in #169 (Cursor's
+input_tokens already includes cache reads and writes). reprice finds those
+events in ~/.promptconduit/events.jsonl and re-derives their cost enrichment
+from the raw hook payload stored with each one, keeping the request timestamp.
 
-It is idempotent: it always works from the raw payload, so a second run changes
-nothing. Events whose cost doesn't change are left byte-for-byte. Before
-rewriting, the original versions of changed lines are saved next to the log.
-Use --dry-run to see the effect without writing.`,
+Only events that show the bug are touched (stored input equals the raw,
+cache-inclusive input_tokens), so events captured after the fix are never
+changed and a second run does nothing. The original lines are written to a
+backup file and fsynced before the log is rewritten. Use --dry-run to see the
+effect without writing.`,
 	SilenceUsage: true,
 	RunE:         runCostReprice,
 }
@@ -44,9 +44,16 @@ type repriceResult struct {
 	before, after float64
 }
 
-// repriceCursorLine re-derives the cost enrichment of one envelope if it is a
-// Cursor event with a cost enrichment and a raw payload. Everything else
-// (other tools, malformed lines, already-correct cost) is returned unchanged.
+// cursorRawTokens is the token block of a raw Cursor hook payload.
+type cursorRawTokens struct {
+	Input      int64 `json:"input_tokens"`
+	CacheRead  int64 `json:"cache_read_tokens"`
+	CacheWrite int64 `json:"cache_write_tokens"`
+}
+
+// repriceCursorLine re-derives the cost enrichment of one envelope when it is a
+// Cursor event recorded with the cache double-count. Everything else (other
+// tools, malformed lines, events already priced correctly) is unchanged.
 func repriceCursorLine(line []byte, table *cost.PriceTable) repriceResult {
 	// Cheap pre-filter: most lines are not Cursor cost events.
 	if !bytes.Contains(line, []byte(`"cursor"`)) || !bytes.Contains(line, []byte(`"cost":`)) {
@@ -72,6 +79,19 @@ func repriceCursorLine(line []byte, table *cost.PriceTable) repriceResult {
 		return repriceResult{}
 	}
 
+	// Only the bug: the raw payload is cache-inclusive and the stored input is
+	// that inclusive count (pre-fix parser). Post-fix events store input minus
+	// cache and never match, so reprice is idempotent no matter how the rate
+	// table changes later.
+	var rt cursorRawTokens
+	if err := json.Unmarshal(raw, &rt); err != nil {
+		return repriceResult{}
+	}
+	cached := rt.CacheRead + rt.CacheWrite
+	if cached == 0 || rt.Input < cached || old.Totals.Tokens.Input != rt.Input {
+		return repriceResult{}
+	}
+
 	ts := capturedAt
 	if len(old.Requests) > 0 && old.Requests[0].Timestamp != "" {
 		ts = old.Requests[0].Timestamp
@@ -80,25 +100,73 @@ func repriceCursorLine(line []byte, table *cost.PriceTable) repriceResult {
 	if !ok {
 		return repriceResult{}
 	}
-	if math.Abs(fresh.Totals.USD-old.Totals.USD) < 1e-9 && fresh.Totals.Tokens == old.Totals.Tokens {
-		return repriceResult{} // already correct: keep the original bytes
-	}
-
-	costJSON, err := json.Marshal(fresh)
+	costJSON, err := marshalNoEscape(fresh)
 	if err != nil {
 		return repriceResult{}
 	}
 	enr["cost"] = costJSON
-	enrJSON, err := json.Marshal(enr)
+	enrJSON, err := marshalNoEscape(enr)
 	if err != nil {
 		return repriceResult{}
 	}
 	top["enrichments"] = enrJSON
-	out, err := json.Marshal(top)
+	out, err := marshalNoEscape(top)
 	if err != nil {
 		return repriceResult{}
 	}
 	return repriceResult{out: out, changed: true, before: old.Totals.USD, after: fresh.Totals.USD}
+}
+
+// marshalNoEscape is json.Marshal without HTML escaping, so <, >, & in
+// preserved payloads (prompts, shell commands) keep their captured form.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// repriceScan is one read-only pass over the log: it tallies what would change
+// and calls onChange with each original line that would be repriced.
+type repriceScan struct {
+	n             int
+	before, after float64
+}
+
+func scanReprice(path string, table *cost.PriceTable, onChange func(line []byte) error) (repriceScan, error) {
+	var s repriceScan
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	defer func() { _ = f.Close() }()
+	r := bufio.NewReaderSize(f, 1<<20)
+	for {
+		line, readErr := r.ReadBytes('\n')
+		body := bytes.TrimSuffix(line, []byte("\n"))
+		if res := repriceCursorLine(body, table); res.changed {
+			s.n++
+			s.before += res.before
+			s.after += res.after
+			if onChange != nil {
+				if err := onChange(body); err != nil {
+					return s, err
+				}
+			}
+		}
+		if readErr == io.EOF {
+			return s, nil
+		}
+		if readErr != nil {
+			return s, readErr
+		}
+	}
 }
 
 func runCostReprice(cmd *cobra.Command, args []string) error {
@@ -107,84 +175,72 @@ func runCostReprice(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("load pricing table: %w", err)
 	}
-
-	var n int
-	var before, after float64
-	tally := func(r repriceResult) {
-		n++
-		before += r.before
-		after += r.after
-	}
+	path := eventlog.EventsJSONLPath()
 
 	if costRepriceDryRun {
-		f, err := os.Open(eventlog.EventsJSONLPath())
-		if os.IsNotExist(err) {
-			_, _ = fmt.Fprintln(out, "No event log yet; nothing to reprice.")
-			return nil
-		}
+		s, err := scanReprice(path, table, nil)
 		if err != nil {
-			return err
+			return fmt.Errorf("read event log: %w", err)
 		}
-		defer func() { _ = f.Close() }()
-		r := bufio.NewReaderSize(f, 1<<20)
-		for {
-			line, readErr := r.ReadBytes('\n')
-			if res := repriceCursorLine(bytes.TrimSuffix(line, []byte("\n")), table); res.changed {
-				tally(res)
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				return readErr
-			}
-		}
-		if n == 0 {
-			_, _ = fmt.Fprintln(out, "All recorded Cursor cost is already current; nothing to reprice.")
+		if s.n == 0 {
+			_, _ = fmt.Fprintln(out, "No recorded Cursor cost needs repricing.")
 			return nil
 		}
-		_, _ = fmt.Fprintf(out, "Would reprice %d Cursor event(s): $%.2f → $%.2f.\n", n, before, after)
+		_, _ = fmt.Fprintf(out, "Would reprice %d Cursor event(s): $%.2f → $%.2f.\n", s.n, s.before, s.after)
 		_, _ = fmt.Fprintln(out, "Run `promptconduit cost reprice` to apply.")
 		return nil
 	}
 
-	// Originals of changed lines go to a sidecar backup, opened lazily so a
-	// no-op run leaves nothing behind.
+	// Pass 1: back up every line that will change, and fsync the backup BEFORE
+	// touching the log. A failure here aborts with the log untouched.
 	backupPath := filepath.Join(eventlog.Dir(), "events.jsonl.reprice-backup-"+time.Now().Format("20060102-150405"))
 	var backup *os.File
-	var backupErr error
-	changed, err := eventlog.RewriteEvents(func(line []byte) ([]byte, bool) {
-		res := repriceCursorLine(line, table)
-		if !res.changed || backupErr != nil {
-			return nil, false
-		}
+	backedUp := map[[sha256.Size]byte]bool{}
+	_, err = scanReprice(path, table, func(line []byte) error {
 		if backup == nil {
-			backup, backupErr = os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-			if backupErr != nil {
-				return nil, false // no backup, no change
+			var err error
+			if backup, err = os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600); err != nil {
+				return err
 			}
 		}
-		if _, backupErr = backup.Write(append(append([]byte{}, line...), '\n')); backupErr != nil {
-			return nil, false
+		if _, err := backup.Write(append(append([]byte{}, line...), '\n')); err != nil {
+			return err
 		}
-		tally(res)
-		return res.out, true
+		backedUp[sha256.Sum256(line)] = true
+		return nil
 	})
 	if backup != nil {
-		_ = backup.Close()
-	}
-	if errors.Is(err, eventlog.ErrRewriteBusy) {
-		return err
+		if err == nil {
+			err = backup.Sync()
+		}
+		if cerr := backup.Close(); err == nil {
+			err = cerr
+		}
 	}
 	if err != nil {
-		return fmt.Errorf("rewrite event log: %w", err)
+		return fmt.Errorf("write backup %s (event log not modified): %w", backupPath, err)
 	}
-	if backupErr != nil {
-		return fmt.Errorf("write backup %s: %w", backupPath, backupErr)
-	}
-	if changed == 0 {
-		_, _ = fmt.Fprintln(out, "All recorded Cursor cost is already current; nothing to reprice.")
+	if len(backedUp) == 0 {
+		_, _ = fmt.Fprintln(out, "No recorded Cursor cost needs repricing.")
 		return nil
+	}
+
+	// Pass 2: rewrite, changing only lines whose original is in the backup.
+	var before, after float64
+	changed, err := eventlog.RewriteEvents(func(line []byte) ([]byte, bool) {
+		if !backedUp[sha256.Sum256(line)] {
+			return nil, false
+		}
+		res := repriceCursorLine(line, table)
+		if !res.changed {
+			return nil, false
+		}
+		before += res.before
+		after += res.after
+		return res.out, true
+	})
+	if err != nil {
+		return fmt.Errorf("rewrite event log (backup kept at %s): %w", backupPath, err)
 	}
 	_, _ = fmt.Fprintf(out, "Repriced %d Cursor event(s): $%.2f → $%.2f.\n", changed, before, after)
 	_, _ = fmt.Fprintf(out, "Original lines saved to %s\n", backupPath)

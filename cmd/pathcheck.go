@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // binariesOnPath returns every distinct executable named name on pathEnv, in
@@ -62,16 +63,8 @@ func printDuplicateBinaries(w io.Writer, copies []string, self string) {
 			notes = append(notes, "this one")
 		}
 		label := ""
-		for j, n := range notes {
-			if j == 0 {
-				label = " ("
-			} else {
-				label += ", "
-			}
-			label += n
-		}
-		if label != "" {
-			label += ")"
+		if len(notes) > 0 {
+			label = " (" + strings.Join(notes, ", ") + ")"
 		}
 		_, _ = fmt.Fprintf(w, "  %s%s\n", p, label)
 	}

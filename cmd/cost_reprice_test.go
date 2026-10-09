@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/promptconduit/cli/internal/cost"
@@ -78,5 +81,45 @@ func TestRepriceCursorLineIgnoresOthers(t *testing.T) {
 		if res := repriceCursorLine([]byte(line), tbl); res.changed {
 			t.Errorf("%s: should be left unchanged", name)
 		}
+	}
+}
+
+// A post-fix event (stored input = raw input minus cache) is never touched,
+// even if its stored USD differs from today's rate table.
+func TestRepriceCursorLineSkipsPostFixEvents(t *testing.T) {
+	line := `{"tool":"cursor","captured_at":"2026-10-09T12:00:00Z",` +
+		`"raw_event":{"hook_event_name":"stop","model":"composer-2.5-fast","generation_id":"g","input_tokens":1000,"output_tokens":10,"cache_read_tokens":700,"cache_write_tokens":0},` +
+		`"enrichments":{"cost":{"requests":[{"request_id":"g","ts":"2026-10-09T12:00:00Z"}],"totals":{"usd":123.45,"tokens":{"input":300,"output":10,"cache_read":700,"cache_write":0}}}}}`
+	if res := repriceCursorLine([]byte(line), bundledTable(t)); res.changed {
+		t.Fatal("post-fix event must not be repriced (rate drift is not the bug)")
+	}
+}
+
+// Preserved payloads keep <, >, & as captured (no < escaping).
+func TestRepriceCursorLineKeepsHTMLCharacters(t *testing.T) {
+	line := strings.Replace(staleCursorEnvelope, `"workspace_roots":["/p"]`, `"workspace_roots":["/p"],"prompt":"fix <div> && a > b"`, 1)
+	res := repriceCursorLine([]byte(line), bundledTable(t))
+	if !res.changed {
+		t.Fatal("stale envelope should be repriced")
+	}
+	if !strings.Contains(string(res.out), `"prompt":"fix <div> && a > b"`) {
+		t.Fatalf("HTML characters were escaped: %s", res.out)
+	}
+}
+
+// scanReprice finds stale lines and hands each original to onChange.
+func TestScanReprice(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	other := `{"tool":"claude-code","enrichments":{}}`
+	if err := os.WriteFile(path, []byte(other+"\n"+staleCursorEnvelope+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	s, err := scanReprice(path, bundledTable(t), func(line []byte) error {
+		got = append(got, string(line))
+		return nil
+	})
+	if err != nil || s.n != 1 || len(got) != 1 || got[0] != staleCursorEnvelope {
+		t.Fatalf("scan = %+v, %v, %d lines; want exactly the stale envelope", s, err, len(got))
 	}
 }
