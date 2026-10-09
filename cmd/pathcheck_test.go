@@ -39,22 +39,53 @@ func TestBinariesOnPath(t *testing.T) {
 	}
 }
 
+func TestHookBinaryPaths(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `{"hooks":{"Stop":[{"hooks":[{"command":"/opt/pc/promptconduit hook"}]}],` +
+		`"PreToolUse":[{"hooks":[{"command":"/opt/pc/promptconduit hook"}]}]}}`
+	if err := os.WriteFile(filepath.Join(home, ".claude", "settings.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := hookBinaryPaths(home)
+	if len(got) != 1 || got[0] != "/opt/pc/promptconduit" {
+		t.Fatalf("got %v, want [/opt/pc/promptconduit] once", got)
+	}
+}
+
 func TestPrintDuplicateBinaries(t *testing.T) {
 	stale, fresh := t.TempDir(), t.TempDir()
 	staleBin, freshBin := writeExe(t, stale), writeExe(t, fresh)
 
+	// Stale copy first on PATH, hooks use the fresh one: remove only the stale.
 	var buf bytes.Buffer
-	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin)
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, freshBin, []string{freshBin})
 	out := buf.String()
-	if !strings.Contains(out, staleBin+" (runs when you type `promptconduit`)") {
-		t.Fatalf("first copy not flagged as the typed one:\n%s", out)
-	}
-	if !strings.Contains(out, freshBin+" (this one)") {
-		t.Fatalf("running copy not flagged:\n%s", out)
+	if !strings.Contains(out, staleBin+" (runs when you type `promptconduit`)") ||
+		!strings.Contains(out, freshBin+" (used by your hooks, this one)") ||
+		!strings.Contains(out, "sudo rm "+staleBin+"\n") {
+		t.Fatalf("unexpected advice:\n%s", out)
 	}
 
+	// The hooks' copy is FIRST on PATH: advice must never name it.
 	buf.Reset()
-	printDuplicateBinaries(&buf, []string{freshBin}, freshBin)
+	printDuplicateBinaries(&buf, []string{freshBin, staleBin}, freshBin, []string{freshBin})
+	if strings.Contains(buf.String(), "sudo rm "+freshBin) || !strings.Contains(buf.String(), "sudo rm "+staleBin) {
+		t.Fatalf("must suggest removing only the non-hook copy:\n%s", buf.String())
+	}
+
+	// Hooks' binary unknown: no specific rm command.
+	buf.Reset()
+	printDuplicateBinaries(&buf, []string{staleBin, freshBin}, staleBin, nil)
+	if strings.Contains(buf.String(), "sudo rm") {
+		t.Fatalf("no specific removal without knowing the hooks' copy:\n%s", buf.String())
+	}
+
+	// A single copy prints nothing.
+	buf.Reset()
+	printDuplicateBinaries(&buf, []string{freshBin}, freshBin, []string{freshBin})
 	if buf.Len() != 0 {
 		t.Fatalf("single copy should print nothing, got %q", buf.String())
 	}

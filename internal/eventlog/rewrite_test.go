@@ -87,3 +87,29 @@ func TestRewriteFileMissingIsNoop(t *testing.T) {
 		t.Fatalf("missing file: %d, %v; want 0, nil", n, err)
 	}
 }
+
+// A record still being written at the start of the pass (no trailing newline)
+// is copied verbatim and completed by the carry-over, never split.
+func TestRewriteFileKeepsPartialFinalRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, []byte("a\n{\"half\":"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	completed := false
+	n, err := rewriteFile(path, func(line []byte) ([]byte, bool) {
+		if !completed {
+			completed = true
+			f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			_, _ = f.WriteString("1}\n")
+			_ = f.Close()
+		}
+		return []byte("A"), true
+	})
+	if err != nil || n != 1 {
+		t.Fatalf("rewriteFile = %d, %v; want 1, nil", n, err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "A\n{\"half\":1}\n" {
+		t.Fatalf("got %q; partial record must be completed, not split", got)
+	}
+}

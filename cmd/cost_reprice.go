@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -136,7 +137,7 @@ type repriceScan struct {
 	before, after float64
 }
 
-func scanReprice(path string, table *cost.PriceTable, onChange func(line []byte) error) (repriceScan, error) {
+func scanReprice(path string, table *cost.PriceTable, onChange func(line []byte, res repriceResult) error) (repriceScan, error) {
 	var s repriceScan
 	f, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -155,7 +156,7 @@ func scanReprice(path string, table *cost.PriceTable, onChange func(line []byte)
 			s.before += res.before
 			s.after += res.after
 			if onChange != nil {
-				if err := onChange(body); err != nil {
+				if err := onChange(body, res); err != nil {
 					return s, err
 				}
 			}
@@ -191,58 +192,73 @@ func runCostReprice(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Pass 1: back up every line that will change, and fsync the backup BEFORE
-	// touching the log. A failure here aborts with the log untouched.
+	// Pass 1 (under the rewrite lock): back up every line that will change and
+	// fsync the backup BEFORE the log is touched; any failure aborts with the
+	// log untouched. Pass 2 (same lock, so nothing changed in between) swaps in
+	// the outputs computed here, only for lines whose original was backed up.
 	backupPath := filepath.Join(eventlog.Dir(), "events.jsonl.reprice-backup-"+time.Now().Format("20060102-150405"))
-	var backup *os.File
-	backedUp := map[[sha256.Size]byte]bool{}
-	_, err = scanReprice(path, table, func(line []byte) error {
-		if backup == nil {
-			var err error
-			if backup, err = os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600); err != nil {
+	planned := map[[sha256.Size]byte]repriceResult{}
+	prepare := func(path string) error {
+		var backup *os.File
+		_, err := scanReprice(path, table, func(line []byte, res repriceResult) error {
+			if backup == nil {
+				var err error
+				if backup, err = os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600); err != nil {
+					return err
+				}
+			}
+			if _, err := backup.Write(append(append([]byte{}, line...), '\n')); err != nil {
 				return err
 			}
+			planned[sha256.Sum256(line)] = res
+			return nil
+		})
+		if backup != nil {
+			if err == nil {
+				err = backup.Sync()
+			}
+			if cerr := backup.Close(); err == nil {
+				err = cerr
+			}
 		}
-		if _, err := backup.Write(append(append([]byte{}, line...), '\n')); err != nil {
-			return err
+		if err != nil {
+			return fmt.Errorf("write backup %s (event log not modified): %w", backupPath, err)
 		}
-		backedUp[sha256.Sum256(line)] = true
-		return nil
-	})
-	if backup != nil {
-		if err == nil {
-			err = backup.Sync()
+		if len(planned) == 0 {
+			return errNothingToReprice
 		}
-		if cerr := backup.Close(); err == nil {
-			err = cerr
-		}
-	}
-	if err != nil {
-		return fmt.Errorf("write backup %s (event log not modified): %w", backupPath, err)
-	}
-	if len(backedUp) == 0 {
-		_, _ = fmt.Fprintln(out, "No recorded Cursor cost needs repricing.")
 		return nil
 	}
 
-	// Pass 2: rewrite, changing only lines whose original is in the backup.
 	var before, after float64
-	changed, err := eventlog.RewriteEvents(func(line []byte) ([]byte, bool) {
-		if !backedUp[sha256.Sum256(line)] {
+	changed, err := eventlog.LockedRewrite(prepare, func(line []byte) ([]byte, bool) {
+		// Cheap filter first: only Cursor cost lines can be in the plan.
+		if !bytes.Contains(line, []byte(`"cursor"`)) {
 			return nil, false
 		}
-		res := repriceCursorLine(line, table)
-		if !res.changed {
+		res, ok := planned[sha256.Sum256(line)]
+		if !ok {
 			return nil, false
 		}
 		before += res.before
 		after += res.after
 		return res.out, true
 	})
+	if errors.Is(err, errNothingToReprice) {
+		_, _ = fmt.Fprintln(out, "No recorded Cursor cost needs repricing.")
+		return nil
+	}
 	if err != nil {
-		return fmt.Errorf("rewrite event log (backup kept at %s): %w", backupPath, err)
+		if len(planned) > 0 {
+			return fmt.Errorf("rewrite event log (backup kept at %s): %w", backupPath, err)
+		}
+		return err
 	}
 	_, _ = fmt.Fprintf(out, "Repriced %d Cursor event(s): $%.2f → $%.2f.\n", changed, before, after)
 	_, _ = fmt.Fprintf(out, "Original lines saved to %s\n", backupPath)
 	return nil
 }
+
+// errNothingToReprice aborts the locked rewrite when the backup pass found
+// nothing to change, so no temp file or backup is created.
+var errNothingToReprice = errors.New("nothing to reprice")

@@ -25,6 +25,14 @@ type LineTransform func(line []byte) (out []byte, changed bool)
 // (raw tool payloads can be very large). Nothing is written when no record
 // changes.
 func RewriteEvents(transform LineTransform) (int, error) {
+	return LockedRewrite(nil, transform)
+}
+
+// LockedRewrite is RewriteEvents with a prepare step that runs under the same
+// lock, before the rewrite, with the log path (e.g. a read-only pass that writes
+// a backup). A prepare error aborts with the log untouched. Holding one lock
+// across both means no prune or rewrite can change the file in between.
+func LockedRewrite(prepare func(path string) error, transform LineTransform) (int, error) {
 	release, ok := tryPruneLock()
 	if !ok {
 		return 0, ErrRewriteBusy
@@ -36,7 +44,13 @@ func RewriteEvents(transform LineTransform) (int, error) {
 	defer stop()
 	writeMu.Lock()
 	defer writeMu.Unlock()
-	return rewriteFile(EventsJSONLPath(), transform)
+	path := EventsJSONLPath()
+	if prepare != nil {
+		if err := prepare(path); err != nil {
+			return 0, err
+		}
+	}
+	return rewriteFile(path, transform)
 }
 
 // keepLockFresh bumps the lock file's mtime every interval until stop is called.
@@ -91,11 +105,15 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 	buf := make([]byte, 0, 4096)
 	for {
 		line, readErr := r.ReadBytes('\n')
-		if len(line) > 0 {
-			body := line
-			if body[len(body)-1] == '\n' {
-				body = body[:len(body)-1]
+		if len(line) > 0 && line[len(line)-1] != '\n' {
+			// A record still being written (or truncated) at startSize: copy it
+			// verbatim with no newline; carry() appends the rest after startSize,
+			// so it is never split into two lines.
+			if _, err := w.Write(line); err != nil {
+				return fail(err)
 			}
+		} else if len(line) > 0 {
+			body := line[:len(line)-1]
 			out, ch := transform(body)
 			if ch {
 				changed++

@@ -115,7 +115,7 @@ func TestScanReprice(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got []string
-	s, err := scanReprice(path, bundledTable(t), func(line []byte) error {
+	s, err := scanReprice(path, bundledTable(t), func(line []byte, _ repriceResult) error {
 		got = append(got, string(line))
 		return nil
 	})

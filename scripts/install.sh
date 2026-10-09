@@ -215,7 +215,11 @@ main() {
 
     # Install
     install_binary "$version" "$platform" "$install_dir"
-    warn_if_shadowed "${install_dir}/${BINARY_NAME}"
+    local installed_bin="${install_dir}/${BINARY_NAME}"
+    if [[ "$platform" == windows_* ]]; then
+        installed_bin="${installed_bin}.exe" # matches install_binary's name
+    fi
+    warn_if_shadowed "$installed_bin"
 
     # Configure API key if provided
     configure_api_key "$api_key"

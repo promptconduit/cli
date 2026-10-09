@@ -24,7 +24,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("PromptConduit CLI v%s\n\n", Version)
 
 	if self, err := os.Executable(); err == nil {
-		printDuplicateBinaries(os.Stdout, binariesOnPath(os.Getenv("PATH"), "promptconduit"), self)
+		home, _ := os.UserHomeDir()
+		printDuplicateBinaries(os.Stdout, binariesOnPath(os.Getenv("PATH"), "promptconduit"), self, hookBinaryPaths(home))
 	}
 
 	// Mode + API key. Free / local-only is a first-class mode, not an error:
