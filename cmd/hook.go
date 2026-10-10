@@ -516,6 +516,9 @@ func triggerAutoSync(sessionID string) {
 	}
 
 	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", strconv.Itoa(delay))
+	// Own session: the (possibly ~60s delayed) trailing sync must survive the
+	// agent or terminal exiting.
+	detachProcess(cmd)
 	if err := cmd.Start(); err != nil {
 		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
 		return
@@ -578,6 +581,7 @@ func retryFailedSyncs(exe string) {
 		}
 
 		cmd := exec.Command(exe, "sync", "--file", failed.FilePath)
+		detachProcess(cmd)
 		if err := cmd.Start(); err != nil {
 			logger.Debug("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
 			continue
