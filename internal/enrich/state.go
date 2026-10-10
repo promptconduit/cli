@@ -77,32 +77,42 @@ func saveState(sessionID string, st sessionState) {
 	if sessionID == "" {
 		return
 	}
-	dir := stateDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
 	data, err := json.Marshal(st)
 	if err != nil {
 		return
 	}
+	dir := stateDir()
+	if writeFileAtomic(dir, statePath(sessionID), data) {
+		maybeGCState(dir)
+	}
+}
+
+// writeFileAtomic writes data to path (inside dir, created if needed) via a
+// temp file + rename, so concurrent hook processes never see a torn file.
+// Reports whether the write landed.
+func writeFileAtomic(dir, path string, data []byte) bool {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false
+	}
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
-		return
+		return false
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return
+		return false
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return
+		return false
 	}
-	if err := os.Rename(tmpName, statePath(sessionID)); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
+		return false
 	}
-	maybeGCState(dir)
+	return true
 }
 
 // maybeGCState deletes session state files untouched for stateMaxAge, on
