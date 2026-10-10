@@ -46,11 +46,17 @@ var stateDirOverride string
 // SetStateDirForTest overrides the enrich state directory. Test-only.
 func SetStateDirForTest(dir string) { stateDirOverride = dir }
 
-func stateDir() string {
+// enrichBaseDir is the root every enrich state/cache path hangs off: the
+// config dir, or the test override.
+func enrichBaseDir() string {
 	if stateDirOverride != "" {
-		return filepath.Join(stateDirOverride, stateSubdir)
+		return stateDirOverride
 	}
-	return filepath.Join(client.ConfigDir(), stateSubdir)
+	return client.ConfigDir()
+}
+
+func stateDir() string {
+	return filepath.Join(enrichBaseDir(), stateSubdir)
 }
 
 func statePath(sessionID string) string {
@@ -83,7 +89,7 @@ func saveState(sessionID string, st sessionState) {
 	}
 	dir := stateDir()
 	if writeFileAtomic(dir, statePath(sessionID), data) {
-		maybeGCState(dir)
+		maybeGC(dir, stateMaxAge)
 	}
 }
 
@@ -115,9 +121,9 @@ func writeFileAtomic(dir, path string, data []byte) bool {
 	return true
 }
 
-// maybeGCState deletes session state files untouched for stateMaxAge, on
-// roughly 1 in gcOneInEvery calls (mirrors the correlation store's approach).
-func maybeGCState(dir string) {
+// maybeGC deletes files in dir untouched for maxAge, on roughly 1 in
+// gcOneInEvery calls (mirrors the correlation store's approach).
+func maybeGC(dir string, maxAge time.Duration) {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return
@@ -129,7 +135,7 @@ func maybeGCState(dir string) {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-stateMaxAge)
+	cutoff := time.Now().Add(-maxAge)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue

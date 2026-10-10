@@ -37,10 +37,18 @@ func ExtractContext(workingDir string) *envelope.GitContext {
 	ctx := &envelope.GitContext{
 		WorkingDirectory: workingDir,
 		RepoPath:         repoRoot,
+		GitDir:           gitDir,
 	}
 
 	// Branch, HEAD oid, ahead/behind and working-tree counts.
 	st := parseStatusV2(runGitCmd(workingDir, "status", "--porcelain=v2", "--branch"))
+	if !st.ok {
+		// status failed or timed out (e.g. a huge untracked scan). Don't report
+		// a bogus detached HEAD: recover the cheap identity fields directly;
+		// counts and ahead/behind stay zero.
+		st.oid = runGitCmd(workingDir, "rev-parse", "HEAD")
+		st.branch = runGitCmd(workingDir, "branch", "--show-current")
+	}
 	ctx.CommitHash = st.oid
 	ctx.Branch = st.branch
 	ctx.IsDetachedHead = st.branch == ""
@@ -82,7 +90,8 @@ func ExtractContext(workingDir string) *envelope.GitContext {
 //
 // Resolving git-dir and common-dir in one invocation gives them identical
 // semantics, avoiding false worktree positives from symlink/case differences
-// between separate subcommands, and needs no `--path-format` (git >= 2.5).
+// between separate subcommands, and needs no `--path-format`. (ExtractContext
+// as a whole needs git >= 2.11 for `status --porcelain=v2`.)
 func revParseDirs(workingDir string) (repoRoot, gitDir, commonDir string, ok bool) {
 	out := runGitCmd(workingDir, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
 	lines := strings.Split(out, "\n")
@@ -105,16 +114,9 @@ func revParseDirs(workingDir string) (repoRoot, gitDir, commonDir string, ok boo
 	return repoRoot, abs(gitDir), abs(commonDir), true
 }
 
-// detectWorktree reports whether workingDir is a linked git worktree (not the
-// main checkout): its per-worktree git dir (.git/worktrees/<name>) differs
-// from the shared common dir; in the main checkout the two are identical.
-func detectWorktree(workingDir string) bool {
-	_, gitDir, commonDir, ok := revParseDirs(workingDir)
-	return ok && gitDir != commonDir
-}
-
 // statusV2 is what ExtractContext needs from `git status --porcelain=v2 --branch`.
 type statusV2 struct {
+	ok                          bool   // the branch header was present (status succeeded)
 	oid                         string // "" on an unborn branch
 	branch                      string // "" when HEAD is detached
 	ahead, behind               int
@@ -142,6 +144,7 @@ func parseStatusV2(out string) statusV2 {
 				st.oid = oid
 			}
 		case strings.HasPrefix(line, "# branch.head "):
+			st.ok = true
 			if head := strings.TrimPrefix(line, "# branch.head "); head != "(detached)" {
 				st.branch = head
 			}
@@ -169,19 +172,11 @@ func parseStatusV2(out string) statusV2 {
 	return st
 }
 
-// DefaultBranch returns origin's HEAD branch name (e.g. "main"), or "" when
-// unknown. Reads the local ref only — no network. The ref may be absent on
-// fresh clones that never ran `git remote set-head`; that's fine, we omit it.
-func DefaultBranch(workingDir string) string {
-	_, _, commonDir, ok := revParseDirs(workingDir)
-	if !ok {
-		return ""
-	}
-	return defaultBranchFromCommonDir(workingDir, commonDir)
-}
-
-// defaultBranchFromCommonDir reads refs/remotes/origin/HEAD straight from the
-// shared git dir — symbolic refs are always loose files ("ref: refs/remotes/
+// defaultBranchFromCommonDir returns origin's HEAD branch name (e.g. "main"),
+// or "" when unknown. Local ref only — no network; the ref may be absent on
+// fresh clones that never ran `git remote set-head`, and that's fine.
+//
+// It reads refs/remotes/origin/HEAD straight from the shared git dir — symbolic refs are always loose files ("ref: refs/remotes/
 // origin/main"), never packed — saving a subprocess on the hook path. Repos
 // on the reftable backend have no loose refs, so they fall back to git.
 func defaultBranchFromCommonDir(workingDir, commonDir string) string {

@@ -21,6 +21,7 @@ func TestParseStatusV2(t *testing.T) {
 		"? dir/\n"
 	st := parseStatusV2(out)
 	want := statusV2{
+		ok:  true,
 		oid: "4d78170ec02cc69809a7de76699aa8bdb34f3ed0", branch: "feat/x",
 		ahead: 3, behind: 2, staged: 4, unstaged: 3, untracked: 2,
 	}
@@ -35,7 +36,9 @@ func TestParseStatusV2(t *testing.T) {
 	if st := parseStatusV2("# branch.oid abc\n# branch.head (detached)\n"); st.branch != "" || st.oid != "abc" {
 		t.Errorf("detached: %+v", st)
 	}
-	if st := parseStatusV2(""); st != (statusV2{}) {
+	// Failed/timed-out status (empty output) is flagged, so ExtractContext
+	// falls back instead of reporting a detached HEAD.
+	if st := parseStatusV2(""); st != (statusV2{}) || st.ok {
 		t.Errorf("empty: %+v", st)
 	}
 }
@@ -104,8 +107,8 @@ func TestExtractContextFields(t *testing.T) {
 	if len(ctx.CommitHash) != 40 {
 		t.Errorf("CommitHash = %q, want a full sha", ctx.CommitHash)
 	}
-	if got := DefaultBranch(repo); got != "main" {
-		t.Errorf("DefaultBranch = %q, want main", got)
+	if !filepath.IsAbs(ctx.GitDir) || filepath.Base(ctx.GitDir) != ".git" {
+		t.Errorf("GitDir = %q, want absolute .../.git", ctx.GitDir)
 	}
 
 	// Detached HEAD.

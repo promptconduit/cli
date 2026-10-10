@@ -91,6 +91,9 @@ type GitContext struct {
 	WorktreePath string `json:"worktree_path,omitempty"`
 	// DefaultBranch is origin's HEAD branch (e.g. "main"), when known locally.
 	DefaultBranch string `json:"default_branch,omitempty"`
+	// GitDir is the absolute per-worktree git dir; the vcs snapshot cache
+	// fingerprints its HEAD/index/reflog to spot repo changes.
+	GitDir string `json:"git_dir,omitempty"`
 }
 
 // New creates a v2 envelope. rawEvent is the tool's hook payload verbatim;
