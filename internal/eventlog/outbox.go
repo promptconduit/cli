@@ -1,71 +1,74 @@
 package eventlog
 
 import (
-	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"time"
 )
 
 // The outbox holds envelopes whose send finally failed for a reason that may
-// clear (5xx, 429, connection errors, timeouts). The detached sender replays
-// it after a later send succeeds, so an outage longer than the in-process
-// retry window no longer loses events. Each line is the exact envelope that
-// was POSTed; replays reuse its event_id, which the server dedupes on.
+// clear (no response, 429, 5xx). The detached sender replays it after a later
+// send succeeds, so an outage longer than the in-process retry window no
+// longer loses events. Each line is the exact envelope that was POSTed;
+// replays reuse its event_id, which the server dedupes on.
+//
+// There is one outbox per API URL (target): events queued against prod are
+// only ever replayed to prod, even after `config env use local`.
 
 const (
-	// outboxCeiling caps the outbox on disk. Past it new failures aren't
-	// queued (they remain in events.jsonl; `promptconduit sync` style
-	// backfill is the escape hatch for a very long outage).
+	// outboxCeiling caps an outbox on disk. Past it new failures are counted
+	// as dropped instead of queued (they remain in events.jsonl).
 	outboxCeiling int64 = 50 * 1024 * 1024
 	// outboxMaxAge: queued envelopes older than this are dropped on flush
 	// rather than replayed (matches the default local retention).
 	outboxMaxAge = 30 * 24 * time.Hour
-	// outboxCooldown: at most one flush pass per this interval.
+	// outboxCooldown: at most one flush pass per this interval, per target.
 	outboxCooldown = time.Minute
 	// outboxLockStale: a flush lock older than this was left by a killed
-	// process and is broken.
+	// process and is broken. Live passes keep it fresh.
 	outboxLockStale = 5 * time.Minute
 )
 
-// OutboxPath is ~/.promptconduit/outbox.jsonl.
-func OutboxPath() string { return filepath.Join(Dir(), "outbox.jsonl") }
+// outboxKey derives a stable short file key from the target API URL.
+func outboxKey(target string) string {
+	sum := sha256.Sum256([]byte(target))
+	return hex.EncodeToString(sum[:])[:12]
+}
 
-func outboxLockPath() string  { return filepath.Join(Dir(), ".outbox.lock") }
-func outboxStampPath() string { return filepath.Join(Dir(), ".outbox.stamp") }
+// OutboxPath is ~/.promptconduit/outbox-<target hash>.jsonl.
+func OutboxPath(target string) string {
+	return filepath.Join(Dir(), "outbox-"+outboxKey(target)+".jsonl")
+}
 
-// AppendOutbox queues an envelope for a later replay. Best-effort; a full
-// outbox (past outboxCeiling) or a disabled event log queues nothing.
-func AppendOutbox(envJSON []byte) {
+func outboxLockPath(target string) string {
+	return filepath.Join(Dir(), ".outbox-"+outboxKey(target)+".lock")
+}
+
+func outboxStampPath(target string) string {
+	return filepath.Join(Dir(), ".outbox-"+outboxKey(target)+".stamp")
+}
+
+// AppendOutbox queues an envelope for a later replay to target. Best-effort;
+// with the outbox full (past outboxCeiling) the event is counted as dropped.
+func AppendOutbox(target string, envJSON []byte) {
 	if !Enabled() || len(envJSON) == 0 {
 		return
 	}
-	if info, err := os.Stat(OutboxPath()); err == nil && info.Size() >= outboxCeiling {
-		Errorf("outbox full (%d bytes); not queueing event for replay", info.Size())
+	path := OutboxPath(target)
+	if info, err := os.Stat(path); err == nil && info.Size() >= outboxCeiling {
+		Bump(OutcomeDropped, "outbox full; event not queued for replay")
 		return
 	}
-	appendLine(OutboxPath(), bytes.TrimRight(envJSON, "\n"), 0)
+	appendLine(path, bytes.TrimRight(envJSON, "\n"), 0)
 }
 
-// OutboxCount returns how many envelopes are waiting to be replayed.
-func OutboxCount() int {
-	f, err := os.Open(OutboxPath())
-	if err != nil {
-		return 0
-	}
-	defer func() { _ = f.Close() }()
-	n := 0
-	r := bufio.NewReaderSize(f, 1<<20)
-	for {
-		line, err := r.ReadBytes('\n')
-		if len(bytes.TrimSpace(line)) > 0 {
-			n++
-		}
-		if err != nil {
-			return n
-		}
-	}
+// OutboxCount returns how many envelopes are waiting to be replayed to target.
+func OutboxCount(target string) int {
+	total, _ := countExpired(OutboxPath(target), time.Time{}, envelopeCapturedAt)
+	return total
 }
 
 // ReplayResult is what a replay callback decided for one queued envelope.
@@ -74,39 +77,46 @@ type ReplayResult int
 const (
 	// ReplayDelivered: the server accepted it (or it's a duplicate); remove it.
 	ReplayDelivered ReplayResult = iota
-	// ReplayRejected: a permanent failure (4xx); remove it, it will never succeed.
+	// ReplayRejected: the server rejected this envelope permanently; remove it.
 	ReplayRejected
-	// ReplayStop: a transient failure; keep it and stop this pass (the server
-	// is struggling again — no point hammering it with the rest).
+	// ReplaySkip: this envelope failed but the server is up; keep it and move
+	// on (so one bad envelope can't block everything queued behind it).
+	ReplaySkip
+	// ReplayStop: a server-level failure (no response, rate limited,
+	// unavailable) or the pass is out of time; keep it and stop the pass.
 	ReplayStop
 )
 
-// FlushOutbox replays up to limit queued envelopes through send, at most once
-// per outboxCooldown and never concurrently (cross-process lock). Delivered
-// and rejected entries are removed; expired ones (older than outboxMaxAge) are
-// dropped without sending. Returns how many were delivered. Safe to call on
-// every successful send: it returns immediately when there is nothing to do.
-func FlushOutbox(limit int, send func(envJSON []byte) ReplayResult) int {
+// FlushOutbox replays up to limit envelopes queued for target through send,
+// at most once per outboxCooldown per target and never concurrently
+// (cross-process lock, kept fresh). Delivered and rejected entries are
+// removed; expired ones (older than outboxMaxAge) are dropped without
+// sending. Returns how many were delivered. Cheap to call on every successful
+// send: it returns immediately when there is nothing to do.
+func FlushOutbox(target string, limit int, send func(envJSON []byte) ReplayResult) int {
 	if !Enabled() {
 		return 0
 	}
-	info, err := os.Stat(OutboxPath())
+	path := OutboxPath(target)
+	info, err := os.Stat(path)
 	if err != nil || info.Size() == 0 {
 		return 0
 	}
-	if st, err := os.Stat(outboxStampPath()); err == nil && time.Since(st.ModTime()) < outboxCooldown {
+	if st, err := os.Stat(outboxStampPath(target)); err == nil && time.Since(st.ModTime()) < outboxCooldown {
 		return 0
 	}
-	release, ok := tryLockFile(outboxLockPath(), outboxLockStale)
+	release, ok := tryLockFile(outboxLockPath(target), outboxLockStale)
 	if !ok {
 		return 0
 	}
 	defer release()
-	touchFile(outboxStampPath())
+	stopFresh := keepLockFresh(outboxLockPath(target), outboxLockStale/5)
+	defer stopFresh()
+	touchFile(outboxStampPath(target))
 
 	delivered, tried, stopped := 0, 0, false
 	cutoff := nowUTC().Add(-outboxMaxAge)
-	_, err = rewriteFile(OutboxPath(), func(line []byte) ([]byte, bool) {
+	_, err = rewriteFile(path, func(line []byte) ([]byte, bool) {
 		if ts, ok := envelopeCapturedAt(line); ok && ts.Before(cutoff) {
 			return nil, true // expired: drop without sending
 		}
@@ -120,13 +130,16 @@ func FlushOutbox(limit int, send func(envJSON []byte) ReplayResult) int {
 			return nil, true
 		case ReplayRejected:
 			return nil, true
-		default:
+		case ReplayStop:
 			stopped = true
-			return nil, false
 		}
+		return nil, false
 	})
 	if err != nil {
+		// Nothing was removed, so the delivered entries will be resent (the
+		// server dedupes them); don't count them until they're actually gone.
 		Errorf("outbox flush: %v", err)
+		return 0
 	}
 	if delivered > 0 {
 		BumpReplayed(int64(delivered))

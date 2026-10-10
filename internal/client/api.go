@@ -415,7 +415,7 @@ func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
 			switch {
 			case err != nil && replayable(status):
 				// Gave up on a failure that may clear: queue it for a later replay.
-				eventlog.AppendOutbox(envJSON)
+				eventlog.AppendOutbox(c.config.APIURL, envJSON)
 			case err == nil && delays != nil:
 				// The server is reachable again. From the detached sender only
 				// (nothing waits on it), replay anything queued earlier.
@@ -428,9 +428,13 @@ func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
 	}
 }
 
-// outboxReplayBatch bounds one replay pass so a long-queued backlog drains
-// over several sends instead of keeping one process alive for minutes.
-const outboxReplayBatch = 100
+const (
+	// outboxReplayBatch and outboxReplayBudget bound one replay pass so a
+	// long-queued backlog drains over several sends instead of keeping one
+	// detached sender alive for minutes.
+	outboxReplayBatch  = 100
+	outboxReplayBudget = 20 * time.Second
+)
 
 // replayable reports whether a send that finally failed should be queued for
 // a later replay: no response at all, 429, or any 5xx. 4xx is permanent (the
@@ -439,23 +443,39 @@ func replayable(status int) bool {
 	return status == 0 || status == http.StatusTooManyRequests || status >= 500
 }
 
-// flushOutbox replays queued envelopes (see eventlog.FlushOutbox), one attempt
-// each, straight through attemptEventSend so a replay is never re-queued or
-// double-counted in the sent/failed counters.
+// flushOutbox replays envelopes queued for this client's API URL (see
+// eventlog.FlushOutbox), one attempt each, straight through attemptEventSend
+// so a replay is never re-queued or double-counted.
 func (c *Client) flushOutbox() {
-	n := eventlog.FlushOutbox(outboxReplayBatch, func(envJSON []byte) eventlog.ReplayResult {
-		status, _, err := c.attemptEventSend(envJSON)
-		switch {
-		case err == nil:
-			return eventlog.ReplayDelivered
-		case !replayable(status):
-			return eventlog.ReplayRejected
-		default:
+	start := time.Now()
+	n := eventlog.FlushOutbox(c.config.APIURL, outboxReplayBatch, func(envJSON []byte) eventlog.ReplayResult {
+		if time.Since(start) > outboxReplayBudget {
 			return eventlog.ReplayStop
 		}
+		status, _, err := c.attemptEventSend(envJSON)
+		return replayOutcome(status, err)
 	})
 	if n > 0 {
 		logger.Debug("replayed %d queued event(s) from the outbox", n)
+	}
+}
+
+// replayOutcome classifies one replay attempt. Only validation-type 4xx are
+// permanent (removed); auth/timeout 4xx (401/403/408) may clear, so they stop
+// the pass and keep the entry. Server-level failures (no response, 429, 503,
+// 504) stop the pass; a 500/502 on one envelope skips just that envelope so
+// it can't block the rest of the queue.
+func replayOutcome(status int, err error) eventlog.ReplayResult {
+	switch {
+	case err == nil:
+		return eventlog.ReplayDelivered
+	case status == http.StatusBadRequest, status == http.StatusRequestEntityTooLarge,
+		status == http.StatusUnsupportedMediaType, status == http.StatusUnprocessableEntity:
+		return eventlog.ReplayRejected
+	case status == http.StatusInternalServerError, status == http.StatusBadGateway:
+		return eventlog.ReplaySkip
+	default:
+		return eventlog.ReplayStop
 	}
 }
 

@@ -114,11 +114,7 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 			if ch {
 				changed++
 				if out == nil {
-					// changed with no replacement: drop the record.
-					if readErr == io.EOF {
-						break
-					}
-					continue
+					continue // changed with no replacement: drop the record
 				}
 			} else {
 				out = body

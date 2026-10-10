@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -38,8 +39,8 @@ func TestFailedSendIsQueuedThenReplayed(t *testing.T) {
 	if err := c.sendEnvelopeWithRetry([]byte(first)); err == nil {
 		t.Fatal("want failure while the server is down")
 	}
-	if eventlog.OutboxCount() != 1 {
-		t.Fatalf("outbox = %d, want the failed envelope queued", eventlog.OutboxCount())
+	if eventlog.OutboxCount(srv.URL) != 1 {
+		t.Fatalf("outbox = %d, want the failed envelope queued", eventlog.OutboxCount(srv.URL))
 	}
 
 	down.Store(false)
@@ -47,8 +48,8 @@ func TestFailedSendIsQueuedThenReplayed(t *testing.T) {
 	if err := c.sendEnvelopeWithRetry([]byte(second)); err != nil {
 		t.Fatalf("second send: %v", err)
 	}
-	if eventlog.OutboxCount() != 0 {
-		t.Fatalf("outbox = %d, want it drained after a success", eventlog.OutboxCount())
+	if eventlog.OutboxCount(srv.URL) != 0 {
+		t.Fatalf("outbox = %d, want it drained after a success", eventlog.OutboxCount(srv.URL))
 	}
 	mu.Lock()
 	last := seen[len(seen)-1]
@@ -68,7 +69,32 @@ func TestRejectedSendIsNotQueued(t *testing.T) {
 	eventlog.SetEnabled(true)
 	t.Cleanup(func() { eventlog.SetEnabled(false) })
 	_ = c.sendEnvelopeWithRetry([]byte(testEnvelope))
-	if eventlog.OutboxCount() != 0 {
+	if eventlog.OutboxCount(srv.URL) != 0 {
 		t.Fatal("a 4xx must not be queued for replay")
+	}
+}
+
+func TestReplayOutcome(t *testing.T) {
+	cases := []struct {
+		status int
+		err    error
+		want   eventlog.ReplayResult
+	}{
+		{201, nil, eventlog.ReplayDelivered},
+		{400, errors.New("x"), eventlog.ReplayRejected},
+		{422, errors.New("x"), eventlog.ReplayRejected},
+		{401, errors.New("x"), eventlog.ReplayStop}, // auth may clear: keep it
+		{403, errors.New("x"), eventlog.ReplayStop},
+		{408, errors.New("x"), eventlog.ReplayStop},
+		{500, errors.New("x"), eventlog.ReplaySkip}, // this envelope only
+		{502, errors.New("x"), eventlog.ReplaySkip},
+		{503, errors.New("x"), eventlog.ReplayStop}, // server-level
+		{429, errors.New("x"), eventlog.ReplayStop},
+		{0, errors.New("x"), eventlog.ReplayStop},
+	}
+	for _, c := range cases {
+		if got := replayOutcome(c.status, c.err); got != c.want {
+			t.Errorf("replayOutcome(%d) = %v, want %v", c.status, got, c.want)
+		}
 	}
 }

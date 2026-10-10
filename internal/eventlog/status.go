@@ -26,8 +26,8 @@ type Status struct {
 	// Retried counts sends that succeeded only after one or more retries
 	// (each is also counted in Sent).
 	Retried int64 `json:"retried,omitempty"`
-	// Replayed counts envelopes delivered later from the outbox (each was
-	// counted in Failed when its original send gave up).
+	// Replayed counts envelopes delivered later from the outbox. On delivery
+	// each moves from Failed to Sent.
 	Replayed      int64  `json:"replayed,omitempty"`
 	LastSuccessAt string `json:"last_success_at,omitempty"`
 	LastErrorAt   string `json:"last_error_at,omitempty"`
@@ -78,8 +78,19 @@ func Bump(outcome Outcome, detail string) {
 // BumpRetried counts a send that succeeded after retrying.
 func BumpRetried() { bumpCounter(func(st *Status) { st.Retried++ }) }
 
-// BumpReplayed counts n envelopes delivered from the outbox.
-func BumpReplayed(n int64) { bumpCounter(func(st *Status) { st.Replayed += n }) }
+// BumpReplayed counts n envelopes delivered from the outbox. Each was counted
+// as failed when its original send gave up; now that it's delivered it moves
+// to sent, so "failed" keeps meaning "never reached the platform".
+func BumpReplayed(n int64) {
+	bumpCounter(func(st *Status) {
+		st.Replayed += n
+		st.Sent += n
+		st.Failed -= n
+		if st.Failed < 0 {
+			st.Failed = 0
+		}
+	})
+}
 
 func bumpCounter(apply func(*Status)) {
 	if !Enabled() {
