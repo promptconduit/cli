@@ -1,12 +1,12 @@
 package sync
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	gosync "sync"
 	"testing"
+	"time"
 )
 
 func TestStateSaveMergesConcurrentManagers(t *testing.T) {
@@ -60,7 +60,7 @@ func TestStateSaveReplaysRelativeOps(t *testing.T) {
 	}
 }
 
-func TestStateSaveRefusesToOverwriteCorruptFile(t *testing.T) {
+func TestStateSaveSelfHealsPersistentlyCorruptFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sync_state.json")
 	corrupt := []byte(`{"synced_files": {"/t/a.jsonl": {"hash": "h`) // torn
 	if err := os.WriteFile(p, corrupt, 0o644); err != nil {
@@ -68,12 +68,59 @@ func TestStateSaveRefusesToOverwriteCorruptFile(t *testing.T) {
 	}
 	sm := newStateManagerAt(p)
 	sm.MarkSynced("/t/b.jsonl", SyncedFileInfo{Hash: "hb"})
-	if err := sm.Save(); !errors.Is(err, ErrStateCorrupt) {
-		t.Fatalf("Save err = %v, want ErrStateCorrupt", err)
+	if err := sm.Save(); err != nil {
+		t.Fatalf("Save should self-heal, got %v", err)
 	}
-	data, _ := os.ReadFile(p)
-	if string(data) != string(corrupt) {
-		t.Fatalf("corrupt state must be left untouched, got %q", data)
+	if !newStateManagerAt(p).IsSynced("/t/b.jsonl", "hb") {
+		t.Fatal("fresh state should hold this process's record")
+	}
+	backups, _ := filepath.Glob(p + ".corrupt-*")
+	if len(backups) != 1 {
+		t.Fatalf("expected one .corrupt-<unix> backup, got %v", backups)
+	}
+	if data, _ := os.ReadFile(backups[0]); string(data) != string(corrupt) {
+		t.Fatalf("backup must hold the original bytes, got %q", data)
+	}
+	// Subsequent saves work normally.
+	sm.MarkSynced("/t/c.jsonl", SyncedFileInfo{Hash: "hc"})
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStateSaveWaitsOutTransientTornRead(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sync_state.json")
+	good := newStateManagerAt(p)
+	good.MarkSynced("/t/a.jsonl", SyncedFileInfo{Hash: "ha"})
+	if err := good.Save(); err != nil {
+		t.Fatal(err)
+	}
+	full, _ := os.ReadFile(p)
+	// A pre-atomic writer is mid-write: the file is torn for a moment.
+	if err := os.WriteFile(p, full[:len(full)/2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(60 * time.Millisecond)
+		_ = os.WriteFile(p, full, 0o644)
+	}()
+	sm := newStateManagerAt(p)
+	sm.MarkSynced("/t/b.jsonl", SyncedFileInfo{Hash: "hb"})
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	got := newStateManagerAt(p)
+	if !got.IsSynced("/t/a.jsonl", "ha") {
+		t.Fatal("a transient torn read must not blank existing state")
+	}
+	if !got.IsSynced("/t/b.jsonl", "hb") {
+		t.Fatal("this process's record missing")
+	}
+	if backups, _ := filepath.Glob(p + ".corrupt-*"); len(backups) != 0 {
+		t.Fatalf("no backup expected for a transient tear, got %v", backups)
 	}
 }
 

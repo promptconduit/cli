@@ -31,9 +31,10 @@ type StateManager struct {
 // (still atomic, at worst losing a concurrent save's update).
 const stateLockWait = 5 * time.Second
 
-// ErrStateCorrupt is returned by Save when the on-disk state can't be parsed.
-// The file is left untouched rather than replaced with a mostly-blank state,
-// which would make every transcript look unsynced and trigger a mass re-sync.
+// ErrStateCorrupt marks an on-disk state that can't be parsed. Save first
+// retries briefly (a torn read from a pre-atomic writer settles), so a
+// transient read never blanks good state; if the file stays unparseable it is
+// moved aside to sync_state.json.corrupt-<unix> and fresh state is written.
 var ErrStateCorrupt = errors.New("sync state file is corrupt")
 
 // NewStateManager creates a new state manager
@@ -130,6 +131,15 @@ func (sm *StateManager) Save() error {
 	for retry := 0; retry < 3 && errors.Is(err, ErrStateCorrupt); retry++ {
 		time.Sleep(50 * time.Millisecond)
 		merged, err = readState(sm.statePath)
+	}
+	if errors.Is(err, ErrStateCorrupt) {
+		// Persistently unparseable: self-heal rather than block every future
+		// save (and re-upload on every sync). Keep the bad file for inspection.
+		backup := fmt.Sprintf("%s.corrupt-%d", sm.statePath, time.Now().Unix())
+		if rerr := os.Rename(sm.statePath, backup); rerr != nil {
+			return fmt.Errorf("%w; could not move it aside: %v", err, rerr)
+		}
+		merged, err = emptyState(), nil
 	}
 	if err != nil {
 		return err
