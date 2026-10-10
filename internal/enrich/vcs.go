@@ -79,7 +79,7 @@ func (vcsEnricher) Enrich(ctx *Context) (any, error) {
 	v := VCSEnrichment{
 		Type:             git.DetectSource(gc.RemoteURL),
 		Branch:           gc.Branch,
-		DefaultBranch:    git.DefaultBranch(ctx.Cwd),
+		DefaultBranch:    gc.DefaultBranch,
 		Dirty:            gc.IsDirty,
 		Staged:           gc.StagedCount,
 		Unstaged:         gc.UnstagedCount,

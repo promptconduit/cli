@@ -89,6 +89,8 @@ type GitContext struct {
 	// sessions started inside an existing worktree.
 	IsWorktree   bool   `json:"is_worktree,omitempty"`
 	WorktreePath string `json:"worktree_path,omitempty"`
+	// DefaultBranch is origin's HEAD branch (e.g. "main"), when known locally.
+	DefaultBranch string `json:"default_branch,omitempty"`
 }
 
 // New creates a v2 envelope. rawEvent is the tool's hook payload verbatim;
