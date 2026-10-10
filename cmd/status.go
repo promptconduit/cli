@@ -80,6 +80,11 @@ func printEventLogStatus(cfg *client.Config) {
 	st := eventlog.LoadStatus()
 	fmt.Println("Event Log: enabled")
 	fmt.Printf("  %d sent · %d failed · %d dropped\n", st.Sent, st.Failed, st.Dropped)
+	// Recovery: retried = succeeded after an in-process retry; replayed =
+	// delivered later from the outbox; queued = waiting in the outbox now.
+	if queued := eventlog.OutboxCount(); st.Retried > 0 || st.Replayed > 0 || queued > 0 {
+		fmt.Printf("  %d recovered by retry · %d replayed later · %d queued for replay\n", st.Retried, st.Replayed, queued)
+	}
 	if st.LastSuccessAt != "" {
 		fmt.Printf("  Last success: %s\n", localTime(st.LastSuccessAt))
 	}

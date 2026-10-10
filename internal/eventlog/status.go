@@ -20,9 +20,15 @@ const (
 // "are my events actually reaching the platform?" at a glance and powers the
 // counters section of `promptconduit status`.
 type Status struct {
-	Sent          int64  `json:"sent"`
-	Failed        int64  `json:"failed"`
-	Dropped       int64  `json:"dropped"`
+	Sent    int64 `json:"sent"`
+	Failed  int64 `json:"failed"`
+	Dropped int64 `json:"dropped"`
+	// Retried counts sends that succeeded only after one or more retries
+	// (each is also counted in Sent).
+	Retried int64 `json:"retried,omitempty"`
+	// Replayed counts envelopes delivered later from the outbox (each was
+	// counted in Failed when its original send gave up).
+	Replayed      int64  `json:"replayed,omitempty"`
 	LastSuccessAt string `json:"last_success_at,omitempty"`
 	LastErrorAt   string `json:"last_error_at,omitempty"`
 	LastError     string `json:"last_error,omitempty"`
@@ -66,6 +72,24 @@ func Bump(outcome Outcome, detail string) {
 		}
 	}
 
+	writeStatusLocked(st)
+}
+
+// BumpRetried counts a send that succeeded after retrying.
+func BumpRetried() { bumpCounter(func(st *Status) { st.Retried++ }) }
+
+// BumpReplayed counts n envelopes delivered from the outbox.
+func BumpReplayed(n int64) { bumpCounter(func(st *Status) { st.Replayed += n }) }
+
+func bumpCounter(apply func(*Status)) {
+	if !Enabled() {
+		return
+	}
+	statusMu.Lock()
+	defer statusMu.Unlock()
+	st := loadStatusLocked()
+	apply(&st)
+	st.UpdatedAt = nowUTC().Format(timeLayout)
 	writeStatusLocked(st)
 }
 

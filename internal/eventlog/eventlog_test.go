@@ -24,7 +24,7 @@ func withTempDir(t *testing.T) string {
 func TestRecordSendOutcomeBumpsSent(t *testing.T) {
 	withTempDir(t)
 
-	RecordSendOutcome("evt-1", "Stop", 200, 42, nil)
+	RecordSendOutcome("evt-1", "Stop", 200, 42, 1, nil)
 
 	st := LoadStatus()
 	if st.Sent != 1 || st.Failed != 0 || st.Dropped != 0 {
@@ -38,7 +38,7 @@ func TestRecordSendOutcomeBumpsSent(t *testing.T) {
 func TestRecordSendOutcomeFailureWritesErrorAndBumpsFailed(t *testing.T) {
 	withTempDir(t)
 
-	RecordSendOutcome("evt-2", "Stop", 401, 10, errors.New("API error: 401 - unauthorized"))
+	RecordSendOutcome("evt-2", "Stop", 401, 10, 1, errors.New("API error: 401 - unauthorized"))
 
 	st := LoadStatus()
 	if st.Failed != 1 || st.Sent != 0 {
@@ -65,7 +65,7 @@ func TestRecordSendOutcomeFailureWritesErrorAndBumpsFailed(t *testing.T) {
 func TestRecordSendOutcomeUnknownIdentifiersRenderAsDash(t *testing.T) {
 	withTempDir(t)
 
-	RecordSendOutcome("", "", 400, 5, errors.New("API error: 400 - Invalid JSON in request body"))
+	RecordSendOutcome("", "", 400, 5, 1, errors.New("API error: 400 - Invalid JSON in request body"))
 
 	errLog, err := os.ReadFile(ErrorsPath())
 	if err != nil {
@@ -135,7 +135,7 @@ func TestDisabledIsNoOp(t *testing.T) {
 	t.Cleanup(func() { SetDirForTest("") })
 
 	RecordCapture([]byte(`{"schema":2}`))
-	RecordSendOutcome("evt-3", "Stop", 200, 1, nil)
+	RecordSendOutcome("evt-3", "Stop", 200, 1, 1, nil)
 	RecordDrop("parse_error", "x")
 	Errorf("should not write")
 

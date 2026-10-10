@@ -32,7 +32,7 @@ const eventsEndpoint = "/v1/events/raw"
 // errors.log on failure) after an outbound event send. The payload itself was
 // already captured to events.jsonl at hook time; full HTTP diagnostics live in
 // outbound.ndjson. Best-effort and gated by config; never blocks the send.
-func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, sendErr error) {
+func recordEventSend(envJSON []byte, status int, latency time.Duration, attempts int, sendErr error) {
 	var probe struct {
 		EventID   string `json:"event_id"`
 		HookEvent string `json:"hook_event"`
@@ -40,7 +40,7 @@ func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, s
 	// Best-effort: a payload we couldn't parse still gets its outcome recorded,
 	// just without the identifiers.
 	_ = json.Unmarshal(envJSON, &probe)
-	eventlog.RecordSendOutcome(probe.EventID, probe.HookEvent, status, latency.Milliseconds(), sendErr)
+	eventlog.RecordSendOutcome(probe.EventID, probe.HookEvent, status, latency.Milliseconds(), attempts, sendErr)
 }
 
 // APIResponse represents a response from the API
@@ -412,10 +412,50 @@ func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
 				}
 			}
 			recordEventSend(envJSON, status, latency, attempt+1, err)
+			switch {
+			case err != nil && replayable(status):
+				// Gave up on a failure that may clear: queue it for a later replay.
+				eventlog.AppendOutbox(envJSON)
+			case err == nil && delays != nil:
+				// The server is reachable again. From the detached sender only
+				// (nothing waits on it), replay anything queued earlier.
+				c.flushOutbox()
+			}
 			return err
 		}
 		logger.Debug("event send attempt %d failed (status=%d): %v; retrying in %s", attempt+1, status, err, wait)
 		time.Sleep(wait)
+	}
+}
+
+// outboxReplayBatch bounds one replay pass so a long-queued backlog drains
+// over several sends instead of keeping one process alive for minutes.
+const outboxReplayBatch = 100
+
+// replayable reports whether a send that finally failed should be queued for
+// a later replay: no response at all, 429, or any 5xx. 4xx is permanent (the
+// server rejected this envelope) and is never queued.
+func replayable(status int) bool {
+	return status == 0 || status == http.StatusTooManyRequests || status >= 500
+}
+
+// flushOutbox replays queued envelopes (see eventlog.FlushOutbox), one attempt
+// each, straight through attemptEventSend so a replay is never re-queued or
+// double-counted in the sent/failed counters.
+func (c *Client) flushOutbox() {
+	n := eventlog.FlushOutbox(outboxReplayBatch, func(envJSON []byte) eventlog.ReplayResult {
+		status, _, err := c.attemptEventSend(envJSON)
+		switch {
+		case err == nil:
+			return eventlog.ReplayDelivered
+		case !replayable(status):
+			return eventlog.ReplayRejected
+		default:
+			return eventlog.ReplayStop
+		}
+	})
+	if n > 0 {
+		logger.Debug("replayed %d queued event(s) from the outbox", n)
 	}
 }
 

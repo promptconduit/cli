@@ -13,10 +13,16 @@ import "net/http"
 // events.jsonl. Both identifiers render as "-" when the caller couldn't
 // determine them (an unparseable payload), which is itself a signal worth
 // seeing in the log.
-func RecordSendOutcome(eventID, hookEvent string, status int, latencyMs int64, sendErr error) {
+//
+// attempts is how many POSTs the send took; a success that needed more than
+// one is also counted as retried.
+func RecordSendOutcome(eventID, hookEvent string, status int, latencyMs int64, attempts int, sendErr error) {
 	failed := sendErr != nil || status < 200 || status >= 300
 	if !failed {
 		Bump(OutcomeSent, "")
+		if attempts > 1 {
+			BumpRetried()
+		}
 		return
 	}
 	detail := ""
