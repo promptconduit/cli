@@ -368,37 +368,49 @@ func (c *Client) sendEnvelopeWithRetry(envJSON []byte) error {
 // jittered by up to +50%. A var so tests can shrink it.
 var sendRetryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}
 
-// maxRetryAfter caps how long we honor a server Retry-After. A longer ask
-// means the server is genuinely down; give up rather than keep a process alive.
-const maxRetryAfter = 10 * time.Second
+const (
+	// maxRetryAfter caps how long we honor a server Retry-After. A longer ask
+	// means the server is genuinely down; give up rather than keep a process
+	// alive.
+	maxRetryAfter = 10 * time.Second
+	// slowFailure: a failed attempt that took this long signals overload, so
+	// it is not retried (retries are for fast, isolated failures).
+	slowFailure = 5 * time.Second
+	// retryWindow bounds the time spent across failed attempts and waits
+	// before a retry may start, independent of the per-request timeout. With
+	// slowFailure it caps a detached sender's extra lifetime at roughly this
+	// window plus one request.
+	retryWindow = 10 * time.Second
+)
 
-// sendEnvelope POSTs the envelope, retrying transient failures with the given
-// delays. Total time spent retrying is bounded by one request timeout, so a
-// slow-failing server can't multiply how long detached senders stay alive.
-// Exactly one outcome is recorded: the final attempt's status and latency.
+// sendEnvelope POSTs the envelope, retrying fast transient failures with the
+// given delays. Exactly one outcome is recorded: the final attempt's status
+// and latency, with "(after N attempts)" on failures that were retried.
 func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
-	budget := time.Duration(c.config.TimeoutSeconds) * time.Second
 	start := time.Now()
 	for attempt := 0; ; attempt++ {
 		attemptStart := time.Now()
 		status, retryAfter, err := c.attemptEventSend(envJSON)
 		latency := time.Since(attemptStart)
-		if err == nil || attempt >= len(delays) || !retryableSend(status, err) {
-			if err != nil && attempt > 0 {
-				err = fmt.Errorf("%w (after %d attempts)", err, attempt+1)
+
+		var wait time.Duration
+		retry := err != nil && attempt < len(delays) && retryableSend(status, err) &&
+			latency < slowFailure && retryAfter <= maxRetryAfter
+		if retry {
+			wait = delays[attempt] + time.Duration(rand.Int63n(int64(delays[attempt])/2+1))
+			if retryAfter > wait {
+				wait = retryAfter
 			}
-			recordEventSend(envJSON, status, latency, attempt+1, err)
-			return err
+			retry = time.Since(start)+wait <= retryWindow
 		}
-		wait := delays[attempt] + time.Duration(rand.Int63n(int64(delays[attempt])/2+1))
-		if retryAfter > maxRetryAfter {
-			recordEventSend(envJSON, status, latency, attempt+1, err)
-			return err
-		}
-		if retryAfter > wait {
-			wait = retryAfter
-		}
-		if time.Since(start)+wait > budget {
+		if !retry {
+			if attempt > 0 {
+				if err != nil {
+					err = fmt.Errorf("%w (after %d attempts)", err, attempt+1)
+				} else {
+					logger.Debug("event send succeeded after %d attempts", attempt+1)
+				}
+			}
 			recordEventSend(envJSON, status, latency, attempt+1, err)
 			return err
 		}
@@ -408,13 +420,14 @@ func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
 }
 
 // retryableSend reports whether a failed send is worth retrying: 429/500/502/
-// 503/504, or a connection that was refused, reset, or closed mid-response.
-// Timeouts are not retried (overload; more attempts make it worse), nor are
-// permanent failures like DNS, TLS, or a malformed URL.
+// 503, or a connection that was refused, reset, or closed mid-response.
+// Timeouts, including 504 Gateway Timeout, are not retried (overload; more
+// attempts make it worse), nor are permanent failures like DNS, TLS, or a
+// malformed URL.
 func retryableSend(status int, err error) bool {
 	switch status {
 	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
-		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		http.StatusServiceUnavailable:
 		return true
 	case 0:
 		return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||

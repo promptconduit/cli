@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -52,6 +53,16 @@ func TestSendWithRetryRecoversFromTransient5xx(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(calls); got != 3 {
 		t.Fatalf("calls = %d, want 3", got)
+	}
+}
+
+// Every exhausted failure carries the attempt count.
+func TestSendWithRetryErrorNamesAttempts(t *testing.T) {
+	srv, _ := statusSequence(t, 503)
+	c := retryTestClient(t, srv, 5)
+	err := c.sendEnvelopeWithRetry([]byte(testEnvelope))
+	if err == nil || !strings.Contains(err.Error(), "(after 3 attempts)") {
+		t.Fatalf("err = %v, want it to name 3 attempts", err)
 	}
 }
 
@@ -118,7 +129,7 @@ func TestRetryableSend(t *testing.T) {
 		{500, errors.New("x"), true},
 		{502, errors.New("x"), true},
 		{503, errors.New("x"), true},
-		{504, errors.New("x"), true},
+		{504, errors.New("x"), false}, // gateway timeout = overload, not retried
 		{400, errors.New("x"), false},
 		{401, errors.New("x"), false},
 		{0, syscall.ECONNREFUSED, true},
@@ -153,16 +164,39 @@ func TestSendWithRetryGivesUpOnLongRetryAfter(t *testing.T) {
 	}
 }
 
-// Retries never run past one request-timeout budget.
-func TestSendWithRetryRespectsBudget(t *testing.T) {
+// A wait that would push past retryWindow is not taken.
+func TestSendWithRetryRespectsWindow(t *testing.T) {
 	srv, calls := statusSequence(t, 503)
-	c := retryTestClient(t, srv, 1)
-	sendRetryDelays = []time.Duration{2 * time.Second, 2 * time.Second}
+	c := retryTestClient(t, srv, 5)
+	sendRetryDelays = []time.Duration{retryWindow + time.Second}
 	if err := c.sendEnvelopeWithRetry([]byte(testEnvelope)); err == nil {
 		t.Fatal("want error")
 	}
 	if got := atomic.LoadInt32(calls); got != 1 {
-		t.Fatalf("calls = %d, want 1 (next wait would exceed the 1s budget)", got)
+		t.Fatalf("calls = %d, want 1 (wait would exceed the retry window)", got)
+	}
+}
+
+// A connection dropped mid-request (no HTTP response) is retried.
+func TestSendWithRetryRecoversFromDroppedConnection(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err == nil {
+				_ = conn.Close() // client sees EOF / connection reset
+			}
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(srv.Close)
+	c := retryTestClient(t, srv, 5)
+	if err := c.sendEnvelopeWithRetry([]byte(testEnvelope)); err != nil {
+		t.Fatalf("want success after a dropped connection, got %v", err)
+	}
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Fatalf("calls = %d, want 2", got)
 	}
 }
 
