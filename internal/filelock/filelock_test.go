@@ -88,6 +88,41 @@ func TestRemoveIfUnlocked(t *testing.T) {
 	}
 }
 
+// TestAcquireRejectsLockOnUnlinkedFile reproduces the race where GC unlinks a
+// lock file after we opened it but before we flocked it, and another process
+// then locks a freshly created file at the same path. We must not also
+// "hold" the lock (on the orphaned inode).
+func TestAcquireRejectsLockOnUnlinkedFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	if err := os.WriteFile(p, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var other func()
+	testHookAfterOpen = func() {
+		testHookAfterOpen = nil // fire once
+		if !RemoveIfUnlocked(p) {
+			t.Error("GC should remove the (unheld) lock file")
+		}
+		r, ok := Exclusive(p, time.Second) // another process, new inode
+		if !ok {
+			t.Error("other holder should lock the recreated file")
+		}
+		other = r
+	}
+	t.Cleanup(func() { testHookAfterOpen = nil })
+
+	if release, ok := Exclusive(p, 100*time.Millisecond); ok {
+		release()
+		t.Fatal("acquired a lock on an unlinked inode while another process holds the path: two holders")
+	}
+	other()
+	r, ok := Exclusive(p, time.Second)
+	if !ok {
+		t.Fatal("lock should be acquirable once the other holder releases")
+	}
+	r()
+}
+
 func TestImpossiblePathFailsFast(t *testing.T) {
 	release, ok := Exclusive("/dev/null/nope/x.lock", time.Second)
 	if ok {
