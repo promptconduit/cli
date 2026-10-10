@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptconduit/cli/internal/filelock"
@@ -223,11 +224,11 @@ func (s *Store) RecordRootSpan(sessionID, spanID string) error {
 // hooks, a Failure after a Post, replays all resolve); growth is bounded by
 // aging entries out whenever a PreToolUse already rewrites the file, so no
 // extra write is added on the PostToolUse path.
-const toolUseSpanMaxAge = time.Hour
+const toolUseSpanMaxAge = 24 * time.Hour // long Task/subagent tool calls can run for hours
 
 // pruneToolUses stamps key with now and drops tool-use entries older than
 // toolUseSpanMaxAge. Entries from before timestamps existed are stamped now
-// (so they age out an hour later rather than vanishing mid-call).
+// (so they age out a full window later rather than vanishing mid-call).
 func pruneToolUses(rec *SpansRecord, key string, now time.Time) {
 	if rec.ToolUsesAt == nil {
 		rec.ToolUsesAt = make(map[string]time.Time, len(rec.ToolUses))
@@ -341,7 +342,14 @@ func (s *Store) gc() {
 		// Use mtime as a cheap proxy for last_seen_at — refreshed on every
 		// LoadOrCreateTrace via atomic rewrite.
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(s.tracesDir(), e.Name()))
+			p := filepath.Join(s.tracesDir(), e.Name())
+			if strings.HasSuffix(p, ".lock") {
+				// A lock's mtime never changes while in use: only remove
+				// it if nobody holds it.
+				filelock.RemoveIfUnlocked(p)
+				continue
+			}
+			_ = os.Remove(p)
 		}
 	}
 }

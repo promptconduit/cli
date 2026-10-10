@@ -3,9 +3,12 @@ package correlation
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/promptconduit/cli/internal/filelock"
 )
 
 func TestLoadOrCreateTrace_SkipsRewriteWhileLastSeenIsFresh(t *testing.T) {
@@ -39,6 +42,54 @@ func TestLoadOrCreateTrace_SkipsRewriteWhileLastSeenIsFresh(t *testing.T) {
 	}
 	if again, _ := readTrace(path); !again.LastSeenAt.Equal(got.LastSeenAt) {
 		t.Fatalf("refresh not persisted")
+	}
+}
+
+func TestGCKeepsHeldSpansLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("advisory locks are a no-op on windows")
+	}
+	s := NewStore(t.TempDir())
+	if err := s.RecordSpan("held", SpanKindToolUse, "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordSpan("free", SpanKindToolUse, "k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	heldLock := s.spansFile("held") + ".lock"
+	freeLock := s.spansFile("free") + ".lock"
+	release, ok := filelock.Exclusive(heldLock, time.Second)
+	if !ok {
+		t.Fatal("lock")
+	}
+	defer release()
+	old := time.Now().Add(-2 * gcMaxAge)
+	for _, p := range []string{heldLock, freeLock, s.spansFile("free")} {
+		_ = os.Chtimes(p, old, old)
+	}
+	s.gc()
+	if _, err := os.Stat(heldLock); err != nil {
+		t.Error("gc removed a spans lock that is held")
+	}
+	if _, err := os.Stat(freeLock); !os.IsNotExist(err) {
+		t.Error("gc should remove a stale, unheld lock")
+	}
+	if _, err := os.Stat(s.spansFile("free")); !os.IsNotExist(err) {
+		t.Error("gc should still remove stale data files")
+	}
+}
+
+func TestToolUseSpanSurvivesLongCalls(t *testing.T) {
+	if toolUseSpanMaxAge < 24*time.Hour {
+		t.Fatalf("toolUseSpanMaxAge = %v; long Task/subagent calls need >= 24h", toolUseSpanMaxAge)
+	}
+	rec := &SpansRecord{
+		ToolUses:   map[string]string{"task": "span-task"},
+		ToolUsesAt: map[string]time.Time{"task": time.Now().UTC().Add(-3 * time.Hour)},
+	}
+	pruneToolUses(rec, "new", time.Now().UTC())
+	if rec.ToolUses["task"] != "span-task" {
+		t.Fatal("a 3h-old in-flight tool call must keep its parent span")
 	}
 }
 
