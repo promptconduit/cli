@@ -49,13 +49,16 @@ type TraceRecord struct {
 
 // SpansRecord is persisted per session: keyed parent span lookup tables.
 type SpansRecord struct {
-	ToolUses         map[string]string `json:"tool_uses,omitempty"`
-	Subagents        map[string]string `json:"subagents,omitempty"`
-	Tasks            map[string]string `json:"tasks,omitempty"`
-	Elicitations     map[string]string `json:"elicitations,omitempty"`
-	ContextCompacts  map[string]string `json:"context_compacts,omitempty"`
-	LastPromptSubmit string            `json:"last_prompt_submit,omitempty"`
-	RootSpan         string            `json:"root_span,omitempty"`
+	ToolUses        map[string]string `json:"tool_uses,omitempty"`
+	Subagents       map[string]string `json:"subagents,omitempty"`
+	Tasks           map[string]string `json:"tasks,omitempty"`
+	Elicitations    map[string]string `json:"elicitations,omitempty"`
+	ContextCompacts map[string]string `json:"context_compacts,omitempty"`
+	// ToolUsesAt records when each ToolUses entry was written, so entries can
+	// be aged out (see pruneToolUses). Additive; readers ignore it.
+	ToolUsesAt       map[string]time.Time `json:"tool_uses_at,omitempty"`
+	LastPromptSubmit string               `json:"last_prompt_submit,omitempty"`
+	RootSpan         string               `json:"root_span,omitempty"`
 }
 
 // Store persists trace and span lookup state under baseDir.
@@ -172,6 +175,7 @@ func (s *Store) RecordSpan(sessionID string, kind SpanKind, key, spanID string) 
 	switch kind {
 	case SpanKindToolUse:
 		ensureMap(&rec.ToolUses)[key] = spanID
+		pruneToolUses(rec, key, time.Now().UTC())
 	case SpanKindSubagent:
 		ensureMap(&rec.Subagents)[key] = spanID
 	case SpanKindTask:
@@ -214,27 +218,37 @@ func (s *Store) RecordRootSpan(sessionID, spanID string) error {
 	return s.writeSpans(sessionID, rec)
 }
 
-// ConsumeToolUseParent returns the PreToolUse span recorded for toolUseID and
-// removes it from the spans file: a tool call completes exactly once
-// (PostToolUse or PostToolUseFailure), so the entry has served its purpose and
-// keeping it would grow the file for the whole session. Returns "" when there
-// is no entry (nothing is written then).
-func (s *Store) ConsumeToolUseParent(sessionID, toolUseID string) string {
-	if sessionID == "" || toolUseID == "" {
-		return ""
+// toolUseSpanMaxAge is how long a PreToolUse span is kept for its
+// PostToolUse/PostToolUseFailure lookup. Lookups stay idempotent (duplicate
+// hooks, a Failure after a Post, replays all resolve); growth is bounded by
+// aging entries out whenever a PreToolUse already rewrites the file, so no
+// extra write is added on the PostToolUse path.
+const toolUseSpanMaxAge = time.Hour
+
+// pruneToolUses stamps key with now and drops tool-use entries older than
+// toolUseSpanMaxAge. Entries from before timestamps existed are stamped now
+// (so they age out an hour later rather than vanishing mid-call).
+func pruneToolUses(rec *SpansRecord, key string, now time.Time) {
+	if rec.ToolUsesAt == nil {
+		rec.ToolUsesAt = make(map[string]time.Time, len(rec.ToolUses))
 	}
-	defer s.lockSpans(sessionID)()
-	rec, err := s.loadSpans(sessionID)
-	if err != nil {
-		return ""
+	rec.ToolUsesAt[key] = now
+	for k := range rec.ToolUses {
+		at, ok := rec.ToolUsesAt[k]
+		if !ok {
+			rec.ToolUsesAt[k] = now
+			continue
+		}
+		if now.Sub(at) > toolUseSpanMaxAge {
+			delete(rec.ToolUses, k)
+			delete(rec.ToolUsesAt, k)
+		}
 	}
-	parent := rec.ToolUses[toolUseID]
-	if parent == "" {
-		return ""
+	for k := range rec.ToolUsesAt {
+		if _, ok := rec.ToolUses[k]; !ok {
+			delete(rec.ToolUsesAt, k)
+		}
 	}
-	delete(rec.ToolUses, toolUseID)
-	_ = s.writeSpans(sessionID, rec) // best-effort; the lookup already succeeded
-	return parent
 }
 
 // lockSpans serializes spans read-modify-write across hook processes (parallel

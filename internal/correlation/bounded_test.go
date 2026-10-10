@@ -42,37 +42,62 @@ func TestLoadOrCreateTrace_SkipsRewriteWhileLastSeenIsFresh(t *testing.T) {
 	}
 }
 
-func TestConsumeToolUseParent_ReturnsOnceAndRemoves(t *testing.T) {
+func TestToolUseLookupIsIdempotent(t *testing.T) {
 	s := NewStore(t.TempDir())
 	if err := s.RecordSpan("s1", SpanKindToolUse, "tu-1", "span-pre"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordSpan("s1", SpanKindToolUse, "tu-2", "span-pre-2"); err != nil {
-		t.Fatal(err)
+	path := s.spansFile("s1")
+	before, _ := os.Stat(path)
+	// Duplicate hooks / Failure after Post / replays all resolve the parent.
+	for i := 0; i < 3; i++ {
+		if got := s.LookupParent("s1", SpanKindToolUse, "tu-1"); got != "span-pre" {
+			t.Fatalf("lookup %d = %q", i, got)
+		}
 	}
-	if got := s.ConsumeToolUseParent("s1", "tu-1"); got != "span-pre" {
-		t.Fatalf("parent = %q", got)
-	}
-	rec, _ := s.LoadSpans("s1")
-	if _, ok := rec.ToolUses["tu-1"]; ok {
-		t.Fatal("consumed entry must be removed")
-	}
-	if rec.ToolUses["tu-2"] != "span-pre-2" {
-		t.Fatal("other in-flight entries must be kept")
-	}
-	if got := s.ConsumeToolUseParent("s1", "tu-1"); got != "" {
-		t.Fatalf("second consume = %q, want empty", got)
-	}
-	if got := s.ConsumeToolUseParent("s1", "missing"); got != "" {
-		t.Fatalf("missing = %q", got)
+	after, _ := os.Stat(path)
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Fatal("PostToolUse lookups must not rewrite the spans file")
 	}
 }
 
-// TestSpans_ConcurrentRecordAndConsumeLoseNothing models parallel tool calls
-// in one session: concurrent PreToolUse records racing PostToolUse consumes on
-// the same spans file. Every record must be consumable exactly once and the
-// file must end empty (bounded).
-func TestSpans_ConcurrentRecordAndConsumeLoseNothing(t *testing.T) {
+func TestRecordSpan_AgesOutOldToolUses(t *testing.T) {
+	s := NewStore(t.TempDir())
+	// Seed: one stale entry, one fresh, one legacy entry with no timestamp.
+	rec := &SpansRecord{
+		ToolUses:   map[string]string{"old": "span-old", "fresh": "span-fresh", "legacy": "span-legacy"},
+		ToolUsesAt: map[string]time.Time{"old": time.Now().UTC().Add(-2 * toolUseSpanMaxAge), "fresh": time.Now().UTC().Add(-time.Minute)},
+		Subagents:  map[string]string{"agent": "span-agent"},
+	}
+	if err := s.writeSpans("s1", rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordSpan("s1", SpanKindToolUse, "new", "span-new"); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.LoadSpans("s1")
+	if _, ok := got.ToolUses["old"]; ok {
+		t.Error("entry older than toolUseSpanMaxAge should be dropped")
+	}
+	for _, k := range []string{"fresh", "legacy", "new"} {
+		if got.ToolUses[k] == "" {
+			t.Errorf("%s should be kept", k)
+		}
+		if _, ok := got.ToolUsesAt[k]; !ok {
+			t.Errorf("%s should carry a timestamp", k)
+		}
+	}
+	if _, ok := got.ToolUsesAt["old"]; ok {
+		t.Error("timestamp of a dropped entry should be removed too")
+	}
+	if got.Subagents["agent"] != "span-agent" {
+		t.Error("other span kinds must be untouched")
+	}
+}
+
+// TestSpans_ConcurrentRecordsLoseNothing models parallel tool calls in one
+// session: concurrent PreToolUse records on the same spans file must all land.
+func TestSpans_ConcurrentRecordsLoseNothing(t *testing.T) {
 	// 40 writers queue on one lock; on a slow CI disk the hook-path wait could
 	// expire and fall back to unlocked (best-effort) updates. Raise it so the
 	// test checks the locking itself, not the fallback.
@@ -90,27 +115,9 @@ func TestSpans_ConcurrentRecordAndConsumeLoseNothing(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	rec, _ := s.LoadSpans("s1")
-	if len(rec.ToolUses) != n {
-		t.Fatalf("concurrent records lost: have %d of %d", len(rec.ToolUses), n)
-	}
-
-	got := make([]string, n)
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			got[i] = s.ConsumeToolUseParent("s1", fmt.Sprintf("tu-%d", i))
-		}(i)
-	}
-	wg.Wait()
-	for i, g := range got {
-		if g != fmt.Sprintf("span-%d", i) {
-			t.Errorf("tu-%d parent = %q", i, g)
+		if got := s.LookupParent("s1", SpanKindToolUse, fmt.Sprintf("tu-%d", i)); got != fmt.Sprintf("span-%d", i) {
+			t.Errorf("tu-%d parent = %q (concurrent record lost)", i, got)
 		}
-	}
-	rec, _ = s.LoadSpans("s1")
-	if len(rec.ToolUses) != 0 {
-		t.Fatalf("spans file should be empty after all tools completed, has %d", len(rec.ToolUses))
 	}
 }
