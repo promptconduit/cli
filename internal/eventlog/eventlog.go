@@ -133,6 +133,11 @@ func appendLine(path string, line []byte, rotateAt int64) {
 
 	rotateIfNeeded(path, rotateAt)
 
+	// Shared lock across open+write so a concurrent prune/rewrite can't rename
+	// a new file into place between our open and our write (see lock.go).
+	unlock := lockForAppend(path)
+	defer unlock()
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return

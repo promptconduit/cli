@@ -69,6 +69,7 @@ func lookupParentSpan(store *correlation.Store, ctx *Context) string {
 	switch ctx.HookEvent {
 	case "PostToolUse", "PostToolUseFailure":
 		if id := stringField(e, "tool_use_id"); id != "" {
+			// Idempotent lookup; entries age out on PreToolUse writes.
 			return store.LookupParent(sessionID, correlation.SpanKindToolUse, id)
 		}
 	case "SubagentStop":

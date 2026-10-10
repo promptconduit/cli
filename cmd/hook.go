@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -481,6 +482,13 @@ func debugLog(format string, args ...interface{}) {
 func triggerAutoSync(sessionID string) {
 	logger.Debug("Auto-sync: triggered for session %s", sessionID)
 
+	// A sync for this session is already scheduled to start after this event
+	// (and so will include it): nothing to do, not even the transcript search.
+	if sync.AutoSyncPending(client.ConfigDir(), sessionID, time.Now()) {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return
+	}
+
 	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
@@ -490,29 +498,56 @@ func triggerAutoSync(sessionID string) {
 
 	logger.Debug("Auto-sync: found transcript at %s", transcriptPath)
 
-	// Spawn async subprocess to sync this file
-	// Use --delay flag so the subprocess waits for transcript to be fully flushed
-	exe, err := os.Executable()
-	if err != nil {
-		logger.Debug("Auto-sync: failed to get executable path: %v", err)
+	exe, started := scheduleAutoSync(client.ConfigDir(), sessionID, transcriptPath, time.Now())
+	if !started {
 		return
 	}
-
-	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", "1")
-	if err := cmd.Start(); err != nil {
-		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
-		return
-	}
-
-	// Release the process so it runs independently
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
-
 	logger.Debug("Auto-sync: sync subprocess started for session %s", sessionID)
 
 	// Also retry any previously failed syncs (spawn as separate subprocess)
 	go retryFailedSyncs(exe)
+}
+
+// scheduleAutoSync applies the per-session debounce (trailing edge: at most
+// one sync per session per sync.AutoSyncInterval, and a Stop inside the
+// interval schedules one follow-up for when it ends) and starts the planned
+// sync. If the subprocess can't be started the plan is rolled back, so later
+// Stops aren't suppressed waiting for a sync that never runs.
+func scheduleAutoSync(baseDir, sessionID, transcriptPath string, now time.Time) (exe string, started bool) {
+	delay, spawn, undo := sync.PlanAutoSync(baseDir, sessionID, now)
+	if !spawn {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return "", false
+	}
+	exe, err := startAutoSyncProcess(transcriptPath, delay)
+	if err != nil {
+		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
+		undo()
+		return "", false
+	}
+	return exe, true
+}
+
+// startAutoSyncProcess spawns the detached `sync --file` child. The --delay
+// makes it wait for the transcript flush (and, for a trailing follow-up, the
+// end of the debounce window). A var so tests can simulate spawn failure.
+var startAutoSyncProcess = func(transcriptPath string, delay int) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", strconv.Itoa(delay))
+	// Own session: the (possibly ~60s delayed) trailing sync must survive the
+	// agent or terminal exiting.
+	detachProcess(cmd)
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	// Release the process so it runs independently
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return exe, nil
 }
 
 // maybeSpawnPrune hands retention enforcement to a detached `prune-auto`
@@ -561,6 +596,7 @@ func retryFailedSyncs(exe string) {
 		}
 
 		cmd := exec.Command(exe, "sync", "--file", failed.FilePath)
+		detachProcess(cmd)
 		if err := cmd.Start(); err != nil {
 			logger.Debug("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
 			continue
@@ -588,28 +624,24 @@ func writeLocalEvent(hookEvent, cwd, sessionID string) {
 		return
 	}
 
-	home, err := os.UserHomeDir()
+	line, err := hookEventLine(hookEvent, cwd, sessionID, time.Now())
 	if err != nil {
 		return
 	}
+	// Appended through eventlog so it shares the append lock with the pruner,
+	// which also rewrites this file (eventlog.HookEventsPath).
+	eventlog.AppendHookEvent(line)
+}
 
-	eventsPath := filepath.Join(home, ".promptconduit", "hook-events")
-
-	// Ensure directory exists
-	dir := filepath.Dir(eventsPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-
-	// Build event JSON
-	event := fmt.Sprintf(`{"event":"%s","cwd":"%s","session_id":"%s","timestamp":"%s"}`,
-		hookEvent, cwd, sessionID, time.Now().Format(time.RFC3339))
-
-	// Append to file
-	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.WriteString(event + "\n")
+// hookEventLine renders one hook-events record. json.Marshal (not string
+// formatting) so a cwd with backslashes or quotes — every Windows path —
+// still yields valid JSON; an invalid line has no parseable timestamp, is
+// never pruned, and would keep the trace over its ceiling forever.
+func hookEventLine(hookEvent, cwd, sessionID string, at time.Time) ([]byte, error) {
+	return json.Marshal(struct {
+		Event     string `json:"event"`
+		Cwd       string `json:"cwd"`
+		SessionID string `json:"session_id"`
+		Timestamp string `json:"timestamp"`
+	}{hookEvent, cwd, sessionID, at.Format(time.RFC3339)})
 }

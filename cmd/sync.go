@@ -68,6 +68,20 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 }
 
+// recordLockTimeout records a `sync --file` that gave up waiting for the
+// transcript lock as a failed sync, keyed by session id (the transcript's file
+// name without .jsonl — what a later successful sync clears), so
+// retryFailedSyncs retries it.
+func recordLockTimeout(sm *sync.StateManager, filePath string, cause error) error {
+	sessionID := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
+	sm.AddFailedSync(sessionID, filePath, cause.Error())
+	return sm.Save()
+}
+
+// transcriptLockWait bounds how long a `sync --file` waits for another upload
+// of the same transcript (large transcripts upload in chunks).
+const transcriptLockWait = 10 * time.Minute
+
 func runSync(cmd *cobra.Command, args []string) error {
 	// Handle delay (used by auto-sync to wait for transcript file flush)
 	if syncDelay > 0 {
@@ -78,6 +92,24 @@ func runSync(cmd *cobra.Command, args []string) error {
 	config := client.LoadConfig()
 	if config.APIKey == "" {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+	}
+
+	// Single-file (auto-)sync: never upload the same transcript from two
+	// processes at once. Wait for an in-flight upload of this file to finish,
+	// then proceed — the state is loaded only after, so the hash check below
+	// sees what that upload recorded and skips unchanged content.
+	if syncFile != "" {
+		release, ok := sync.LockTranscript(client.ConfigDir(), syncFile, transcriptLockWait)
+		defer release()
+		if !ok {
+			err := fmt.Errorf("another sync of %s is still running; gave up after %s", syncFile, transcriptLockWait)
+			// Don't drop it silently: record a failed sync so the next hook's
+			// retryFailedSyncs picks this transcript up again.
+			if sm, smErr := sync.NewStateManager(); smErr == nil {
+				_ = recordLockTimeout(sm, syncFile, err)
+			}
+			return err
+		}
 	}
 
 	// Initialize state manager
@@ -135,10 +167,27 @@ func runSync(cmd *cobra.Command, args []string) error {
 		fmt.Printf("📁 Found %d transcript(s) for %s\n", len(files), tool)
 
 		syncedThisRun := 0
+		// Per-transcript upload lock, held from parse through upload; released
+		// at the top of the next iteration (every `continue` path included).
+		releaseFile := func() {}
 		for _, filePath := range files {
+			releaseFile()
+			releaseFile = func() {}
+
 			// Apply limit
 			if syncLimit > 0 && totalSynced >= syncLimit {
 				break
+			}
+
+			// Never upload a transcript an auto-sync is uploading right now:
+			// skip it without waiting and let that sync handle it.
+			if !syncDryRun {
+				release, ok := sync.LockTranscript(client.ConfigDir(), filePath, 0)
+				if !ok {
+					totalSkipped++
+					continue
+				}
+				releaseFile = release
 			}
 
 			// Parse file first to get hash
@@ -244,6 +293,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			totalSynced++
 			syncedThisRun++
 		}
+		releaseFile()
 	}
 
 	// Plan files ride along with every full sync.

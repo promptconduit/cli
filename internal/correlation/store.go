@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
+
+	"github.com/promptconduit/cli/internal/filelock"
 )
 
 // SpanKind names the lookup table inside a session's spans file.
@@ -47,13 +50,16 @@ type TraceRecord struct {
 
 // SpansRecord is persisted per session: keyed parent span lookup tables.
 type SpansRecord struct {
-	ToolUses         map[string]string `json:"tool_uses,omitempty"`
-	Subagents        map[string]string `json:"subagents,omitempty"`
-	Tasks            map[string]string `json:"tasks,omitempty"`
-	Elicitations     map[string]string `json:"elicitations,omitempty"`
-	ContextCompacts  map[string]string `json:"context_compacts,omitempty"`
-	LastPromptSubmit string            `json:"last_prompt_submit,omitempty"`
-	RootSpan         string            `json:"root_span,omitempty"`
+	ToolUses        map[string]string `json:"tool_uses,omitempty"`
+	Subagents       map[string]string `json:"subagents,omitempty"`
+	Tasks           map[string]string `json:"tasks,omitempty"`
+	Elicitations    map[string]string `json:"elicitations,omitempty"`
+	ContextCompacts map[string]string `json:"context_compacts,omitempty"`
+	// ToolUsesAt records when each ToolUses entry was written, so entries can
+	// be aged out (see pruneToolUses). Additive; readers ignore it.
+	ToolUsesAt       map[string]time.Time `json:"tool_uses_at,omitempty"`
+	LastPromptSubmit string               `json:"last_prompt_submit,omitempty"`
+	RootSpan         string               `json:"root_span,omitempty"`
 }
 
 // Store persists trace and span lookup state under baseDir.
@@ -77,9 +83,19 @@ func (s *Store) spansFile(sessionID string) string {
 	return filepath.Join(s.tracesDir(), sessionID+".spans.json")
 }
 
+// lastSeenRefresh is how stale last_seen_at may get before an event rewrites
+// the trace file. It only feeds the debug view and the mtime-based GC (30
+// days), so refreshing it on every one of thousands of events per session was
+// pure write amplification.
+const lastSeenRefresh = 60 * time.Second
+
+// spansLockWait bounds the wait for another hook's spans read-modify-write.
+// On timeout the update proceeds unlocked (the pre-lock behaviour).
+var spansLockWait = 500 * time.Millisecond // var: tests raise it to rule out timeouts
+
 // LoadOrCreateTrace returns the trace ID for sessionID, creating and
 // persisting a new one if none exists. The last_seen_at timestamp is
-// refreshed on every call.
+// refreshed when it is more than lastSeenRefresh old.
 //
 // Concurrent hook processes are reconciled via O_CREATE|O_EXCL: only the
 // first writer wins; subsequent callers re-read the existing file.
@@ -87,17 +103,19 @@ func (s *Store) LoadOrCreateTrace(sessionID string) (*TraceRecord, error) {
 	if sessionID == "" {
 		return nil, errors.New("correlation: empty session id")
 	}
-	if err := os.MkdirAll(s.tracesDir(), 0700); err != nil {
-		return nil, fmt.Errorf("correlation: mkdir traces: %w", err)
-	}
-
 	path := s.traceFile(sessionID)
 
 	// Fast path: file already exists.
 	if rec, err := readTrace(path); err == nil {
-		rec.LastSeenAt = time.Now().UTC()
-		_ = writeTraceAtomic(path, rec) // refresh; ignore errors (non-fatal)
+		if now := time.Now().UTC(); now.Sub(rec.LastSeenAt) > lastSeenRefresh {
+			rec.LastSeenAt = now
+			_ = writeTraceAtomic(path, rec) // refresh; ignore errors (non-fatal)
+		}
 		return rec, nil
+	}
+
+	if err := os.MkdirAll(s.tracesDir(), 0700); err != nil {
+		return nil, fmt.Errorf("correlation: mkdir traces: %w", err)
 	}
 
 	// Slow path: write to a tempfile, then atomically link to the target.
@@ -150,6 +168,7 @@ func (s *Store) RecordSpan(sessionID string, kind SpanKind, key, spanID string) 
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
@@ -157,6 +176,7 @@ func (s *Store) RecordSpan(sessionID string, kind SpanKind, key, spanID string) 
 	switch kind {
 	case SpanKindToolUse:
 		ensureMap(&rec.ToolUses)[key] = spanID
+		pruneToolUses(rec, key, time.Now().UTC())
 	case SpanKindSubagent:
 		ensureMap(&rec.Subagents)[key] = spanID
 	case SpanKindTask:
@@ -176,6 +196,7 @@ func (s *Store) RecordLastPromptSubmit(sessionID, spanID string) error {
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
@@ -189,12 +210,55 @@ func (s *Store) RecordRootSpan(sessionID, spanID string) error {
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
 	}
 	rec.RootSpan = spanID
 	return s.writeSpans(sessionID, rec)
+}
+
+// toolUseSpanMaxAge is how long a PreToolUse span is kept for its
+// PostToolUse/PostToolUseFailure lookup. Lookups stay idempotent (duplicate
+// hooks, a Failure after a Post, replays all resolve); growth is bounded by
+// aging entries out whenever a PreToolUse already rewrites the file, so no
+// extra write is added on the PostToolUse path.
+const toolUseSpanMaxAge = 24 * time.Hour // long Task/subagent tool calls can run for hours
+
+// pruneToolUses stamps key with now and drops tool-use entries older than
+// toolUseSpanMaxAge. Entries from before timestamps existed are stamped now
+// (so they age out a full window later rather than vanishing mid-call).
+func pruneToolUses(rec *SpansRecord, key string, now time.Time) {
+	if rec.ToolUsesAt == nil {
+		rec.ToolUsesAt = make(map[string]time.Time, len(rec.ToolUses))
+	}
+	rec.ToolUsesAt[key] = now
+	for k := range rec.ToolUses {
+		at, ok := rec.ToolUsesAt[k]
+		if !ok {
+			rec.ToolUsesAt[k] = now
+			continue
+		}
+		if now.Sub(at) > toolUseSpanMaxAge {
+			delete(rec.ToolUses, k)
+			delete(rec.ToolUsesAt, k)
+		}
+	}
+	for k := range rec.ToolUsesAt {
+		if _, ok := rec.ToolUses[k]; !ok {
+			delete(rec.ToolUsesAt, k)
+		}
+	}
+}
+
+// lockSpans serializes spans read-modify-write across hook processes (parallel
+// tool calls in one session fire concurrent PreToolUse/PostToolUse hooks; an
+// unlocked load-modify-save would drop one side's change). Returns the release
+// func; on timeout it proceeds unlocked.
+func (s *Store) lockSpans(sessionID string) func() {
+	release, _ := filelock.Exclusive(s.spansFile(sessionID)+".lock", spansLockWait)
+	return release
 }
 
 // LookupParent returns the parent span ID for kind+key, or "" if absent.
@@ -278,7 +342,14 @@ func (s *Store) gc() {
 		// Use mtime as a cheap proxy for last_seen_at — refreshed on every
 		// LoadOrCreateTrace via atomic rewrite.
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(s.tracesDir(), e.Name()))
+			p := filepath.Join(s.tracesDir(), e.Name())
+			if strings.HasSuffix(p, ".lock") {
+				// A lock's mtime never changes while in use: only remove
+				// it if nobody holds it.
+				filelock.RemoveIfUnlocked(p)
+				continue
+			}
+			_ = os.Remove(p)
 		}
 	}
 }

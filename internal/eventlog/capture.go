@@ -2,6 +2,7 @@ package eventlog
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -76,24 +77,28 @@ func headIsV1(path string) bool {
 }
 
 // CountCaptured returns the number of events currently in events.jsonl and
-// false if the file doesn't exist yet. Best-effort; reads the whole file, whose
-// size is bounded by retention pruning (EventsCeiling, see prune.go).
+// false if the file doesn't exist yet. Best-effort; streams the file in fixed
+// chunks (it can be hundreds of MB) instead of loading it into memory.
 func CountCaptured() (int, bool) {
-	data, err := os.ReadFile(EventsJSONLPath())
+	f, err := os.Open(EventsJSONLPath())
 	if err != nil {
 		return 0, false
 	}
-	if len(data) == 0 {
-		return 0, true
-	}
-	n := 0
-	for _, b := range data {
-		if b == '\n' {
-			n++
+	defer func() { _ = f.Close() }()
+	n, last := 0, byte('\n')
+	buf := make([]byte, 256*1024)
+	for {
+		k, err := f.Read(buf)
+		if k > 0 {
+			n += bytes.Count(buf[:k], []byte{'\n'})
+			last = buf[k-1]
+		}
+		if err != nil {
+			break
 		}
 	}
 	// Count a trailing line that has no terminating newline.
-	if data[len(data)-1] != '\n' {
+	if last != '\n' {
 		n++
 	}
 	return n, true

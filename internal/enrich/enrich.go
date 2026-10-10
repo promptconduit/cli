@@ -17,6 +17,7 @@ package enrich
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/promptconduit/cli/internal/logger"
@@ -65,27 +66,77 @@ func Register(e Enricher) {
 
 // Run executes every applicable enricher and returns the enrichments map for
 // the envelope. Never returns an error: a failing enricher just loses its slug.
+//
+// Applicable enrichers run concurrently (git, transcript and disk work
+// overlap instead of adding up), except those sharing the per-session state
+// file (sessionStateUser), which run one after another in registration order
+// on a single goroutine. Each enricher's payload lands in its own slot and the
+// map is assembled after all finish, so the output does not depend on timing.
 func Run(ctx *Context) map[string]json.RawMessage {
-	out := make(map[string]json.RawMessage, len(registry))
+	var (
+		parallel []int // indexes into applicable
+		stateful []int
+	)
+	applicable := make([]Enricher, 0, len(registry))
 	for _, e := range registry {
 		if !e.Applies(ctx) {
 			continue
 		}
-		payload, ok := runOne(e, ctx)
-		if !ok || payload == nil {
-			continue
+		if _, ok := e.(sessionStateUser); ok {
+			stateful = append(stateful, len(applicable))
+		} else {
+			parallel = append(parallel, len(applicable))
 		}
-		data, err := json.Marshal(payload)
-		if err != nil {
-			logger.Debug("enrich: %s payload did not serialize: %v", e.Slug(), err)
-			continue
+		applicable = append(applicable, e)
+	}
+
+	results := make([]json.RawMessage, len(applicable))
+	runAt := func(i int) { results[i] = runAndMarshal(applicable[i], ctx) }
+
+	var wg sync.WaitGroup
+	for _, i := range parallel {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			runAt(i)
+		}(i)
+	}
+	if len(stateful) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for _, i := range stateful {
+				runAt(i)
+			}
+		}()
+	}
+	wg.Wait()
+
+	out := make(map[string]json.RawMessage, len(applicable))
+	for i, data := range results {
+		if data != nil {
+			out[applicable[i].Slug()] = data
 		}
-		out[e.Slug()] = data
 	}
 	if len(out) == 0 {
 		return nil
 	}
 	return out
+}
+
+// runAndMarshal runs one enricher (isolated, bounded) and serializes its
+// payload. nil means the slug is omitted.
+func runAndMarshal(e Enricher, ctx *Context) json.RawMessage {
+	payload, ok := runOne(e, ctx)
+	if !ok || payload == nil {
+		return nil
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		logger.Debug("enrich: %s payload did not serialize: %v", e.Slug(), err)
+		return nil
+	}
+	return data
 }
 
 // runOne executes a single enricher with panic recovery and a timeout. A
