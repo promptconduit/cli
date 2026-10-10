@@ -65,12 +65,18 @@ func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, s
 	if data, err := os.ReadFile(stamp); err == nil {
 		if last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data))); err == nil {
 			switch {
-			case last.After(now):
-				// A scheduled sync hasn't started yet; it will read this
-				// event's transcript content.
+			case coversStop(last, now):
+				// A scheduled sync starts at least the flush delay after this
+				// event, so it will read this event's flushed transcript.
 				return 0, false
+			case last.After(now):
+				// Scheduled, but too soon for this event's transcript to have
+				// flushed: schedule one more, a full flush delay out.
 			case now.Before(last.Add(AutoSyncInterval)):
 				start = last.Add(AutoSyncInterval) // trailing follow-up
+				if earliest := now.Add(autoSyncFlushDelay); start.Before(earliest) {
+					start = earliest
+				}
 			}
 		}
 	}
@@ -82,7 +88,7 @@ func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, s
 }
 
 // AutoSyncPending is a lock-free peek: true when a sync for sessionID is
-// already scheduled to start after now, so the hook can skip even locating the
+// already scheduled to start at least the flush delay after now, so the hook can skip even locating the
 // transcript. PlanAutoSync makes the authoritative decision.
 func AutoSyncPending(baseDir, sessionID string, now time.Time) bool {
 	if baseDir == "" || sessionID == "" {
@@ -93,7 +99,14 @@ func AutoSyncPending(baseDir, sessionID string, now time.Time) bool {
 		return false
 	}
 	last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data)))
-	return err == nil && last.After(now)
+	return err == nil && coversStop(last, now)
+}
+
+// coversStop reports whether a sync scheduled to start at scheduled will see
+// the transcript as of a Stop at now: it must start at least
+// autoSyncFlushDelay later, giving the tool time to flush.
+func coversStop(scheduled, now time.Time) bool {
+	return !scheduled.Before(now.Add(autoSyncFlushDelay))
 }
 
 // LockTranscript takes the per-transcript upload lock, waiting up to wait for
@@ -130,6 +143,14 @@ func maybeSweepAutoSync(dir string, now time.Time) {
 		return
 	}
 	_ = os.WriteFile(marker, nil, 0o600)
+	sweepOld(dir, now)
+	sweepOld(filepath.Join(dir, "locks"), now)
+}
+
+// sweepOld removes files in dir older than autoSyncStampMaxAge. Lock files
+// are special: their mtime never changes while in use, so one is removed only
+// if it can be locked without waiting (nobody holds it).
+func sweepOld(dir string, now time.Time) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -138,8 +159,15 @@ func maybeSweepAutoSync(dir string, now time.Time) {
 		if e.IsDir() || e.Name() == ".swept" {
 			continue
 		}
-		if info, err := e.Info(); err == nil && now.Sub(info.ModTime()) > autoSyncStampMaxAge {
-			_ = os.Remove(filepath.Join(dir, e.Name()))
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) <= autoSyncStampMaxAge {
+			continue
 		}
+		p := filepath.Join(dir, e.Name())
+		if strings.HasSuffix(p, ".lock") {
+			filelock.RemoveIfUnlocked(p)
+			continue
+		}
+		_ = os.Remove(p)
 	}
 }
