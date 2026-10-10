@@ -63,6 +63,22 @@ func statePath(sessionID string) string {
 	return filepath.Join(stateDir(), sessionID+".json")
 }
 
+// sessionStateUser marks an enricher that read-modify-writes the per-session
+// state file (loadState → mutate → saveState). Run executes all such enrichers
+// sequentially, in registration order, on one goroutine — two of them racing
+// would each load the same state and the later save would drop the other's
+// change. Every other enricher runs concurrently.
+//
+// Any new enricher that calls loadState/saveState MUST implement this.
+type sessionStateUser interface {
+	usesSessionState()
+}
+
+func (promptEnricher) usesSessionState()   {}
+func (costEnricher) usesSessionState()     {}
+func (subagentEnricher) usesSessionState() {}
+func (turnEnricher) usesSessionState()     {}
+
 // loadState returns the session's state (zero value when absent/corrupt).
 func loadState(sessionID string) sessionState {
 	var st sessionState
