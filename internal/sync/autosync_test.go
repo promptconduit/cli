@@ -87,6 +87,14 @@ func TestLockTranscriptExcludesSameFileOnly(t *testing.T) {
 	if _, ok := LockTranscript(base, "/t/a.jsonl", 20*time.Millisecond); ok {
 		t.Fatal("a second upload of the same transcript must wait")
 	}
+	// A full sync probes with no wait and skips the file.
+	start := time.Now()
+	if _, ok := LockTranscript(base, "/t/a.jsonl", 0); ok {
+		t.Fatal("zero-wait probe must fail while an auto-sync holds the file")
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatal("zero-wait probe must not block")
+	}
 	other, ok := LockTranscript(base, "/t/b.jsonl", 20*time.Millisecond)
 	if !ok {
 		t.Fatal("a different transcript must not be blocked")

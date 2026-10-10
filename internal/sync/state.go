@@ -107,12 +107,29 @@ func (sm *StateManager) IsSynced(path, hash string) bool {
 	return false
 }
 
-// MarkSynced marks a file as synced
+// MarkSynced marks a file as synced. When Save replays it, a record another
+// process saved for the same file with a LATER synced_at (it uploaded a newer
+// version after this upload) is kept rather than overwritten with this,
+// older, hash — otherwise the next sync would re-upload needlessly, or worse
+// a long full sync would roll back a newer auto-sync record.
 func (sm *StateManager) MarkSynced(path string, info SyncedFileInfo) {
 	if info.SyncedAt == "" {
-		info.SyncedAt = time.Now().UTC().Format(time.RFC3339)
+		info.SyncedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	sm.apply(func(s *SyncState) { s.SyncedFiles[path] = info })
+	sm.apply(func(s *SyncState) {
+		if cur, ok := s.SyncedFiles[path]; ok && syncedAfter(cur.SyncedAt, info.SyncedAt) {
+			return
+		}
+		s.SyncedFiles[path] = info
+	})
+}
+
+// syncedAfter reports whether timestamp a is strictly after b. Unparseable
+// values never win (so a legacy or garbled record is overwritten).
+func syncedAfter(a, b string) bool {
+	ta, errA := time.Parse(time.RFC3339Nano, a)
+	tb, errB := time.Parse(time.RFC3339Nano, b)
+	return errA == nil && errB == nil && ta.After(tb)
 }
 
 // Save persists the state to disk: lock, re-read, replay this process's

@@ -151,10 +151,27 @@ func runSync(cmd *cobra.Command, args []string) error {
 		fmt.Printf("📁 Found %d transcript(s) for %s\n", len(files), tool)
 
 		syncedThisRun := 0
+		// Per-transcript upload lock, held from parse through upload; released
+		// at the top of the next iteration (every `continue` path included).
+		releaseFile := func() {}
 		for _, filePath := range files {
+			releaseFile()
+			releaseFile = func() {}
+
 			// Apply limit
 			if syncLimit > 0 && totalSynced >= syncLimit {
 				break
+			}
+
+			// Never upload a transcript an auto-sync is uploading right now:
+			// skip it without waiting and let that sync handle it.
+			if !syncDryRun {
+				release, ok := sync.LockTranscript(client.ConfigDir(), filePath, 0)
+				if !ok {
+					totalSkipped++
+					continue
+				}
+				releaseFile = release
 			}
 
 			// Parse file first to get hash
@@ -260,6 +277,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			totalSynced++
 			syncedThisRun++
 		}
+		releaseFile()
 	}
 
 	// Plan files ride along with every full sync.

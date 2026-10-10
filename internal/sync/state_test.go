@@ -60,6 +60,39 @@ func TestStateSaveReplaysRelativeOps(t *testing.T) {
 	}
 }
 
+// TestStateSaveKeepsNewerSyncedHash: a long full sync marks a file synced, then
+// an auto-sync uploads a newer version of it and saves first; the full sync's
+// later Save must not roll the record back to its older hash.
+func TestStateSaveKeepsNewerSyncedHash(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sync_state.json")
+	full := newStateManagerAt(p)
+	full.MarkSynced("/t/a.jsonl", SyncedFileInfo{Hash: "old"})
+
+	time.Sleep(5 * time.Millisecond)
+	auto := newStateManagerAt(p)
+	auto.MarkSynced("/t/a.jsonl", SyncedFileInfo{Hash: "new"})
+	if err := auto.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := full.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if got := newStateManagerAt(p); !got.IsSynced("/t/a.jsonl", "new") {
+		info, _ := got.GetSyncedInfo("/t/a.jsonl")
+		t.Fatalf("newer hash overwritten by an older upload: %+v", info)
+	}
+
+	// The normal case still updates: a later mark replaces an earlier one.
+	later := newStateManagerAt(p)
+	later.MarkSynced("/t/a.jsonl", SyncedFileInfo{Hash: "newest"})
+	if err := later.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if !newStateManagerAt(p).IsSynced("/t/a.jsonl", "newest") {
+		t.Fatal("a newer mark must replace the record")
+	}
+}
+
 func TestStateSaveSelfHealsPersistentlyCorruptFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sync_state.json")
 	corrupt := []byte(`{"synced_files": {"/t/a.jsonl": {"hash": "h`) // torn
