@@ -456,18 +456,50 @@ func (c *Client) flushOutbox() {
 	// replay past the budget.
 	ctx, cancel := context.WithTimeout(context.Background(), outboxReplayBudget)
 	defer cancel()
-	n := eventlog.FlushOutbox(c.config.APIURL, outboxReplayBatch, func(envJSON []byte) eventlog.ReplayResult {
-		if ctx.Err() != nil {
+	n := eventlog.FlushOutbox(c.config.APIURL, outboxReplayBatch, c.replayer(ctx, nil))
+	if n > 0 {
+		logger.Debug("replayed %d queued event(s) from the outbox", n)
+	}
+}
+
+// DrainOutbox replays everything queued for this client's API URL right now
+// (see eventlog.DrainOutbox): no cooldown, one pass over the whole queue.
+// ctx bounds the whole drain (e.g. Ctrl-C); each request still has the
+// configured timeout. When the drain ends on a server-level failure, stopErr
+// is the error that stopped it. onSend sees the running stats after each send.
+func (c *Client) DrainOutbox(ctx context.Context, onSend func(st eventlog.FlushStats)) (res eventlog.DrainResult, stopErr error) {
+	res = eventlog.DrainOutbox(c.config.APIURL, c.replayer(ctx, &stopErr), onSend)
+	if !res.Stopped {
+		stopErr = nil
+	}
+	return res, stopErr
+}
+
+// replayer returns the per-envelope replay callback: one attempt each,
+// straight through attemptEventSendCtx. When stopErr is non-nil it receives
+// the error behind a ReplayStop.
+func (c *Client) replayer(ctx context.Context, stopErr *error) func([]byte) eventlog.ReplayResult {
+	return func(envJSON []byte) eventlog.ReplayResult {
+		if err := ctx.Err(); err != nil {
+			setErr(stopErr, err)
 			return eventlog.ReplayStop
 		}
 		status, _, err := c.attemptEventSendCtx(ctx, envJSON)
 		if ctx.Err() != nil {
+			setErr(stopErr, ctx.Err())
 			return eventlog.ReplayStop // ran out of time mid-request: keep it
 		}
-		return replayOutcome(status, err)
-	})
-	if n > 0 {
-		logger.Debug("replayed %d queued event(s) from the outbox", n)
+		out := replayOutcome(status, err)
+		if out == eventlog.ReplayStop {
+			setErr(stopErr, err)
+		}
+		return out
+	}
+}
+
+func setErr(dst *error, err error) {
+	if dst != nil {
+		*dst = err
 	}
 }
 

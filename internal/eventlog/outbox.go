@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -101,75 +102,158 @@ const (
 // sending. Returns how many were delivered. Cheap to call on every successful
 // send: it returns immediately when there is nothing to do.
 func FlushOutbox(target string, limit int, send func(envJSON []byte) ReplayResult) int {
-	if !Enabled() {
-		return 0
-	}
-	path := OutboxPath(target)
-	info, err := os.Stat(path)
-	if err != nil || info.Size() == 0 {
+	if !Enabled() || outboxEmpty(target) {
 		return 0
 	}
 	if st, err := os.Stat(outboxStampPath(target)); err == nil && time.Since(st.ModTime()) < outboxCooldown {
 		return 0
 	}
-	release, ok := tryLockFile(outboxLockPath(target), outboxLockStale)
+	release, ok := lockOutbox(target)
 	if !ok {
 		return 0
 	}
 	defer release()
-	stopFresh := keepLockFresh(outboxLockPath(target), outboxLockStale/5)
-	defer stopFresh()
+	touchFile(outboxStampPath(target))
+	st := flushPass(target, limit, send, nil)
+	if st.Err != nil {
+		return 0 // nothing was removed; the deliveries will be resent
+	}
+	return st.Delivered
+}
+
+// FlushStats summarizes one replay pass over an outbox.
+type FlushStats struct {
+	Tried     int  // envelopes handed to send
+	Delivered int  // accepted by the server
+	Rejected  int  // permanently rejected
+	Skipped   int  // failed but kept, rotated to the back
+	Expired   int  // older than the max age, dropped without sending
+	Stopped   bool // a send returned ReplayStop; the pass ended early
+	// Err: rewriting the outbox failed after the sends. The counters still say
+	// what happened on the wire, but nothing was removed from the outbox, so
+	// delivered entries will be resent (the server dedupes on event_id).
+	Err error
+}
+
+// DrainResult summarizes a DrainOutbox call.
+type DrainResult struct {
+	FlushStats
+	Busy      bool // another process holds the flush lock; nothing was sent
+	Remaining int  // envelopes still queued afterwards
+}
+
+// DrainOutbox replays everything queued for target now, for an explicit
+// "push it all" request (`promptconduit events flush`, the end of `sync`).
+// Unlike FlushOutbox it ignores the per-target cooldown and has no batch
+// limit: it makes ONE pass over the whole queue, so every envelope is tried
+// at most once, failing ones (ReplaySkip) rotate to the back once, and the
+// file is rewritten once. The pass ends early on ReplayStop. Entries appended
+// while it runs are left for the next flush.
+//
+// It holds the same cross-process lock as FlushOutbox, so it never runs
+// alongside a background flush; when that lock is taken it returns Busy
+// without sending. It refreshes the cooldown stamp so background senders
+// don't immediately re-walk what was just drained. onSend, if set, sees the
+// running stats after each send.
+func DrainOutbox(target string, send func(envJSON []byte) ReplayResult, onSend func(st FlushStats)) DrainResult {
+	var res DrainResult
+	if !Enabled() || outboxEmpty(target) {
+		res.Remaining = OutboxCount(target)
+		return res
+	}
+	release, ok := lockOutbox(target)
+	if !ok {
+		res.Busy = true
+		res.Remaining = OutboxCount(target)
+		return res
+	}
+	defer release()
 	touchFile(outboxStampPath(target))
 
-	delivered, expired, tried, stopped := 0, 0, 0, false
+	res.FlushStats = flushPass(target, math.MaxInt, send, onSend)
+	res.Remaining = OutboxCount(target)
+	return res
+}
+
+func outboxEmpty(target string) bool {
+	info, err := os.Stat(OutboxPath(target))
+	return err != nil || info.Size() == 0
+}
+
+// lockOutbox takes target's flush lock and keeps it fresh until released.
+func lockOutbox(target string) (release func(), ok bool) {
+	unlock, ok := tryLockFile(outboxLockPath(target), outboxLockStale)
+	if !ok {
+		return nil, false
+	}
+	stopFresh := keepLockFresh(outboxLockPath(target), outboxLockStale/5)
+	return func() {
+		stopFresh()
+		unlock()
+	}, true
+}
+
+// flushPass makes one replay pass of up to limit envelopes. The caller holds
+// the outbox lock. onSend, if set, sees the running stats after each send.
+func flushPass(target string, limit int, send func(envJSON []byte) ReplayResult, onSend func(FlushStats)) FlushStats {
+	path := OutboxPath(target)
+	var st FlushStats
 	var skipped [][]byte
 	cutoff := nowUTC().Add(-outboxMaxAge)
-	_, err = rewriteFile(path, func(line []byte) ([]byte, bool) {
+	_, err := rewriteFile(path, func(line []byte) ([]byte, bool) {
 		if ts, ok := envelopeCapturedAt(line); !ok || ts.Before(cutoff) {
-			expired++ // too old (or unreadable) to replay: drop, counted below
+			st.Expired++ // too old (or unreadable) to replay: drop, counted below
 			return nil, true
 		}
-		if stopped || tried >= limit {
+		if st.Stopped || st.Tried >= limit {
 			return nil, false
 		}
-		tried++
+		st.Tried++
+		var drop bool
 		switch send(line) {
 		case ReplayDelivered:
-			delivered++
-			return nil, true
+			st.Delivered++
+			drop = true
 		case ReplayRejected:
-			return nil, true
+			st.Rejected++
+			drop = true
 		case ReplaySkip:
 			// Rotate to the back so a run of failing envelopes can't keep
 			// occupying the head of every pass.
+			st.Skipped++
 			skipped = append(skipped, append([]byte(nil), line...))
-			return nil, true
+			drop = true
 		default: // ReplayStop
-			stopped = true
-			return nil, false
+			st.Stopped = true
 		}
+		if onSend != nil {
+			onSend(st)
+		}
+		return nil, drop
 	})
 	if err != nil {
-		// Nothing was removed, so delivered entries will be resent (the server
-		// dedupes them); don't count anything until it's actually gone.
+		// Nothing was removed (skipped entries included), so delivered entries
+		// will be resent and the server dedupes them. Report what was sent but
+		// don't bump replayed/dropped counters until the entries are gone.
 		Errorf("outbox flush: %v", err)
-		return 0
+		st.Err = err
+		return st
 	}
 	for _, line := range skipped {
 		appendLine(path, line, 0)
 	}
-	if expired > 0 {
-		n := int64(expired)
-		bumpCounter(func(st *Status) {
-			st.Dropped += n
-			st.LastErrorAt = nowUTC().Format(timeLayout)
-			st.LastError = fmt.Sprintf("%d queued event(s) expired before they could be replayed", n)
+	if st.Expired > 0 {
+		n := int64(st.Expired)
+		bumpCounter(func(s *Status) {
+			s.Dropped += n
+			s.LastErrorAt = nowUTC().Format(timeLayout)
+			s.LastError = fmt.Sprintf("%d queued event(s) expired before they could be replayed", n)
 		})
 	}
-	if delivered > 0 {
-		BumpReplayed(int64(delivered))
+	if st.Delivered > 0 {
+		BumpReplayed(int64(st.Delivered))
 	}
-	return delivered
+	return st
 }
 
 // tryLockFile takes an O_EXCL lock file without blocking, breaking a lock
