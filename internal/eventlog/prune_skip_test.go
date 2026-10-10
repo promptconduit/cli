@@ -33,10 +33,10 @@ func TestPruneSkipsFileWhoseOldestRecordIsInsideWindow(t *testing.T) {
 		t.Fatalf("log must be untouched")
 	}
 	st := loadPruneStamp()
-	until, ok := st.until(EventsJSONLPath())
-	want := now.Add(-20 * 24 * time.Hour).Add(30 * 24 * time.Hour)
-	if !ok || !until.Equal(want) {
-		t.Fatalf("stamp until = %v ok=%v, want %v (oldest record + window)", until, ok, want)
+	oldest, ok := st.oldestOf(EventsJSONLPath())
+	want := now.Add(-20 * 24 * time.Hour)
+	if !ok || !oldest.Equal(want) {
+		t.Fatalf("stamp oldest = %v ok=%v, want %v (the oldest record)", oldest, ok, want)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestPruneRecordsUntilAfterTrimming(t *testing.T) {
 	}
 }
 
-func TestNeedsPruneHonoursStampUntil(t *testing.T) {
+func TestNeedsPruneHonoursStampOldest(t *testing.T) {
 	withTempDir(t)
 	now := time.Now().UTC()
 	fixedNow(t, now)
@@ -88,17 +88,32 @@ func TestNeedsPruneHonoursStampUntil(t *testing.T) {
 	}
 	_ = f.Close()
 
-	savePruneStamp(&pruneStamp{Until: map[string]time.Time{"events.jsonl": now.Add(24 * time.Hour)}})
+	// Oldest record 29 days old: inside a 30-day window.
+	savePruneStamp(&pruneStamp{Oldest: map[string]time.Time{"events.jsonl": now.Add(-29 * 24 * time.Hour)}})
 	old := time.Now().Add(-2 * pruneMinInterval)
 	_ = os.Chtimes(pruneStampPath(), old, old) // throttle lapsed
 	if NeedsPrune(30) {
 		t.Fatalf("oldest record not yet expired: no pass is due")
 	}
 
-	savePruneStamp(&pruneStamp{Until: map[string]time.Time{"events.jsonl": now.Add(-time.Minute)}})
+	// Retention lowered to 7 days: the same stamp must now make a pass due.
+	if !NeedsPrune(7) {
+		t.Fatalf("lowered retention: the 29-day-old record is expired, a pass is due")
+	}
+
+	savePruneStamp(&pruneStamp{Oldest: map[string]time.Time{"events.jsonl": now.Add(-31 * 24 * time.Hour)}})
 	_ = os.Chtimes(pruneStampPath(), old, old)
 	if !NeedsPrune(30) {
 		t.Fatalf("oldest record has expired: a pass is due")
+	}
+
+	// A stamp from the previous format ({"until":…}) never suppresses a pass.
+	if err := os.WriteFile(pruneStampPath(), []byte(`{"until":{"events.jsonl":"2999-01-01T00:00:00Z"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chtimes(pruneStampPath(), old, old)
+	if !NeedsPrune(30) {
+		t.Fatalf("old-format stamp must not suppress a pass")
 	}
 
 	// A legacy empty stamp never suppresses a pass.

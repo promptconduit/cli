@@ -99,6 +99,7 @@ func NeedsPrune(retentionDays int) bool {
 	if retentionDays <= 0 {
 		return false
 	}
+	window := time.Duration(retentionDays) * 24 * time.Hour
 	var st *pruneStamp
 	due := false
 	for _, pf := range prunedFiles() {
@@ -108,9 +109,10 @@ func NeedsPrune(retentionDays int) bool {
 		if st == nil {
 			st = loadPruneStamp()
 		}
-		// The last pass saw this file's oldest record still inside the window:
-		// nothing in it can expire before that record does.
-		if until, ok := st.until(pf.path); ok && nowUTC().Before(until) {
+		// The last pass saw this file's oldest record; nothing in the file can
+		// expire before that record leaves the CURRENT window (computed here, so
+		// a retention change takes effect immediately).
+		if oldest, ok := st.oldestOf(pf.path); ok && !oldest.Before(nowUTC().Add(-window)) {
 			continue
 		}
 		due = true
@@ -138,20 +140,22 @@ func MarkPruneAttempt() {
 	_ = os.WriteFile(p, nil, 0o644)
 }
 
-// pruneStamp is the content of the throttle stamp file. Until maps a log's base
-// name to the time its oldest record leaves the retention window; before then
-// an automatic pass over that file cannot remove anything, so it is skipped
-// without reading the file. The stamp's mtime is the separate
+// pruneStamp is the content of the throttle stamp file. Oldest maps a log's
+// base name to the timestamp of its oldest record at the last pass. Until that
+// record leaves the retention window (oldest + the window in effect when
+// NeedsPrune runs) an automatic pass over that file cannot remove anything, so
+// it is skipped without reading the file. Storing the record time rather than
+// an absolute expiry keeps a lowered retention from being ignored. The stamp's mtime is the separate
 // pruneMinInterval throttle clock.
 type pruneStamp struct {
-	Until map[string]time.Time `json:"until,omitempty"`
+	Oldest map[string]time.Time `json:"oldest,omitempty"`
 }
 
-func (s *pruneStamp) until(path string) (time.Time, bool) {
-	if s == nil || s.Until == nil {
+func (s *pruneStamp) oldestOf(path string) (time.Time, bool) {
+	if s == nil || s.Oldest == nil {
 		return time.Time{}, false
 	}
-	t, ok := s.Until[filepath.Base(path)]
+	t, ok := s.Oldest[filepath.Base(path)]
 	return t, ok
 }
 
@@ -230,9 +234,9 @@ func oldestRecordTime(path string, tsOf timestampFn) (time.Time, bool) {
 // affects the other or the caller.
 //
 // A file whose oldest record is still inside the window is skipped after
-// reading only its head — nothing in it can be removed — and the time that
-// record expires is saved in the stamp, so NeedsPrune stays false for the file
-// until then. Without this, a log over the ceiling purely with in-window data
+// reading only its head — nothing in it can be removed — and that record's
+// timestamp is saved in the stamp, so NeedsPrune stays false for the file
+// until it leaves the window. Without this, a log over the ceiling purely with in-window data
 // would be re-read in full on every pass while nothing is ever removed.
 func Prune(retentionDays int) int {
 	if retentionDays <= 0 {
@@ -251,17 +255,17 @@ func Prune(retentionDays int) int {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 
-	st := &pruneStamp{Until: map[string]time.Time{}}
+	st := &pruneStamp{Oldest: map[string]time.Time{}}
 	removed := 0
 	for _, pf := range prunedFiles() {
 		if oldest, ok := oldestRecordTime(pf.path, pf.tsOf); ok && !oldest.Before(cutoff) {
-			st.Until[filepath.Base(pf.path)] = oldest.Add(window)
+			st.Oldest[filepath.Base(pf.path)] = oldest
 			continue
 		}
 		removed += pruneFile(pf.path, pf.ceiling, pruneTarget(pf.ceiling), cutoff, pf.tsOf)
 		// Whatever survived, its oldest record bounds the next useful pass.
 		if oldest, ok := oldestRecordTime(pf.path, pf.tsOf); ok && !oldest.Before(cutoff) {
-			st.Until[filepath.Base(pf.path)] = oldest.Add(window)
+			st.Oldest[filepath.Base(pf.path)] = oldest
 		}
 	}
 	savePruneStamp(st)
