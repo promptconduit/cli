@@ -609,11 +609,24 @@ func writeLocalEvent(hookEvent, cwd, sessionID string) {
 		return
 	}
 
-	// Build event JSON
-	event := fmt.Sprintf(`{"event":"%s","cwd":"%s","session_id":"%s","timestamp":"%s"}`,
-		hookEvent, cwd, sessionID, time.Now().Format(time.RFC3339))
-
+	line, err := hookEventLine(hookEvent, cwd, sessionID, time.Now())
+	if err != nil {
+		return
+	}
 	// Appended through eventlog so it shares the append lock with the pruner,
 	// which also rewrites this file (eventlog.HookEventsPath).
-	eventlog.AppendHookEvent([]byte(event))
+	eventlog.AppendHookEvent(line)
+}
+
+// hookEventLine renders one hook-events record. json.Marshal (not string
+// formatting) so a cwd with backslashes or quotes — every Windows path —
+// still yields valid JSON; an invalid line has no parseable timestamp, is
+// never pruned, and would keep the trace over its ceiling forever.
+func hookEventLine(hookEvent, cwd, sessionID string, at time.Time) ([]byte, error) {
+	return json.Marshal(struct {
+		Event     string `json:"event"`
+		Cwd       string `json:"cwd"`
+		SessionID string `json:"session_id"`
+		Timestamp string `json:"timestamp"`
+	}{hookEvent, cwd, sessionID, at.Format(time.RFC3339)})
 }
