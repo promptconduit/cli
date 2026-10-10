@@ -68,6 +68,10 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 }
 
+// transcriptLockWait bounds how long a `sync --file` waits for another upload
+// of the same transcript (large transcripts upload in chunks).
+const transcriptLockWait = 10 * time.Minute
+
 func runSync(cmd *cobra.Command, args []string) error {
 	// Handle delay (used by auto-sync to wait for transcript file flush)
 	if syncDelay > 0 {
@@ -78,6 +82,18 @@ func runSync(cmd *cobra.Command, args []string) error {
 	config := client.LoadConfig()
 	if config.APIKey == "" {
 		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+	}
+
+	// Single-file (auto-)sync: never upload the same transcript from two
+	// processes at once. Wait for an in-flight upload of this file to finish,
+	// then proceed — the state is loaded only after, so the hash check below
+	// sees what that upload recorded and skips unchanged content.
+	if syncFile != "" {
+		release, ok := sync.LockTranscript(client.ConfigDir(), syncFile, transcriptLockWait)
+		defer release()
+		if !ok {
+			return fmt.Errorf("another sync of %s is still running; skipped", syncFile)
+		}
 	}
 
 	// Initialize state manager

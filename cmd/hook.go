@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -481,6 +482,13 @@ func debugLog(format string, args ...interface{}) {
 func triggerAutoSync(sessionID string) {
 	logger.Debug("Auto-sync: triggered for session %s", sessionID)
 
+	// A sync for this session is already scheduled to start after this event
+	// (and so will include it): nothing to do, not even the transcript search.
+	if sync.AutoSyncPending(client.ConfigDir(), sessionID, time.Now()) {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return
+	}
+
 	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
@@ -490,6 +498,15 @@ func triggerAutoSync(sessionID string) {
 
 	logger.Debug("Auto-sync: found transcript at %s", transcriptPath)
 
+	// Per-session debounce with a trailing edge: at most one sync per session
+	// per sync.AutoSyncInterval, and a Stop inside the interval schedules one
+	// follow-up for when it ends, so the latest content is always synced.
+	delay, spawn := sync.PlanAutoSync(client.ConfigDir(), sessionID, time.Now())
+	if !spawn {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return
+	}
+
 	// Spawn async subprocess to sync this file
 	// Use --delay flag so the subprocess waits for transcript to be fully flushed
 	exe, err := os.Executable()
@@ -498,7 +515,7 @@ func triggerAutoSync(sessionID string) {
 		return
 	}
 
-	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", "1")
+	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", strconv.Itoa(delay))
 	if err := cmd.Start(); err != nil {
 		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
 		return
