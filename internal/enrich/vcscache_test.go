@@ -8,6 +8,9 @@ import (
 // stubRefresh replaces the detached refresher with a counter.
 func stubRefresh(t *testing.T) *int {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
 	SetStateDirForTest(t.TempDir())
 	t.Cleanup(func() { SetStateDirForTest("") })
 	n := 0
