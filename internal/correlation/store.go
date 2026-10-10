@@ -87,7 +87,7 @@ const lastSeenRefresh = 60 * time.Second
 
 // spansLockWait bounds the wait for another hook's spans read-modify-write.
 // On timeout the update proceeds unlocked (the pre-lock behaviour).
-const spansLockWait = 500 * time.Millisecond
+var spansLockWait = 500 * time.Millisecond // var: tests raise it to rule out timeouts
 
 // LoadOrCreateTrace returns the trace ID for sessionID, creating and
 // persisting a new one if none exists. The last_seen_at timestamp is

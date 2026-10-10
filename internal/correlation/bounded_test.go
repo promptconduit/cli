@@ -73,6 +73,12 @@ func TestConsumeToolUseParent_ReturnsOnceAndRemoves(t *testing.T) {
 // the same spans file. Every record must be consumable exactly once and the
 // file must end empty (bounded).
 func TestSpans_ConcurrentRecordAndConsumeLoseNothing(t *testing.T) {
+	// 40 writers queue on one lock; on a slow CI disk the hook-path wait could
+	// expire and fall back to unlocked (best-effort) updates. Raise it so the
+	// test checks the locking itself, not the fallback.
+	prev := spansLockWait
+	spansLockWait = 30 * time.Second
+	t.Cleanup(func() { spansLockWait = prev })
 	s := NewStore(t.TempDir())
 	const n = 40
 	var wg sync.WaitGroup
