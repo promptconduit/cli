@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/logger"
 )
 
@@ -41,10 +40,7 @@ type vcsCacheEntry struct {
 type vcsCache map[string]vcsCacheEntry
 
 func vcsCachePath() string {
-	if stateDirOverride != "" {
-		return filepath.Join(stateDirOverride, vcsCacheFile)
-	}
-	return filepath.Join(client.ConfigDir(), vcsCacheFile)
+	return filepath.Join(enrichBaseDir(), vcsCacheFile)
 }
 
 func cacheKey(repoURL, branch string) string { return repoURL + "|" + branch }

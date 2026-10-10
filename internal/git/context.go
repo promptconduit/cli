@@ -3,6 +3,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -15,114 +16,201 @@ import (
 
 const gitTimeout = 2 * time.Second
 
-// ExtractContext extracts git repository information from the given directory
+// ExtractContext extracts git repository information from the given directory.
+//
+// It runs on the hook's hot path — once per captured event, for every
+// concurrent agent — so it is built to spawn as few git processes as possible
+// (4: rev-parse, status, log, remote). Branch, HEAD, upstream ahead/behind and
+// the working-tree counts all come from one `git status --porcelain=v2
+// --branch`, and origin's default branch is read from the ref file directly.
 func ExtractContext(workingDir string) *envelope.GitContext {
 	if workingDir == "" {
 		return nil
 	}
 
-	// Check if it's a git repo
-	repoRoot := runGitCmd(workingDir, "rev-parse", "--show-toplevel")
-	if repoRoot == "" {
+	// One rev-parse for the repo check, top-level, and worktree detection.
+	repoRoot, gitDir, commonDir, ok := revParseDirs(workingDir)
+	if !ok {
 		return nil
 	}
 
 	ctx := &envelope.GitContext{
 		WorkingDirectory: workingDir,
 		RepoPath:         repoRoot,
-		RepoName:         GetRepoName(workingDir),
+		GitDir:           gitDir,
+		CommonDir:        commonDir,
 	}
 
-	// Commit info
-	if hash := runGitCmd(workingDir, "rev-parse", "HEAD"); hash != "" {
-		ctx.CommitHash = hash
+	// Branch, HEAD oid, ahead/behind and working-tree counts.
+	st := parseStatusV2(runGitCmd(workingDir, "status", "--porcelain=v2", "--branch"))
+	if !st.ok {
+		// status failed or timed out (e.g. a huge untracked scan). Recover the
+		// cheap identity fields directly; counts and ahead/behind are unknown,
+		// so the result is marked Degraded (and never cached).
+		ctx.Degraded = true
+		st.oid = runGitCmd(workingDir, "rev-parse", "HEAD")
+		st.branch = runGitCmd(workingDir, "branch", "--show-current")
 	}
-	if msg := runGitCmd(workingDir, "log", "-1", "--format=%s"); msg != "" {
-		ctx.CommitMessage = msg
-	}
-	if author := runGitCmd(workingDir, "log", "-1", "--format=%an"); author != "" {
-		ctx.CommitAuthor = author
+	ctx.CommitHash = st.oid
+	ctx.Branch = st.branch
+	// Only claim detached HEAD when status itself said so — an empty branch
+	// from a failed fallback is "unknown", not "detached".
+	ctx.IsDetachedHead = st.ok && st.branch == ""
+	ctx.StagedCount = st.staged
+	ctx.UnstagedCount = st.unstaged
+	ctx.UntrackedCount = st.untracked
+	ctx.IsDirty = (st.staged + st.unstaged + st.untracked) > 0
+	ctx.AheadCount = st.ahead
+	ctx.BehindCount = st.behind
+
+	// Commit subject + author in one call (skipped on an unborn branch).
+	if ctx.CommitHash != "" {
+		if out := runGitCmd(workingDir, "log", "-1", "--format=%s%x00%an"); out != "" {
+			msg, author, _ := strings.Cut(out, "\x00")
+			ctx.CommitMessage = msg
+			ctx.CommitAuthor = author
+		}
 	}
 
-	// Branch info
-	if branch := runGitCmd(workingDir, "branch", "--show-current"); branch != "" {
-		ctx.Branch = branch
-		ctx.IsDetachedHead = false
-	} else {
-		// Detached HEAD state
-		ctx.IsDetachedHead = true
-	}
-
-	// Working tree state
-	status := runGitCmd(workingDir, "status", "--porcelain")
-	staged, unstaged, untracked := parseStatusOutput(status)
-	ctx.StagedCount = staged
-	ctx.UnstagedCount = unstaged
-	ctx.UntrackedCount = untracked
-	ctx.IsDirty = (staged + unstaged + untracked) > 0
-
-	// Remote info
-	if remote := runGitCmd(workingDir, "remote", "get-url", "origin"); remote != "" {
-		ctx.RemoteURL = remote
-	}
+	ctx.RemoteURL = runGitCmd(workingDir, "remote", "get-url", "origin")
+	ctx.RepoName = repoNameFromRemote(ctx.RemoteURL, workingDir)
+	ctx.DefaultBranch = defaultBranchFromCommonDir(workingDir, commonDir)
 
 	// Worktree detection: a linked worktree has a per-worktree git dir that
 	// differs from the shared common dir. This catches sessions started *inside*
 	// an existing worktree, which the WorktreeCreate hook never reports. Reuse
 	// repoRoot (already the worktree's top-level) for the path — no extra call.
-	if detectWorktree(workingDir) {
+	if gitDir != commonDir {
 		ctx.IsWorktree = true
 		ctx.WorktreePath = repoRoot
-	}
-
-	// Ahead/behind counts
-	if counts := runGitCmd(workingDir, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); counts != "" {
-		ahead, behind := parseAheadBehind(counts)
-		ctx.AheadCount = ahead
-		ctx.BehindCount = behind
 	}
 
 	return ctx
 }
 
-// detectWorktree reports whether workingDir is a linked git worktree (not the
-// main checkout). A linked worktree's per-worktree git dir
-// (.git/worktrees/<name>) differs from the shared common dir; in the main
-// checkout the two are identical.
+// revParseDirs returns the work-tree top level plus the per-worktree and
+// shared git dirs (absolute, cleaned) from a SINGLE `git rev-parse`. ok is
+// false when workingDir is not inside a work tree.
 //
-// Both paths come from a SINGLE `git rev-parse --git-dir --git-common-dir`
-// invocation so they're resolved with identical semantics — this avoids
-// false positives from symlink/case differences between two separate
-// subcommands, needs no `--path-format` (so it works on git >= 2.5), and adds
-// just one subprocess to the latency-sensitive hook path.
-func detectWorktree(workingDir string) bool {
-	out := runGitCmd(workingDir, "rev-parse", "--git-dir", "--git-common-dir")
+// Resolving git-dir and common-dir in one invocation gives them identical
+// semantics, avoiding false worktree positives from symlink/case differences
+// between separate subcommands, and needs no `--path-format`. (ExtractContext
+// as a whole needs git >= 2.11 for `status --porcelain=v2`.)
+func revParseDirs(workingDir string) (repoRoot, gitDir, commonDir string, ok bool) {
+	out := runGitCmd(workingDir, "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir")
 	lines := strings.Split(out, "\n")
-	if len(lines) < 2 {
-		return false
+	if len(lines) < 3 {
+		return "", "", "", false
 	}
-	gitDir, commonDir := strings.TrimSpace(lines[0]), strings.TrimSpace(lines[1])
-	if gitDir == "" || commonDir == "" {
-		return false
+	repoRoot = strings.TrimSpace(lines[0])
+	gitDir, commonDir = strings.TrimSpace(lines[1]), strings.TrimSpace(lines[2])
+	if repoRoot == "" || gitDir == "" || commonDir == "" {
+		return "", "", "", false
 	}
-	// Resolve both relative to workingDir for a stable comparison (git may emit
-	// either path relative to the cwd).
+	// git may emit either dir relative to the cwd; resolve both against
+	// workingDir for a stable comparison.
 	abs := func(p string) string {
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(workingDir, p)
 		}
 		return filepath.Clean(p)
 	}
-	return abs(gitDir) != abs(commonDir)
+	return repoRoot, abs(gitDir), abs(commonDir), true
 }
 
-// runGitCmd executes a git command with timeout and returns trimmed stdout
+// statusV2 is what ExtractContext needs from `git status --porcelain=v2 --branch`.
+type statusV2 struct {
+	ok                          bool   // the branch header was present (status succeeded)
+	oid                         string // "" on an unborn branch
+	branch                      string // "" when HEAD is detached
+	ahead, behind               int
+	staged, unstaged, untracked int
+}
+
+// parseStatusV2 parses `git status --porcelain=v2 --branch` output:
+//
+//	# branch.oid <commit> | (initial)
+//	# branch.head <branch> | (detached)
+//	# branch.ab +<ahead> -<behind>      (only when an upstream resolves)
+//	1 <XY> ...                          ordinary changed entry
+//	2 <XY> ...                          renamed/copied entry
+//	u <XY> ...                          unmerged entry
+//	? <path>                            untracked
+//
+// In XY, X is the index (staged) state and Y the work-tree state; "." means
+// unmodified.
+func parseStatusV2(out string) statusV2 {
+	var st statusV2
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "# branch.oid "):
+			if oid := strings.TrimPrefix(line, "# branch.oid "); oid != "(initial)" {
+				st.oid = oid
+			}
+		case strings.HasPrefix(line, "# branch.head "):
+			st.ok = true
+			if head := strings.TrimPrefix(line, "# branch.head "); head != "(detached)" {
+				st.branch = head
+			}
+		case strings.HasPrefix(line, "# branch.ab "):
+			for _, f := range strings.Fields(strings.TrimPrefix(line, "# branch.ab ")) {
+				n, _ := strconv.Atoi(f[1:])
+				switch f[0] {
+				case '+':
+					st.ahead = n
+				case '-':
+					st.behind = n
+				}
+			}
+		case strings.HasPrefix(line, "? "):
+			st.untracked++
+		case len(line) >= 4 && (line[0] == '1' || line[0] == '2' || line[0] == 'u') && line[1] == ' ':
+			if line[2] != '.' {
+				st.staged++
+			}
+			if line[3] != '.' {
+				st.unstaged++
+			}
+		}
+	}
+	return st
+}
+
+// defaultBranchFromCommonDir returns origin's HEAD branch name (e.g. "main"),
+// or "" when unknown. Local ref only — no network; the ref may be absent on
+// fresh clones that never ran `git remote set-head`, and that's fine.
+//
+// It reads refs/remotes/origin/HEAD straight from the shared git dir — symbolic refs are always loose files ("ref: refs/remotes/
+// origin/main"), never packed — saving a subprocess on the hook path. Repos
+// on the reftable backend have no loose refs, so they fall back to git.
+func defaultBranchFromCommonDir(workingDir, commonDir string) string {
+	const prefix = "refs/remotes/origin/"
+	var ref string
+	if data, err := os.ReadFile(filepath.Join(commonDir, "refs", "remotes", "origin", "HEAD")); err == nil {
+		ref = strings.TrimSpace(strings.TrimPrefix(string(data), "ref:"))
+	} else if _, err := os.Stat(filepath.Join(commonDir, "reftable")); err == nil {
+		ref = runGitCmd(workingDir, "symbolic-ref", "refs/remotes/origin/HEAD")
+	}
+	if strings.HasPrefix(ref, prefix) {
+		return strings.TrimPrefix(ref, prefix)
+	}
+	return ""
+}
+
+// runGitCmd executes a git command with timeout and returns trimmed stdout.
+//
+// GIT_OPTIONAL_LOCKS=0 stops read-only commands (status, diff) from taking
+// .git/index.lock to opportunistically refresh the index. The hook fires on
+// every tool call while the agent itself may be running `git add`/`commit`;
+// without this, the two race and the agent's command can fail with
+// "index.lock: File exists".
 func runGitCmd(dir string, args ...string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
 
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
@@ -132,63 +220,6 @@ func runGitCmd(dir string, args ...string) string {
 	}
 
 	return strings.TrimSpace(stdout.String())
-}
-
-// parseStatusOutput parses git status --porcelain output
-func parseStatusOutput(status string) (staged, unstaged, untracked int) {
-	if status == "" {
-		return 0, 0, 0
-	}
-
-	for _, line := range strings.Split(status, "\n") {
-		if len(line) < 2 {
-			continue
-		}
-		index := line[0]
-		workTree := line[1]
-
-		// Untracked files
-		if index == '?' && workTree == '?' {
-			untracked++
-			continue
-		}
-
-		// Staged changes (index column has change marker)
-		if index != ' ' && index != '?' {
-			staged++
-		}
-
-		// Unstaged changes (work tree column has change marker)
-		if workTree != ' ' && workTree != '?' {
-			unstaged++
-		}
-	}
-
-	return staged, unstaged, untracked
-}
-
-// parseAheadBehind parses output of git rev-list --left-right --count
-func parseAheadBehind(counts string) (ahead, behind int) {
-	parts := strings.Fields(counts)
-	if len(parts) != 2 {
-		return 0, 0
-	}
-
-	behind, _ = strconv.Atoi(parts[0])
-	ahead, _ = strconv.Atoi(parts[1])
-	return ahead, behind
-}
-
-// DefaultBranch returns origin's HEAD branch name (e.g. "main"), or "" when
-// unknown. Reads the local ref only — no network. The ref may be absent on
-// fresh clones that never ran `git remote set-head`; that's fine, we omit it.
-func DefaultBranch(workingDir string) string {
-	ref := runGitCmd(workingDir, "symbolic-ref", "refs/remotes/origin/HEAD")
-	const prefix = "refs/remotes/origin/"
-	if strings.HasPrefix(ref, prefix) {
-		return strings.TrimPrefix(ref, prefix)
-	}
-	return ""
 }
 
 // diffShortstatRE parses `git diff --shortstat` output, whose insertion and
@@ -222,16 +253,17 @@ func DiffShortstat(workingDir string) (files, insertions, deletions int, ok bool
 
 // GetRepoName extracts repository name from path or git remote
 func GetRepoName(workingDir string) string {
-	// Try to get from git remote URL
-	if remote := runGitCmd(workingDir, "remote", "get-url", "origin"); remote != "" {
-		// Extract repo name from URL
-		// github.com/user/repo.git -> repo
+	return repoNameFromRemote(runGitCmd(workingDir, "remote", "get-url", "origin"), workingDir)
+}
+
+// repoNameFromRemote derives the repo name from a remote URL
+// (github.com/user/repo.git -> repo), falling back to the directory name.
+func repoNameFromRemote(remote, workingDir string) string {
+	if remote != "" {
 		remote = strings.TrimSuffix(remote, ".git")
 		if idx := strings.LastIndex(remote, "/"); idx != -1 {
 			return remote[idx+1:]
 		}
 	}
-
-	// Fall back to directory name
 	return filepath.Base(workingDir)
 }

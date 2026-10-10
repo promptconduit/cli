@@ -59,7 +59,7 @@ to what's POSTed to `/v1/events/raw` and stored in the platform bucket.
 
 Well-known slugs: `env` (host/os/os_version/arch/cwd, every event) · `trace`
 (W3C correlation, every event) · `vcs` (normalized provider/repo/branch/PR,
-git repos) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
+git repos; tool-level events reuse a ≤5s per-cwd snapshot, see `vcsctx.go`) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
 requests, Stop / cursor stop) · `tools` (normalized tool-call list,
 PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
 Stop/SessionEnd) · `subagent` (Start/Stop join with duration + per-agent

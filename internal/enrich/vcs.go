@@ -71,7 +71,7 @@ func (vcsEnricher) Slug() string              { return "vcs" }
 func (vcsEnricher) Applies(ctx *Context) bool { return ctx.Cwd != "" }
 
 func (vcsEnricher) Enrich(ctx *Context) (any, error) {
-	gc := git.ExtractContext(ctx.Cwd)
+	gc := gitContext(ctx) // snapshot-cached for high-frequency events (vcsctx.go)
 	if gc == nil {
 		return nil, nil // not a git repo — omit the slug
 	}
@@ -79,7 +79,7 @@ func (vcsEnricher) Enrich(ctx *Context) (any, error) {
 	v := VCSEnrichment{
 		Type:             git.DetectSource(gc.RemoteURL),
 		Branch:           gc.Branch,
-		DefaultBranch:    git.DefaultBranch(ctx.Cwd),
+		DefaultBranch:    gc.DefaultBranch,
 		Dirty:            gc.IsDirty,
 		Staged:           gc.StagedCount,
 		Unstaged:         gc.UnstagedCount,

@@ -46,11 +46,17 @@ var stateDirOverride string
 // SetStateDirForTest overrides the enrich state directory. Test-only.
 func SetStateDirForTest(dir string) { stateDirOverride = dir }
 
-func stateDir() string {
+// enrichBaseDir is the root every enrich state/cache path hangs off: the
+// config dir, or the test override.
+func enrichBaseDir() string {
 	if stateDirOverride != "" {
-		return filepath.Join(stateDirOverride, stateSubdir)
+		return stateDirOverride
 	}
-	return filepath.Join(client.ConfigDir(), stateSubdir)
+	return client.ConfigDir()
+}
+
+func stateDir() string {
+	return filepath.Join(enrichBaseDir(), stateSubdir)
 }
 
 func statePath(sessionID string) string {
@@ -77,37 +83,47 @@ func saveState(sessionID string, st sessionState) {
 	if sessionID == "" {
 		return
 	}
-	dir := stateDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return
-	}
 	data, err := json.Marshal(st)
 	if err != nil {
 		return
 	}
+	dir := stateDir()
+	if writeFileAtomic(dir, statePath(sessionID), data) {
+		maybeGC(dir, stateMaxAge)
+	}
+}
+
+// writeFileAtomic writes data to path (inside dir, created if needed) via a
+// temp file + rename, so concurrent hook processes never see a torn file.
+// Reports whether the write landed.
+func writeFileAtomic(dir, path string, data []byte) bool {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return false
+	}
 	tmp, err := os.CreateTemp(dir, ".tmp-*")
 	if err != nil {
-		return
+		return false
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
-		return
+		return false
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return
+		return false
 	}
-	if err := os.Rename(tmpName, statePath(sessionID)); err != nil {
+	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
+		return false
 	}
-	maybeGCState(dir)
+	return true
 }
 
-// maybeGCState deletes session state files untouched for stateMaxAge, on
-// roughly 1 in gcOneInEvery calls (mirrors the correlation store's approach).
-func maybeGCState(dir string) {
+// maybeGC deletes files in dir untouched for maxAge, on roughly 1 in
+// gcOneInEvery calls (mirrors the correlation store's approach).
+func maybeGC(dir string, maxAge time.Duration) {
 	var b [4]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return
@@ -119,7 +135,7 @@ func maybeGCState(dir string) {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-stateMaxAge)
+	cutoff := time.Now().Add(-maxAge)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
