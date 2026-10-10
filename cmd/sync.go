@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/spf13/cobra"
 )
@@ -316,6 +317,15 @@ func runSync(cmd *cobra.Command, args []string) error {
 			fmt.Printf(", %d plan(s)", plansSynced)
 		}
 		fmt.Println()
+	}
+
+	// Sync is the "push everything now" command: also replay any events
+	// queued after failed sends. Best-effort — never fails the sync.
+	if config.ShouldSend() && eventlog.OutboxCount(config.APIURL) > 0 {
+		fmt.Println()
+		if err := flushOutboxNow(cmd.Context(), os.Stdout, config, syncDryRun, true); err != nil {
+			fmt.Printf("⚠️  Queued events not fully replayed: %v\n", err)
+		}
 	}
 
 	return nil
