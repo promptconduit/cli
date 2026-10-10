@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -351,34 +354,81 @@ func openLogForStderr() *os.File {
 // both land here — so it's where we record the full outgoing payload and the
 // HTTP outcome to the local event log.
 func (c *Client) sendEnvelopeBlocking(envJSON []byte) error {
+	start := time.Now()
+	status, err := c.attemptEventSend(envJSON)
+	recordEventSend(envJSON, status, time.Since(start), 1, err)
+	return err
+}
+
+// sendRetryDelays are the waits before each retry of a failed event send
+// (so len+1 attempts total). Jittered by up to +50%. A var so tests can
+// shrink it.
+var sendRetryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+
+// sendEnvelopeWithRetry is sendEnvelopeBlocking with retries for transient
+// failures: 429, 500, 502, 503, 504, and connection errors. The server
+// dedupes on event_id, so a resend after an ambiguous failure is safe.
+// Timeouts are NOT retried: they mean the server may still be working on it
+// or the machine is overloaded, and piling on more attempts makes that worse.
+// Only the detached sender uses this, so backoff never blocks a hook; the
+// in-process fallbacks stay single-attempt.
+func (c *Client) sendEnvelopeWithRetry(envJSON []byte) error {
+	start := time.Now()
+	var status, attempts int
+	var err error
+	for attempt := 0; ; attempt++ {
+		attempts = attempt + 1
+		status, err = c.attemptEventSend(envJSON)
+		if err == nil || attempt >= len(sendRetryDelays) || !retryableSend(status, err) {
+			break
+		}
+		d := sendRetryDelays[attempt]
+		time.Sleep(d + time.Duration(rand.Int63n(int64(d)/2+1)))
+	}
+	recordEventSend(envJSON, status, time.Since(start), attempts, err)
+	return err
+}
+
+// retryableSend reports whether a failed send is worth retrying.
+func retryableSend(status int, err error) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	case 0: // no HTTP response: retry connection errors, not timeouts
+		var netErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+			return false
+		}
+		return err != nil
+	}
+	return false
+}
+
+// attemptEventSend makes one POST of the envelope. status is 0 when no HTTP
+// response was received.
+func (c *Client) attemptEventSend(envJSON []byte) (int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+eventsEndpoint, bytes.NewReader(envJSON))
 	if err != nil {
-		recordEventSend(envJSON, 0, 0, 1, err)
-		return err
+		return 0, err
 	}
-
 	c.setHeaders(req)
 
-	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		recordEventSend(envJSON, 0, time.Since(start), 1, err)
-		return err
+		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		apiErr := fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
-		recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, apiErr)
-		return apiErr
+		return resp.StatusCode, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
 	}
-
-	recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, nil)
-	return nil
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode, nil
 }
 
 // sendRequest performs an HTTP request to the API
@@ -441,9 +491,10 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", fmt.Sprintf("PromptConduit-CLI/%s", c.version))
 }
 
-// SendEnvelopeDirect sends an envelope directly (used by async subprocess)
+// SendEnvelopeDirect sends an envelope directly (used by the detached async
+// subprocess), retrying transient failures; nothing waits on this process.
 func (c *Client) SendEnvelopeDirect(envJSON []byte) error {
-	return c.sendEnvelopeBlocking(envJSON)
+	return c.sendEnvelopeWithRetry(envJSON)
 }
 
 // TestConnection sends a test request to verify API connectivity
