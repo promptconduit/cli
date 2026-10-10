@@ -18,9 +18,10 @@ import (
 // times a second across concurrent agents (Pre + Post + Batch per tool call).
 // So high-frequency events reuse a short-lived per-cwd snapshot of the git
 // context instead of re-running git each time. A snapshot is trusted only
-// while it is younger than vcsSnapshotTTL AND the repo's HEAD, index and HEAD
-// reflog are unchanged (a cheap stat), so a commit/checkout/stage made by the
-// tool call is seen by its own Post event. Plain working-tree edits can leave
+// while it is younger than vcsSnapshotTTL AND a stat fingerprint of the
+// relevant git files is unchanged (see repoFingerprint), so a commit,
+// checkout, stage, push or fetch made by the tool call is seen by its own
+// Post event. Plain working-tree edits can leave
 // the dirty counts up to vcsSnapshotTTL stale. Turn-boundary events (prompt,
 // stop, session/subagent start and end) always extract fresh and refresh the
 // snapshot, so the events reports anchor on are exact.
@@ -67,18 +68,33 @@ var extractGitContext = git.ExtractContext
 // re-snapshotting).
 func gitContext(ctx *Context) *envelope.GitContext {
 	path := vcsSnapshotPath(ctx.Cwd)
-	if highFrequencyEvents[ctx.HookEvent] {
-		if snap, ok := loadVCSSnapshot(path); ok && snapshotValid(snap) {
-			return snap.Git
-		}
+	prev, havePrev := loadVCSSnapshot(path)
+	if highFrequencyEvents[ctx.HookEvent] && havePrev && snapshotValid(prev) {
+		return prev.Git
+	}
+
+	// Fingerprint the repo BEFORE extracting (via the previous snapshot's dirs)
+	// and again after. Only vouch for the snapshot when they match: a git
+	// change landing mid-extraction would otherwise pair old data with the new
+	// fingerprint. With no previous snapshot there's nothing to compare, so the
+	// first snapshot for a cwd is stored unvouched (one extra extraction).
+	capturedAt := time.Now()
+	before := ""
+	if havePrev && prev.Git != nil {
+		before = repoFingerprint(prev.Git)
 	}
 	gc := extractGitContext(ctx.Cwd)
-	// nil = not a repo OR a failed/timed-out rev-parse; we can't tell which,
-	// so never cache it (a transient failure would blank the slug for the TTL).
-	if gc == nil {
-		return nil
+	// nil = not a repo OR a failed/timed-out rev-parse; we can't tell which.
+	// Degraded = status failed, counts unknown. Never cache either: a transient
+	// failure must not blank or falsify the slug for the TTL.
+	if gc == nil || gc.Degraded {
+		return gc
 	}
-	snap := vcsSnapshot{CapturedAt: time.Now(), Fingerprint: repoFingerprint(gc.GitDir), Git: gc}
+	fp := repoFingerprint(gc)
+	if fp != before {
+		fp = ""
+	}
+	snap := vcsSnapshot{CapturedAt: capturedAt, Fingerprint: fp, Git: gc}
 	if data, err := json.Marshal(snap); err == nil {
 		dir := filepath.Dir(path)
 		if writeFileAtomic(dir, path, data) {
@@ -93,20 +109,39 @@ func snapshotValid(snap vcsSnapshot) bool {
 	if age := time.Since(snap.CapturedAt); age < 0 || age >= vcsSnapshotTTL {
 		return false
 	}
-	return snap.Git != nil && snap.Fingerprint == repoFingerprint(snap.Git.GitDir)
+	if snap.Git == nil || snap.Fingerprint == "" {
+		return false
+	}
+	return snap.Fingerprint == repoFingerprint(snap.Git)
 }
 
-// repoFingerprint summarizes the per-worktree files git rewrites on commit,
-// checkout, reset, merge and staging: HEAD (branch switch), index (stage,
-// commit -a, checkout) and logs/HEAD (every HEAD movement). Stats only — no
-// subprocess. "" when gitDir is unknown, which never matches a real one.
-func repoFingerprint(gitDir string) string {
-	if gitDir == "" {
+// repoFingerprint summarizes the files git rewrites when anything the vcs
+// slug reports changes. Per-worktree: HEAD (branch switch), index (stage,
+// commit -a, checkout), logs/HEAD (every HEAD movement). Shared: the branch's
+// loose ref (commit/reset even with reflogs off), origin's ref for the branch
+// (push/fetch → ahead/behind), packed-refs, FETCH_HEAD and config (remote
+// URL). Stats only — no subprocess. "" when the dirs are unknown; snapshotValid
+// never accepts "".
+func repoFingerprint(gc *envelope.GitContext) string {
+	if gc == nil || gc.GitDir == "" || gc.CommonDir == "" {
 		return ""
 	}
-	parts := make([]string, 0, 3)
-	for _, name := range []string{"HEAD", "index", filepath.Join("logs", "HEAD")} {
-		if info, err := os.Stat(filepath.Join(gitDir, name)); err == nil {
+	files := []string{
+		filepath.Join(gc.GitDir, "HEAD"),
+		filepath.Join(gc.GitDir, "index"),
+		filepath.Join(gc.GitDir, "logs", "HEAD"),
+		filepath.Join(gc.CommonDir, "packed-refs"),
+		filepath.Join(gc.CommonDir, "FETCH_HEAD"),
+		filepath.Join(gc.CommonDir, "config"),
+	}
+	if gc.Branch != "" {
+		files = append(files,
+			filepath.Join(gc.CommonDir, "refs", "heads", gc.Branch),
+			filepath.Join(gc.CommonDir, "refs", "remotes", "origin", gc.Branch))
+	}
+	parts := make([]string, 0, len(files))
+	for _, f := range files {
+		if info, err := os.Stat(f); err == nil {
 			parts = append(parts, fmt.Sprintf("%d:%d", info.ModTime().UnixNano(), info.Size()))
 		} else {
 			parts = append(parts, "-")

@@ -38,20 +38,24 @@ func ExtractContext(workingDir string) *envelope.GitContext {
 		WorkingDirectory: workingDir,
 		RepoPath:         repoRoot,
 		GitDir:           gitDir,
+		CommonDir:        commonDir,
 	}
 
 	// Branch, HEAD oid, ahead/behind and working-tree counts.
 	st := parseStatusV2(runGitCmd(workingDir, "status", "--porcelain=v2", "--branch"))
 	if !st.ok {
-		// status failed or timed out (e.g. a huge untracked scan). Don't report
-		// a bogus detached HEAD: recover the cheap identity fields directly;
-		// counts and ahead/behind stay zero.
+		// status failed or timed out (e.g. a huge untracked scan). Recover the
+		// cheap identity fields directly; counts and ahead/behind are unknown,
+		// so the result is marked Degraded (and never cached).
+		ctx.Degraded = true
 		st.oid = runGitCmd(workingDir, "rev-parse", "HEAD")
 		st.branch = runGitCmd(workingDir, "branch", "--show-current")
 	}
 	ctx.CommitHash = st.oid
 	ctx.Branch = st.branch
-	ctx.IsDetachedHead = st.branch == ""
+	// Only claim detached HEAD when status itself said so — an empty branch
+	// from a failed fallback is "unknown", not "detached".
+	ctx.IsDetachedHead = st.ok && st.branch == ""
 	ctx.StagedCount = st.staged
 	ctx.UnstagedCount = st.unstaged
 	ctx.UntrackedCount = st.untracked

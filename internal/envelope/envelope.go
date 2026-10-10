@@ -91,9 +91,13 @@ type GitContext struct {
 	WorktreePath string `json:"worktree_path,omitempty"`
 	// DefaultBranch is origin's HEAD branch (e.g. "main"), when known locally.
 	DefaultBranch string `json:"default_branch,omitempty"`
-	// GitDir is the absolute per-worktree git dir; the vcs snapshot cache
-	// fingerprints its HEAD/index/reflog to spot repo changes.
-	GitDir string `json:"git_dir,omitempty"`
+	// GitDir / CommonDir are the absolute per-worktree and shared git dirs;
+	// the vcs snapshot cache fingerprints files in them to spot repo changes.
+	GitDir    string `json:"git_dir,omitempty"`
+	CommonDir string `json:"common_dir,omitempty"`
+	// Degraded marks a partial extraction (git status failed or timed out):
+	// counts and ahead/behind are unknown. Never cached; not serialized.
+	Degraded bool `json:"-"`
 }
 
 // New creates a v2 envelope. rawEvent is the tool's hook payload verbatim;
