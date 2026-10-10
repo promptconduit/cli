@@ -463,12 +463,12 @@ func (c *Client) flushOutbox() {
 }
 
 // DrainOutbox replays everything queued for this client's API URL right now
-// (see eventlog.DrainOutbox): no cooldown, pass after pass until the outbox is
-// empty or stops making progress. ctx bounds the whole drain (e.g. Ctrl-C);
-// each request still has the configured timeout. When the drain ends on a
-// server-level failure, stopErr is the error that stopped it.
-func (c *Client) DrainOutbox(ctx context.Context, onPass func(pass int, st eventlog.FlushStats)) (res eventlog.DrainResult, stopErr error) {
-	res = eventlog.DrainOutbox(c.config.APIURL, outboxReplayBatch, c.replayer(ctx, &stopErr), onPass)
+// (see eventlog.DrainOutbox): no cooldown, one pass over the whole queue.
+// ctx bounds the whole drain (e.g. Ctrl-C); each request still has the
+// configured timeout. When the drain ends on a server-level failure, stopErr
+// is the error that stopped it. onSend sees the running stats after each send.
+func (c *Client) DrainOutbox(ctx context.Context, onSend func(st eventlog.FlushStats)) (res eventlog.DrainResult, stopErr error) {
+	res = eventlog.DrainOutbox(c.config.APIURL, c.replayer(ctx, &stopErr), onSend)
 	if !res.Stopped {
 		stopErr = nil
 	}

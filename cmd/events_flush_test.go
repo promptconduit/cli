@@ -3,9 +3,12 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,5 +108,38 @@ func TestFlushOutboxNowReportsServerFailure(t *testing.T) {
 	}
 	if eventlog.OutboxCount(srv.URL) != 3 {
 		t.Fatal("the queue must be kept when the server is down")
+	}
+}
+
+// A flush that finds the lock taken sends nothing and fails, so scripts can
+// tell nothing was sent.
+func TestFlushOutboxNowBusyIsAnError(t *testing.T) {
+	srv, calls := flushTestServer(t, http.StatusCreated)
+	// The lock sits next to the outbox: outbox-<key>.jsonl -> .outbox-<key>.lock.
+	base := filepath.Base(eventlog.OutboxPath(srv.URL))
+	lock := filepath.Join(eventlog.Dir(), "."+strings.TrimSuffix(base, ".jsonl")+".lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &client.Config{APIURL: srv.URL, APIKey: "k", TimeoutSeconds: 5}
+	var out bytes.Buffer
+	if err := flushOutboxNow(context.Background(), &out, cfg, false, false); !errors.Is(err, errFlushBusy) {
+		t.Fatalf("err = %v, want errFlushBusy", err)
+	}
+	if atomic.LoadInt32(calls) != 0 || eventlog.OutboxCount(srv.URL) != 3 {
+		t.Fatal("a busy flush must not send")
+	}
+}
+
+func TestBlankLineBeforeOnlyWhenWritten(t *testing.T) {
+	var buf bytes.Buffer
+	w := &blankLineBefore{w: &buf}
+	if buf.Len() != 0 {
+		t.Fatal("no output expected without writes")
+	}
+	_, _ = fmt.Fprint(w, "a\n")
+	_, _ = fmt.Fprint(w, "b\n")
+	if buf.String() != "\na\nb\n" {
+		t.Fatalf("got %q", buf.String())
 	}
 }

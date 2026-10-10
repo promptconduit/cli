@@ -84,7 +84,7 @@ func printEventLogStatus(cfg *client.Config) {
 	// delivered later from the outbox; queued = waiting in the outbox now.
 	if queued := eventlog.OutboxCount(cfg.APIURL); st.Retried > 0 || st.Replayed > 0 || queued > 0 {
 		fmt.Printf("  %d recovered by retry · %d replayed later · %d queued for replay\n", st.Retried, st.Replayed, queued)
-		if queued > 0 {
+		if queued > 0 && cfg.ShouldSend() {
 			fmt.Println("  Replay the queue now with: promptconduit events flush")
 		}
 	}

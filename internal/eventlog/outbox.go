@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -113,48 +114,48 @@ func FlushOutbox(target string, limit int, send func(envJSON []byte) ReplayResul
 	}
 	defer release()
 	touchFile(outboxStampPath(target))
-	return flushPass(target, limit, send).Delivered
+	st := flushPass(target, limit, send, nil)
+	if st.Err != nil {
+		return 0 // nothing was removed; the deliveries will be resent
+	}
+	return st.Delivered
 }
 
 // FlushStats summarizes one replay pass over an outbox.
 type FlushStats struct {
 	Tried     int  // envelopes handed to send
-	Delivered int  // accepted by the server (removed)
-	Rejected  int  // permanently rejected (removed)
+	Delivered int  // accepted by the server
+	Rejected  int  // permanently rejected
 	Skipped   int  // failed but kept, rotated to the back
 	Expired   int  // older than the max age, dropped without sending
 	Stopped   bool // a send returned ReplayStop; the pass ended early
-	Err       error
-}
-
-// progressed reports whether the pass shrank the outbox.
-func (s FlushStats) progressed() bool {
-	return s.Delivered+s.Rejected+s.Expired > 0
+	// Err: rewriting the outbox failed after the sends. The counters still say
+	// what happened on the wire, but nothing was removed from the outbox, so
+	// delivered entries will be resent (the server dedupes on event_id).
+	Err error
 }
 
 // DrainResult summarizes a DrainOutbox call.
 type DrainResult struct {
-	Passes    int
-	Delivered int
-	Rejected  int
-	Expired   int
-	Stopped   bool  // ended on ReplayStop (server/credential problem or cancelled)
-	Busy      bool  // another process holds the flush lock; nothing was sent
-	Err       error // rewriting the outbox failed
-	Remaining int   // envelopes still queued afterwards
+	FlushStats
+	Busy      bool // another process holds the flush lock; nothing was sent
+	Remaining int  // envelopes still queued afterwards
 }
 
 // DrainOutbox replays everything queued for target now, for an explicit
 // "push it all" request (`promptconduit events flush`, the end of `sync`).
-// Unlike FlushOutbox it ignores the per-target cooldown and runs pass after
-// pass of up to batch envelopes until the outbox is empty, a pass makes no
-// progress (only skips left), a send returns ReplayStop, or the rewrite
-// fails. It holds the same cross-process lock for the whole drain, so it
-// never runs alongside a background flush; when that lock is taken it
-// returns Busy without sending. onPass, if set, sees each pass's stats.
-// The cooldown stamp is refreshed so background senders don't immediately
-// re-walk what was just drained.
-func DrainOutbox(target string, batch int, send func(envJSON []byte) ReplayResult, onPass func(pass int, st FlushStats)) DrainResult {
+// Unlike FlushOutbox it ignores the per-target cooldown and has no batch
+// limit: it makes ONE pass over the whole queue, so every envelope is tried
+// at most once, failing ones (ReplaySkip) rotate to the back once, and the
+// file is rewritten once. The pass ends early on ReplayStop. Entries appended
+// while it runs are left for the next flush.
+//
+// It holds the same cross-process lock as FlushOutbox, so it never runs
+// alongside a background flush; when that lock is taken it returns Busy
+// without sending. It refreshes the cooldown stamp so background senders
+// don't immediately re-walk what was just drained. onSend, if set, sees the
+// running stats after each send.
+func DrainOutbox(target string, send func(envJSON []byte) ReplayResult, onSend func(st FlushStats)) DrainResult {
 	var res DrainResult
 	if !Enabled() || outboxEmpty(target) {
 		res.Remaining = OutboxCount(target)
@@ -169,27 +170,7 @@ func DrainOutbox(target string, batch int, send func(envJSON []byte) ReplayResul
 	defer release()
 	touchFile(outboxStampPath(target))
 
-	for {
-		st := flushPass(target, batch, send)
-		res.Passes++
-		res.Delivered += st.Delivered
-		res.Rejected += st.Rejected
-		res.Expired += st.Expired
-		if onPass != nil {
-			onPass(res.Passes, st)
-		}
-		if st.Err != nil {
-			res.Err = st.Err
-			break
-		}
-		if st.Stopped {
-			res.Stopped = true
-			break
-		}
-		if !st.progressed() || outboxEmpty(target) {
-			break
-		}
-	}
+	res.FlushStats = flushPass(target, math.MaxInt, send, onSend)
 	res.Remaining = OutboxCount(target)
 	return res
 }
@@ -213,8 +194,8 @@ func lockOutbox(target string) (release func(), ok bool) {
 }
 
 // flushPass makes one replay pass of up to limit envelopes. The caller holds
-// the outbox lock.
-func flushPass(target string, limit int, send func(envJSON []byte) ReplayResult) FlushStats {
+// the outbox lock. onSend, if set, sees the running stats after each send.
+func flushPass(target string, limit int, send func(envJSON []byte) ReplayResult, onSend func(FlushStats)) FlushStats {
 	path := OutboxPath(target)
 	var st FlushStats
 	var skipped [][]byte
@@ -228,29 +209,35 @@ func flushPass(target string, limit int, send func(envJSON []byte) ReplayResult)
 			return nil, false
 		}
 		st.Tried++
+		var drop bool
 		switch send(line) {
 		case ReplayDelivered:
 			st.Delivered++
-			return nil, true
+			drop = true
 		case ReplayRejected:
 			st.Rejected++
-			return nil, true
+			drop = true
 		case ReplaySkip:
 			// Rotate to the back so a run of failing envelopes can't keep
 			// occupying the head of every pass.
 			st.Skipped++
 			skipped = append(skipped, append([]byte(nil), line...))
-			return nil, true
+			drop = true
 		default: // ReplayStop
 			st.Stopped = true
-			return nil, false
 		}
+		if onSend != nil {
+			onSend(st)
+		}
+		return nil, drop
 	})
 	if err != nil {
-		// Nothing was removed, so delivered entries will be resent (the server
-		// dedupes them); don't count anything until it's actually gone.
+		// Nothing was removed (skipped entries included), so delivered entries
+		// will be resent and the server dedupes them. Report what was sent but
+		// don't bump replayed/dropped counters until the entries are gone.
 		Errorf("outbox flush: %v", err)
-		return FlushStats{Tried: st.Tried, Stopped: st.Stopped, Err: err}
+		st.Err = err
+		return st
 	}
 	for _, line := range skipped {
 		appendLine(path, line, 0)

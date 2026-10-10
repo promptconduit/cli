@@ -3,12 +3,13 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
-	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/spf13/cobra"
 )
@@ -320,13 +321,15 @@ func runSync(cmd *cobra.Command, args []string) error {
 	}
 
 	// Sync is the "push everything now" command: also replay any events
-	// queued after failed sends. Best-effort — never fails the sync.
-	if config.ShouldSend() && eventlog.OutboxCount(config.APIURL) > 0 {
-		fmt.Println()
-		if err := flushOutboxNow(cmd.Context(), os.Stdout, config, syncDryRun, true); err != nil {
-			fmt.Printf("⚠️  Queued events not fully replayed: %v\n", err)
-		}
+	// queued after failed sends. Best-effort — never fails the sync. Quiet
+	// when there's nothing to do; Ctrl-C stops the drain cleanly so the
+	// outbox lock is released.
+	drainCtx, stopDrain := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	out := &blankLineBefore{w: os.Stdout}
+	if err := flushOutboxNow(drainCtx, out, config, syncDryRun, true); err != nil {
+		_, _ = fmt.Fprintf(out, "⚠️  Queued events not fully replayed: %v\n", err)
 	}
+	stopDrain()
 
 	return nil
 }
