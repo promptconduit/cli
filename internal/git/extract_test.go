@@ -120,6 +120,29 @@ func TestExtractContextFields(t *testing.T) {
 	}
 }
 
+// Regression: the old porcelain-v1 path trimmed the output, eating the leading
+// space of the first entry (" M a.txt" -> "M a.txt") so an unstaged-only tree
+// reported one staged file.
+func TestExtractContextUnstagedOnly(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	git(t, repo, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", ".")
+	git(t, repo, "commit", "-q", "-m", "init")
+	if err := os.WriteFile(filepath.Join(repo, "a.txt"), []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx := ExtractContext(repo)
+	if ctx == nil || ctx.StagedCount != 0 || ctx.UnstagedCount != 1 {
+		t.Errorf("unstaged-only: %+v, want staged=0 unstaged=1", ctx)
+	}
+}
+
 // An unborn branch (no commits) still reports the repo and branch.
 func TestExtractContextUnborn(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
