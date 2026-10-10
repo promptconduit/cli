@@ -304,24 +304,7 @@ func PruneExpired(retentionDays int) (int, error) {
 // create is portable (Windows included); a lock older than pruneLockStale was
 // left by a killed pruner and is broken once.
 func tryPruneLock() (release func(), ok bool) {
-	p := pruneLockPath()
-	_ = os.MkdirAll(filepath.Dir(p), 0o755)
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_ = f.Close()
-			return func() { _ = os.Remove(p) }, true
-		}
-		if !os.IsExist(err) {
-			return nil, false
-		}
-		info, err := os.Stat(p)
-		if err != nil || time.Since(info.ModTime()) < pruneLockStale {
-			return nil, false
-		}
-		_ = os.Remove(p)
-	}
-	return nil, false
+	return tryLockFile(pruneLockPath(), pruneLockStale)
 }
 
 // sweepStaleTemps removes .prune-* temp files orphaned by passes that were

@@ -13,8 +13,9 @@ import (
 // rewrite is already running). Callers should retry later rather than race it.
 var ErrRewriteBusy = errors.New("event log is busy (a prune or rewrite is running); try again shortly")
 
-// LineTransform maps one events.jsonl record (without its trailing newline) to
-// its replacement. changed=false keeps the original bytes verbatim.
+// LineTransform maps one record (without its trailing newline) to its
+// replacement. changed=false keeps the original bytes verbatim; changed=true
+// with a nil out drops the record.
 type LineTransform func(line []byte) (out []byte, changed bool)
 
 // LockedRewrite applies transform to every record in events.jsonl and
@@ -112,6 +113,9 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 			out, ch := transform(body)
 			if ch {
 				changed++
+				if out == nil {
+					continue // changed with no replacement: drop the record
+				}
 			} else {
 				out = body
 			}
