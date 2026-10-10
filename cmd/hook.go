@@ -588,28 +588,11 @@ func writeLocalEvent(hookEvent, cwd, sessionID string) {
 		return
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-
-	eventsPath := filepath.Join(home, ".promptconduit", "hook-events")
-
-	// Ensure directory exists
-	dir := filepath.Dir(eventsPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-
 	// Build event JSON
 	event := fmt.Sprintf(`{"event":"%s","cwd":"%s","session_id":"%s","timestamp":"%s"}`,
 		hookEvent, cwd, sessionID, time.Now().Format(time.RFC3339))
 
-	// Append to file
-	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.WriteString(event + "\n")
+	// Appended through eventlog so it shares the append lock with the pruner,
+	// which also rewrites this file (eventlog.HookEventsPath).
+	eventlog.AppendHookEvent([]byte(event))
 }

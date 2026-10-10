@@ -133,42 +133,16 @@ func rewriteFile(path string, transform LineTransform) (int, error) {
 		return 0, nil
 	}
 
-	// Carry over lines hooks appended while we ran. Two rounds: the first copies
-	// the bulk and pays for the slow fsync of the large temp; the second picks up
-	// whatever arrived during that fsync and is renamed immediately, so the
-	// window in which a concurrent append can miss the new file is tiny.
-	copied := startSize
-	carry := func() error {
-		if _, err := f.Seek(copied, io.SeekStart); err != nil {
-			return err
-		}
-		n, err := io.Copy(w, f)
-		copied += n
-		if err != nil {
-			return err
-		}
-		if err := w.Flush(); err != nil {
-			return err
-		}
-		return tmp.Sync()
-	}
 	if err := tmp.Chmod(info.Mode().Perm()); err != nil {
 		return fail(err)
 	}
-	if err := carry(); err != nil {
-		return fail(err)
-	}
-	if err := carry(); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return 0, err
-	}
-	// Windows can't replace a file that is still open; close the source first.
-	_ = f.Close()
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
+	// Carry over lines hooks appended while we ran and rename into place; the
+	// final carry + rename hold the exclusive append lock so no concurrent
+	// append can be lost with the old file (see finishRewrite).
+	if err := finishRewrite(f, w, tmp, tmpName, path, startSize); err != nil {
+		if errors.Is(err, errAppendLockBusy) {
+			return 0, ErrRewriteBusy
+		}
 		return 0, err
 	}
 	return changed, nil
