@@ -114,25 +114,55 @@ func CursorCostFromRaw(raw []byte, table *cost.PriceTable, ts string) (*CostEnri
 // processed for this session, tracked via a per-session byte offset. The
 // offset only ever advances over fully parsed lines, so anything missed at one
 // Stop (e.g. a still-flushing write) is picked up at the next.
+//
+// The read-price-advance runs under the session state lock (updateState), so
+// two concurrent Stops for one session can't both price the same lines. When
+// the lock is busy the slug is omitted; the lines are priced at the next Stop.
 func claudeCodeCost(ctx *Context, table *cost.PriceTable) (any, error) {
-	st := loadState(ctx.SessionID)
-
-	f, err := os.Open(ctx.TranscriptPath)
+	var (
+		requests []CostRequest
+		err      error
+	)
+	if ctx.SessionID == "" {
+		requests, _, err = priceTranscriptFrom(ctx, table, 0)
+	} else if !updateState(ctx.SessionID, func(st *sessionState) bool {
+		var next int64
+		requests, next, err = priceTranscriptFrom(ctx, table, st.TranscriptOffset)
+		if err != nil {
+			return false
+		}
+		st.TranscriptOffset = next
+		return true
+	}) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
+	}
+	if len(requests) == 0 {
+		return nil, nil
+	}
+	return &CostEnrichment{Requests: requests, Totals: totalsOf(requests)}, nil
+}
+
+// priceTranscriptFrom prices the complete transcript lines after offset and
+// returns them with the offset just past the last parsed line.
+func priceTranscriptFrom(ctx *Context, table *cost.PriceTable, offset int64) ([]CostRequest, int64, error) {
+	f, err := os.Open(ctx.TranscriptPath)
+	if err != nil {
+		return nil, 0, err
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	offset := st.TranscriptOffset
 	if offset > info.Size() {
 		offset = 0 // transcript replaced/truncated — reprice from the top
 	}
 	if _, err := f.Seek(offset, 0); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var requests []CostRequest
@@ -153,17 +183,9 @@ func claudeCodeCost(ctx *Context, table *cost.PriceTable) (any, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-
-	if ctx.SessionID != "" {
-		st.TranscriptOffset = offset
-		saveState(ctx.SessionID, st)
-	}
-	if len(requests) == 0 {
-		return nil, nil
-	}
-	return &CostEnrichment{Requests: requests, Totals: totalsOf(requests)}, nil
+	return requests, offset, nil
 }
 
 func toRequest(ev cost.CostEvent) CostRequest {

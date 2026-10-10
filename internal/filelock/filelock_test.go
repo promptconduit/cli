@@ -3,6 +3,7 @@
 package filelock
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -64,6 +65,27 @@ func TestWaitAcquiresWhenReleased(t *testing.T) {
 		t.Fatal("waiter should acquire once the holder releases")
 	}
 	r()
+}
+
+func TestRemoveIfUnlocked(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "x.lock")
+	release, ok := Exclusive(p, time.Second)
+	if !ok {
+		t.Fatal("lock")
+	}
+	if RemoveIfUnlocked(p) {
+		t.Fatal("a held lock file must not be removed")
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("held lock file was removed: %v", err)
+	}
+	release()
+	if !RemoveIfUnlocked(p) {
+		t.Fatal("a free lock file should be removed")
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("lock file still present: %v", err)
+	}
 }
 
 func TestImpossiblePathFailsFast(t *testing.T) {

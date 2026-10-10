@@ -31,18 +31,26 @@ func (turnEnricher) Applies(ctx *Context) bool {
 }
 
 func (turnEnricher) Enrich(ctx *Context) (any, error) {
-	st := loadState(ctx.SessionID)
-	if st.TurnStartedAt == "" {
-		return nil, nil // no open turn (e.g. Stop after a fresh install)
-	}
-	started, err := time.Parse(time.RFC3339, st.TurnStartedAt)
-
-	// Close the turn regardless — a corrupt timestamp must not leave the turn
-	// permanently open (which would mark every future prompt an interrupt).
-	st.TurnStartedAt = ""
-	saveState(ctx.SessionID, st)
-
-	if err != nil {
+	var (
+		started time.Time
+		open    bool
+		err     error
+	)
+	updateState(ctx.SessionID, func(st *sessionState) bool {
+		if st.TurnStartedAt == "" {
+			return false // no open turn (e.g. Stop after a fresh install)
+		}
+		open = true
+		started, err = time.Parse(time.RFC3339, st.TurnStartedAt)
+		// Close the turn regardless — a corrupt timestamp must not leave the
+		// turn permanently open (which would mark every future prompt an
+		// interrupt).
+		st.TurnStartedAt = ""
+		return true
+	})
+	// Lock busy (open stays false): omit the slug rather than close the turn
+	// unlocked; the next Stop closes it.
+	if !open || err != nil {
 		return nil, nil
 	}
 	return TurnEnrichment{

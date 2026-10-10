@@ -12,7 +12,10 @@
 // success, matching the previous (unlocked) behaviour.
 package filelock
 
-import "time"
+import (
+	"os"
+	"time"
+)
 
 // pollInterval is how often a contended lock is retried.
 const pollInterval = 2 * time.Millisecond
@@ -24,6 +27,20 @@ func noop() {}
 // returned release func is always safe to call (a no-op when ok is false).
 func Exclusive(lockPath string, wait time.Duration) (release func(), ok bool) {
 	return acquire(lockPath, true, wait)
+}
+
+// RemoveIfUnlocked deletes the lock file at lockPath only if no one holds it
+// (an exclusive lock is taken without waiting first). For GC of stale lock
+// files, whose mtime never changes while they're in use. Reports whether the
+// file was removed. On Windows (no-op locks) it simply removes the file.
+func RemoveIfUnlocked(lockPath string) bool {
+	release, ok := acquire(lockPath, true, 0)
+	if !ok {
+		return false
+	}
+	err := os.Remove(lockPath)
+	release()
+	return err == nil
 }
 
 // Shared takes a shared lock on lockPath, waiting up to wait. Many holders can

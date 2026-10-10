@@ -131,7 +131,10 @@ func TestSessionStateUsersAreMarked(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(src), "loadState(") && !strings.Contains(string(src), "saveState(") {
+		if strings.Contains(string(src), "saveState(") {
+			t.Errorf("%s calls saveState directly; state writes must go through updateState (locked)", name)
+		}
+		if !strings.Contains(string(src), "loadState(") && !strings.Contains(string(src), "updateState(") {
 			continue
 		}
 		for _, m := range typeRE.FindAllStringSubmatch(string(src), -1) {

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/filelock"
 )
 
 // sessionState is the tiny per-session scratchpad some enrichers need across
@@ -63,13 +65,45 @@ func statePath(sessionID string) string {
 	return filepath.Join(stateDir(), sessionID+".json")
 }
 
+// stateLockWait bounds how long a hook waits for another process (or an
+// abandoned timed-out enricher goroutine) to finish its state update. On
+// timeout the update is SKIPPED, never written unlocked. A var so tests can
+// shorten it.
+var stateLockWait = 1 * time.Second
+
+func stateLockPath(sessionID string) string { return statePath(sessionID) + ".lock" }
+
+// updateState is the only way enrichers modify per-session state: it takes an
+// exclusive cross-process lock on the session, loads the state, runs fn, and
+// (when fn returns true) saves atomically before unlocking. Concurrent hook
+// processes for the same session, and enricher goroutines Run abandoned after
+// a timeout, therefore can't clobber each other's changes. Returns false
+// without running fn when sessionID is empty or the lock wasn't acquired
+// within stateLockWait; callers then degrade (read-only, or omit the slug).
+func updateState(sessionID string, fn func(st *sessionState) (save bool)) bool {
+	if sessionID == "" {
+		return false
+	}
+	release, ok := filelock.Exclusive(stateLockPath(sessionID), stateLockWait)
+	defer release()
+	if !ok {
+		return false
+	}
+	st := loadState(sessionID)
+	if fn(&st) {
+		saveState(sessionID, st)
+	}
+	return true
+}
+
 // sessionStateUser marks an enricher that read-modify-writes the per-session
-// state file (loadState → mutate → saveState). Run executes all such enrichers
-// sequentially, in registration order, on one goroutine — two of them racing
-// would each load the same state and the later save would drop the other's
-// change. Every other enricher runs concurrently.
+// state file (via updateState). Correctness comes from updateState's lock;
+// Run additionally executes these enrichers sequentially, in registration
+// order, on one goroutine so they don't contend for that lock within one hook.
+// Every other enricher runs concurrently.
 //
-// Any new enricher that calls loadState/saveState MUST implement this.
+// Any new enricher that touches session state MUST use updateState and
+// implement this.
 type sessionStateUser interface {
 	usesSessionState()
 }
@@ -147,6 +181,11 @@ func maybeGC(dir string, maxAge time.Duration) {
 	if binary.BigEndian.Uint32(b[:])%gcOneInEvery != 0 {
 		return
 	}
+	gcDir(dir, maxAge)
+}
+
+// gcDir deletes files in dir untouched for maxAge (held lock files excepted).
+func gcDir(dir string, maxAge time.Duration) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -161,7 +200,14 @@ func maybeGC(dir string, maxAge time.Duration) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(dir, e.Name()))
+			p := filepath.Join(dir, e.Name())
+			if strings.HasSuffix(p, ".lock") {
+				// A lock file's mtime never changes while it's in use; only
+				// delete it if nobody holds it right now.
+				filelock.RemoveIfUnlocked(p)
+				continue
+			}
+			_ = os.Remove(p)
 		}
 	}
 }
