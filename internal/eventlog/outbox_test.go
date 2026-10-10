@@ -85,6 +85,13 @@ func TestFlushOutboxOutcomes(t *testing.T) {
 	}
 	data, _ := os.ReadFile(OutboxPath(prod))
 	rest := string(data)
+	// A skipped envelope rotates behind the entries it would otherwise block.
+	if strings.Index(rest, `"later"`) > strings.Index(rest, `"poison"`) {
+		t.Errorf("poison should rotate to the back:\n%s", rest)
+	}
+	if st := LoadStatus(); st.Dropped != 1 {
+		t.Errorf("expired entry should count as dropped, got %d", st.Dropped)
+	}
 	for _, keep := range []string{"poison", "stop", "later"} {
 		if !strings.Contains(rest, `"`+keep+`"`) {
 			t.Errorf("%s should remain queued", keep)

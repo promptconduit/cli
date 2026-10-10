@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -59,7 +60,13 @@ func AppendOutbox(target string, envJSON []byte) {
 	}
 	path := OutboxPath(target)
 	if info, err := os.Stat(path); err == nil && info.Size() >= outboxCeiling {
-		Bump(OutcomeDropped, "outbox full; event not queued for replay")
+		// The send was already counted as failed; just say why it won't be
+		// replayed, at most once an hour so a long outage can't flood the log.
+		stamp := filepath.Join(Dir(), ".outbox-"+outboxKey(target)+".full")
+		if st, err := os.Stat(stamp); err != nil || time.Since(st.ModTime()) > time.Hour {
+			touchFile(stamp)
+			Errorf("outbox full (%d bytes); failed events are not being queued for replay", info.Size())
+		}
 		return
 	}
 	appendLine(path, bytes.TrimRight(envJSON, "\n"), 0)
@@ -114,11 +121,13 @@ func FlushOutbox(target string, limit int, send func(envJSON []byte) ReplayResul
 	defer stopFresh()
 	touchFile(outboxStampPath(target))
 
-	delivered, tried, stopped := 0, 0, false
+	delivered, expired, tried, stopped := 0, 0, 0, false
+	var skipped [][]byte
 	cutoff := nowUTC().Add(-outboxMaxAge)
 	_, err = rewriteFile(path, func(line []byte) ([]byte, bool) {
-		if ts, ok := envelopeCapturedAt(line); ok && ts.Before(cutoff) {
-			return nil, true // expired: drop without sending
+		if ts, ok := envelopeCapturedAt(line); !ok || ts.Before(cutoff) {
+			expired++ // too old (or unreadable) to replay: drop, counted below
+			return nil, true
 		}
 		if stopped || tried >= limit {
 			return nil, false
@@ -130,16 +139,32 @@ func FlushOutbox(target string, limit int, send func(envJSON []byte) ReplayResul
 			return nil, true
 		case ReplayRejected:
 			return nil, true
-		case ReplayStop:
+		case ReplaySkip:
+			// Rotate to the back so a run of failing envelopes can't keep
+			// occupying the head of every pass.
+			skipped = append(skipped, append([]byte(nil), line...))
+			return nil, true
+		default: // ReplayStop
 			stopped = true
+			return nil, false
 		}
-		return nil, false
 	})
 	if err != nil {
-		// Nothing was removed, so the delivered entries will be resent (the
-		// server dedupes them); don't count them until they're actually gone.
+		// Nothing was removed, so delivered entries will be resent (the server
+		// dedupes them); don't count anything until it's actually gone.
 		Errorf("outbox flush: %v", err)
 		return 0
+	}
+	for _, line := range skipped {
+		appendLine(path, line, 0)
+	}
+	if expired > 0 {
+		n := int64(expired)
+		bumpCounter(func(st *Status) {
+			st.Dropped += n
+			st.LastErrorAt = nowUTC().Format(timeLayout)
+			st.LastError = fmt.Sprintf("%d queued event(s) expired before they could be replayed", n)
+		})
 	}
 	if delivered > 0 {
 		BumpReplayed(int64(delivered))

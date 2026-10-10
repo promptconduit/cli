@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/promptconduit/cli/internal/eventlog"
 )
@@ -35,7 +36,8 @@ func TestFailedSendIsQueuedThenReplayed(t *testing.T) {
 	eventlog.SetEnabled(true)
 	t.Cleanup(func() { eventlog.SetEnabled(false) })
 
-	first := `{"schema":2,"event_id":"queued-1","hook_event":"Stop"}`
+	first := `{"schema":2,"event_id":"queued-1","hook_event":"Stop","captured_at":"` +
+		time.Now().UTC().Format(time.RFC3339) + `"}`
 	if err := c.sendEnvelopeWithRetry([]byte(first)); err == nil {
 		t.Fatal("want failure while the server is down")
 	}
@@ -82,6 +84,8 @@ func TestReplayOutcome(t *testing.T) {
 	}{
 		{201, nil, eventlog.ReplayDelivered},
 		{400, errors.New("x"), eventlog.ReplayRejected},
+		{404, errors.New("x"), eventlog.ReplayRejected}, // unlisted 4xx: permanent, not a queue blocker
+		{409, errors.New("x"), eventlog.ReplayRejected},
 		{422, errors.New("x"), eventlog.ReplayRejected},
 		{401, errors.New("x"), eventlog.ReplayStop}, // auth may clear: keep it
 		{403, errors.New("x"), eventlog.ReplayStop},
@@ -89,12 +93,28 @@ func TestReplayOutcome(t *testing.T) {
 		{500, errors.New("x"), eventlog.ReplaySkip}, // this envelope only
 		{502, errors.New("x"), eventlog.ReplaySkip},
 		{503, errors.New("x"), eventlog.ReplayStop}, // server-level
+		{504, errors.New("x"), eventlog.ReplayStop},
 		{429, errors.New("x"), eventlog.ReplayStop},
 		{0, errors.New("x"), eventlog.ReplayStop},
 	}
 	for _, c := range cases {
 		if got := replayOutcome(c.status, c.err); got != c.want {
 			t.Errorf("replayOutcome(%d) = %v, want %v", c.status, got, c.want)
+		}
+	}
+}
+
+// What gets queued matches what replay keeps: anything replay would remove as
+// permanent is never queued, and everything it would keep is.
+func TestReplayableMatchesReplayOutcome(t *testing.T) {
+	for status := 400; status < 600; status++ {
+		if http.StatusText(status) == "" {
+			continue
+		}
+		queued := replayable(status)
+		permanent := replayOutcome(status, errors.New("x")) == eventlog.ReplayRejected
+		if queued == permanent {
+			t.Errorf("status %d: replayable=%v but replay permanent=%v", status, queued, permanent)
 		}
 	}
 }

@@ -44,35 +44,26 @@ var statusMu sync.Mutex
 // Bump increments the counter for outcome and, on failure, records the error
 // detail. Best-effort: any error is swallowed so it never disturbs the caller.
 func Bump(outcome Outcome, detail string) {
-	if !Enabled() {
-		return
-	}
-	statusMu.Lock()
-	defer statusMu.Unlock()
-
-	st := loadStatusLocked()
-	now := nowUTC().Format(timeLayout)
-	st.UpdatedAt = now
-
-	switch outcome {
-	case OutcomeSent:
-		st.Sent++
-		st.LastSuccessAt = now
-	case OutcomeFailed:
-		st.Failed++
-		st.LastErrorAt = now
-		if detail != "" {
-			st.LastError = detail
+	bumpCounter(func(st *Status) {
+		now := nowUTC().Format(timeLayout)
+		switch outcome {
+		case OutcomeSent:
+			st.Sent++
+			st.LastSuccessAt = now
+		case OutcomeFailed:
+			st.Failed++
+			st.LastErrorAt = now
+			if detail != "" {
+				st.LastError = detail
+			}
+		case OutcomeDropped:
+			st.Dropped++
+			st.LastErrorAt = now
+			if detail != "" {
+				st.LastError = detail
+			}
 		}
-	case OutcomeDropped:
-		st.Dropped++
-		st.LastErrorAt = now
-		if detail != "" {
-			st.LastError = detail
-		}
-	}
-
-	writeStatusLocked(st)
+	})
 }
 
 // BumpRetried counts a send that succeeded after retrying.
