@@ -69,7 +69,9 @@ func lookupParentSpan(store *correlation.Store, ctx *Context) string {
 	switch ctx.HookEvent {
 	case "PostToolUse", "PostToolUseFailure":
 		if id := stringField(e, "tool_use_id"); id != "" {
-			return store.LookupParent(sessionID, correlation.SpanKindToolUse, id)
+			// The tool call is complete: take its PreToolUse span and drop the
+			// entry so the spans file stays bounded by in-flight calls.
+			return store.ConsumeToolUseParent(sessionID, id)
 		}
 	case "SubagentStop":
 		if id := firstStringField(e, "subagent_id", "agent_id"); id != "" {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/promptconduit/cli/internal/filelock"
 )
 
 // SpanKind names the lookup table inside a session's spans file.
@@ -77,9 +79,19 @@ func (s *Store) spansFile(sessionID string) string {
 	return filepath.Join(s.tracesDir(), sessionID+".spans.json")
 }
 
+// lastSeenRefresh is how stale last_seen_at may get before an event rewrites
+// the trace file. It only feeds the debug view and the mtime-based GC (30
+// days), so refreshing it on every one of thousands of events per session was
+// pure write amplification.
+const lastSeenRefresh = 60 * time.Second
+
+// spansLockWait bounds the wait for another hook's spans read-modify-write.
+// On timeout the update proceeds unlocked (the pre-lock behaviour).
+const spansLockWait = 500 * time.Millisecond
+
 // LoadOrCreateTrace returns the trace ID for sessionID, creating and
 // persisting a new one if none exists. The last_seen_at timestamp is
-// refreshed on every call.
+// refreshed when it is more than lastSeenRefresh old.
 //
 // Concurrent hook processes are reconciled via O_CREATE|O_EXCL: only the
 // first writer wins; subsequent callers re-read the existing file.
@@ -87,17 +99,19 @@ func (s *Store) LoadOrCreateTrace(sessionID string) (*TraceRecord, error) {
 	if sessionID == "" {
 		return nil, errors.New("correlation: empty session id")
 	}
-	if err := os.MkdirAll(s.tracesDir(), 0700); err != nil {
-		return nil, fmt.Errorf("correlation: mkdir traces: %w", err)
-	}
-
 	path := s.traceFile(sessionID)
 
 	// Fast path: file already exists.
 	if rec, err := readTrace(path); err == nil {
-		rec.LastSeenAt = time.Now().UTC()
-		_ = writeTraceAtomic(path, rec) // refresh; ignore errors (non-fatal)
+		if now := time.Now().UTC(); now.Sub(rec.LastSeenAt) > lastSeenRefresh {
+			rec.LastSeenAt = now
+			_ = writeTraceAtomic(path, rec) // refresh; ignore errors (non-fatal)
+		}
 		return rec, nil
+	}
+
+	if err := os.MkdirAll(s.tracesDir(), 0700); err != nil {
+		return nil, fmt.Errorf("correlation: mkdir traces: %w", err)
 	}
 
 	// Slow path: write to a tempfile, then atomically link to the target.
@@ -150,6 +164,7 @@ func (s *Store) RecordSpan(sessionID string, kind SpanKind, key, spanID string) 
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
@@ -176,6 +191,7 @@ func (s *Store) RecordLastPromptSubmit(sessionID, spanID string) error {
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
@@ -189,12 +205,45 @@ func (s *Store) RecordRootSpan(sessionID, spanID string) error {
 	if sessionID == "" || spanID == "" {
 		return errors.New("correlation: empty session or span id")
 	}
+	defer s.lockSpans(sessionID)()
 	rec, err := s.loadSpans(sessionID)
 	if err != nil {
 		return err
 	}
 	rec.RootSpan = spanID
 	return s.writeSpans(sessionID, rec)
+}
+
+// ConsumeToolUseParent returns the PreToolUse span recorded for toolUseID and
+// removes it from the spans file: a tool call completes exactly once
+// (PostToolUse or PostToolUseFailure), so the entry has served its purpose and
+// keeping it would grow the file for the whole session. Returns "" when there
+// is no entry (nothing is written then).
+func (s *Store) ConsumeToolUseParent(sessionID, toolUseID string) string {
+	if sessionID == "" || toolUseID == "" {
+		return ""
+	}
+	defer s.lockSpans(sessionID)()
+	rec, err := s.loadSpans(sessionID)
+	if err != nil {
+		return ""
+	}
+	parent := rec.ToolUses[toolUseID]
+	if parent == "" {
+		return ""
+	}
+	delete(rec.ToolUses, toolUseID)
+	_ = s.writeSpans(sessionID, rec) // best-effort; the lookup already succeeded
+	return parent
+}
+
+// lockSpans serializes spans read-modify-write across hook processes (parallel
+// tool calls in one session fire concurrent PreToolUse/PostToolUse hooks; an
+// unlocked load-modify-save would drop one side's change). Returns the release
+// func; on timeout it proceeds unlocked.
+func (s *Store) lockSpans(sessionID string) func() {
+	release, _ := filelock.Exclusive(s.spansFile(sessionID)+".lock", spansLockWait)
+	return release
 }
 
 // LookupParent returns the parent span ID for kind+key, or "" if absent.
