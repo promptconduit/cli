@@ -498,41 +498,56 @@ func triggerAutoSync(sessionID string) {
 
 	logger.Debug("Auto-sync: found transcript at %s", transcriptPath)
 
-	// Per-session debounce with a trailing edge: at most one sync per session
-	// per sync.AutoSyncInterval, and a Stop inside the interval schedules one
-	// follow-up for when it ends, so the latest content is always synced.
-	delay, spawn := sync.PlanAutoSync(client.ConfigDir(), sessionID, time.Now())
+	exe, started := scheduleAutoSync(client.ConfigDir(), sessionID, transcriptPath, time.Now())
+	if !started {
+		return
+	}
+	logger.Debug("Auto-sync: sync subprocess started for session %s", sessionID)
+
+	// Also retry any previously failed syncs (spawn as separate subprocess)
+	go retryFailedSyncs(exe)
+}
+
+// scheduleAutoSync applies the per-session debounce (trailing edge: at most
+// one sync per session per sync.AutoSyncInterval, and a Stop inside the
+// interval schedules one follow-up for when it ends) and starts the planned
+// sync. If the subprocess can't be started the plan is rolled back, so later
+// Stops aren't suppressed waiting for a sync that never runs.
+func scheduleAutoSync(baseDir, sessionID, transcriptPath string, now time.Time) (exe string, started bool) {
+	delay, spawn, undo := sync.PlanAutoSync(baseDir, sessionID, now)
 	if !spawn {
 		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
-		return
+		return "", false
 	}
+	exe, err := startAutoSyncProcess(transcriptPath, delay)
+	if err != nil {
+		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
+		undo()
+		return "", false
+	}
+	return exe, true
+}
 
-	// Spawn async subprocess to sync this file
-	// Use --delay flag so the subprocess waits for transcript to be fully flushed
+// startAutoSyncProcess spawns the detached `sync --file` child. The --delay
+// makes it wait for the transcript flush (and, for a trailing follow-up, the
+// end of the debounce window). A var so tests can simulate spawn failure.
+var startAutoSyncProcess = func(transcriptPath string, delay int) (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		logger.Debug("Auto-sync: failed to get executable path: %v", err)
-		return
+		return "", err
 	}
-
 	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", strconv.Itoa(delay))
 	// Own session: the (possibly ~60s delayed) trailing sync must survive the
 	// agent or terminal exiting.
 	detachProcess(cmd)
 	if err := cmd.Start(); err != nil {
-		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
-		return
+		return "", err
 	}
-
 	// Release the process so it runs independently
 	if cmd.Process != nil {
 		_ = cmd.Process.Release()
 	}
-
-	logger.Debug("Auto-sync: sync subprocess started for session %s", sessionID)
-
-	// Also retry any previously failed syncs (spawn as separate subprocess)
-	go retryFailedSyncs(exe)
+	return exe, nil
 }
 
 // maybeSpawnPrune hands retention enforcement to a detached `prune-auto`

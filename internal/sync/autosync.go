@@ -47,10 +47,11 @@ const (
 // otherwise the caller spawns `sync --file … --delay <delaySeconds>`. State
 // lives under baseDir/autosync. Best-effort: on any failure it falls back to
 // the old behaviour (spawn now with the flush delay).
-func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, spawn bool) {
+func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, spawn bool, undo func()) {
 	fallback := int(autoSyncFlushDelay / time.Second)
+	undo = func() {}
 	if baseDir == "" || sessionID == "" {
-		return fallback, true
+		return fallback, true, undo
 	}
 	dir := filepath.Join(baseDir, autoSyncSubdir)
 	stamp := filepath.Join(dir, safeName(sessionID)+".next")
@@ -58,17 +59,18 @@ func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, s
 	release, ok := filelock.Exclusive(stamp+".lock", autoSyncPlanWait)
 	defer release()
 	if !ok {
-		return fallback, true
+		return fallback, true, undo
 	}
 
 	start := now.Add(autoSyncFlushDelay)
-	if data, err := os.ReadFile(stamp); err == nil {
+	prev, prevErr := os.ReadFile(stamp)
+	if data, err := prev, prevErr; err == nil {
 		if last, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data))); err == nil {
 			switch {
 			case coversStop(last, now):
 				// A scheduled sync starts at least the flush delay after this
 				// event, so it will read this event's flushed transcript.
-				return 0, false
+				return 0, false, undo
 			case last.After(now):
 				// Scheduled, but too soon for this event's transcript to have
 				// flushed: schedule one more, a full flush delay out.
@@ -80,11 +82,36 @@ func PlanAutoSync(baseDir, sessionID string, now time.Time) (delaySeconds int, s
 			}
 		}
 	}
-	if err := os.WriteFile(stamp, []byte(start.UTC().Format(time.RFC3339Nano)), 0o600); err != nil {
-		return fallback, true
+	written := []byte(start.UTC().Format(time.RFC3339Nano))
+	if err := os.WriteFile(stamp, written, 0o600); err != nil {
+		return fallback, true, undo
 	}
 	maybeSweepAutoSync(dir, now)
-	return int(math.Ceil(start.Sub(now).Seconds())), true
+	if prevErr != nil {
+		prev = nil
+	}
+	undo = func() { unplanAutoSync(stamp, written, prev) }
+	return int(math.Ceil(start.Sub(now).Seconds())), true, undo
+}
+
+// unplanAutoSync rolls back a schedule stamp whose sync never started (the
+// caller failed to spawn it), so later Stops aren't suppressed waiting for a
+// sync that will never run: the previous stamp is restored (or the stamp
+// removed if there was none). Only acts if the stamp is still the one this
+// plan wrote; a newer plan from another hook is left alone.
+func unplanAutoSync(stamp string, written, prev []byte) {
+	release, ok := filelock.Exclusive(stamp+".lock", autoSyncPlanWait)
+	defer release()
+	if !ok {
+		return
+	}
+	if cur, err := os.ReadFile(stamp); err == nil && string(cur) == string(written) {
+		if prev == nil {
+			_ = os.Remove(stamp)
+		} else {
+			_ = os.WriteFile(stamp, prev, 0o600)
+		}
+	}
 }
 
 // AutoSyncPending is a lock-free peek: true when a sync for sessionID is

@@ -30,7 +30,7 @@ func TestPlanAutoSyncDebouncesWithTrailingEdge(t *testing.T) {
 		{"long after everything, sync immediately", 10 * time.Minute, true, 1},
 	}
 	for _, s := range steps {
-		delay, spawn := PlanAutoSync(base, "sess-1", t0.Add(s.at))
+		delay, spawn, _ := PlanAutoSync(base, "sess-1", t0.Add(s.at))
 		if spawn != s.wantSpawn || (spawn && delay != s.wantDelay) {
 			t.Fatalf("%s: got spawn=%v delay=%d, want spawn=%v delay=%d", s.name, spawn, delay, s.wantSpawn, s.wantDelay)
 		}
@@ -40,10 +40,10 @@ func TestPlanAutoSyncDebouncesWithTrailingEdge(t *testing.T) {
 func TestPlanAutoSyncIsPerSession(t *testing.T) {
 	base := t.TempDir()
 	now := time.Now()
-	if _, spawn := PlanAutoSync(base, "a", now); !spawn {
+	if _, spawn, _ := PlanAutoSync(base, "a", now); !spawn {
 		t.Fatal("first a")
 	}
-	if _, spawn := PlanAutoSync(base, "b", now); !spawn {
+	if _, spawn, _ := PlanAutoSync(base, "b", now); !spawn {
 		t.Fatal("session b must not be debounced by session a")
 	}
 	if !AutoSyncPending(base, "a", now) {
@@ -55,7 +55,7 @@ func TestPlanAutoSyncIsPerSession(t *testing.T) {
 }
 
 func TestPlanAutoSyncFallsBackWithoutState(t *testing.T) {
-	if d, spawn := PlanAutoSync("", "s", time.Now()); !spawn || d != 1 {
+	if d, spawn, _ := PlanAutoSync("", "s", time.Now()); !spawn || d != 1 {
 		t.Fatalf("no base dir: want spawn with 1s delay, got %v %d", spawn, d)
 	}
 }
@@ -120,7 +120,7 @@ func TestPlanAutoSyncEveryStopIsCoveredAfterFlush(t *testing.T) {
 	for i := 0; i < 400; i++ {
 		seed = seed*1664525 + 1013904223
 		now = now.Add(time.Duration(seed%7000) * time.Millisecond) // 0-7s gaps
-		if delay, spawn := PlanAutoSync(base, "s", now); spawn {
+		if delay, spawn, _ := PlanAutoSync(base, "s", now); spawn {
 			starts = append(starts, now.Add(time.Duration(delay)*time.Second))
 		}
 		covered := false
@@ -136,6 +136,43 @@ func TestPlanAutoSyncEveryStopIsCoveredAfterFlush(t *testing.T) {
 	}
 	if limit := int(now.Sub(t0)/AutoSyncInterval)*3 + 3; len(starts) > limit {
 		t.Fatalf("debounce ineffective: %d syncs over %v", len(starts), now.Sub(t0))
+	}
+}
+
+// TestPlanAutoSyncUndoAfterSpawnFailure: if the hook can't start the planned
+// sync, rolling back must stop later Stops from being suppressed.
+func TestPlanAutoSyncUndoAfterSpawnFailure(t *testing.T) {
+	base := t.TempDir()
+	t0 := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+
+	// No previous stamp: undo removes it.
+	_, spawn, undo := PlanAutoSync(base, "s", t0)
+	if !spawn {
+		t.Fatal("first plan should spawn")
+	}
+	undo() // spawn failed
+	if _, spawn, _ := PlanAutoSync(base, "s", t0.Add(100*time.Millisecond)); !spawn {
+		t.Fatal("after a failed spawn the next Stop must schedule a sync, not be suppressed")
+	}
+
+	// With a previous (started) sync: undo restores it, keeping the debounce.
+	_, _, _ = PlanAutoSync(base, "p", t0)                            // started at t0+1s
+	_, spawn, undo = PlanAutoSync(base, "p", t0.Add(10*time.Second)) // follow-up at t0+61s
+	if !spawn {
+		t.Fatal("follow-up should spawn")
+	}
+	undo()
+	delay, spawn, _ := PlanAutoSync(base, "p", t0.Add(11*time.Second))
+	if !spawn || delay != 50 { // previous start t0+1s → follow-up at t0+61s
+		t.Fatalf("after undo the previous schedule should be back: spawn=%v delay=%d, want true 50", spawn, delay)
+	}
+
+	// Undo never clobbers a newer plan written by another hook.
+	_, _, undo = PlanAutoSync(base, "q", t0)
+	_, _, _ = PlanAutoSync(base, "q", t0.Add(500*time.Millisecond)) // re-plans (too close to flush)
+	undo()
+	if !AutoSyncPending(base, "q", t0.Add(500*time.Millisecond)) {
+		t.Fatal("undo removed a newer plan it didn't write")
 	}
 }
 

@@ -68,6 +68,16 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 }
 
+// recordLockTimeout records a `sync --file` that gave up waiting for the
+// transcript lock as a failed sync, keyed by session id (the transcript's file
+// name without .jsonl — what a later successful sync clears), so
+// retryFailedSyncs retries it.
+func recordLockTimeout(sm *sync.StateManager, filePath string, cause error) error {
+	sessionID := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
+	sm.AddFailedSync(sessionID, filePath, cause.Error())
+	return sm.Save()
+}
+
 // transcriptLockWait bounds how long a `sync --file` waits for another upload
 // of the same transcript (large transcripts upload in chunks).
 const transcriptLockWait = 10 * time.Minute
@@ -92,7 +102,13 @@ func runSync(cmd *cobra.Command, args []string) error {
 		release, ok := sync.LockTranscript(client.ConfigDir(), syncFile, transcriptLockWait)
 		defer release()
 		if !ok {
-			return fmt.Errorf("another sync of %s is still running; skipped", syncFile)
+			err := fmt.Errorf("another sync of %s is still running; gave up after %s", syncFile, transcriptLockWait)
+			// Don't drop it silently: record a failed sync so the next hook's
+			// retryFailedSyncs picks this transcript up again.
+			if sm, smErr := sync.NewStateManager(); smErr == nil {
+				_ = recordLockTimeout(sm, syncFile, err)
+			}
+			return err
 		}
 	}
 
