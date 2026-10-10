@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -120,11 +122,52 @@ func TestRetryableSend(t *testing.T) {
 		{400, errors.New("x"), false},
 		{401, errors.New("x"), false},
 		{0, syscall.ECONNREFUSED, true},
+		{0, syscall.ECONNRESET, true},
+		{0, io.EOF, true},
 		{0, context.DeadlineExceeded, false},
+		{0, &net.DNSError{Err: "no such host", Name: "api.example", IsNotFound: true}, false},
+		{0, errors.New("tls: failed to verify certificate"), false},
 	}
 	for _, c := range cases {
 		if got := retryableSend(c.status, c.err); got != c.want {
 			t.Errorf("retryableSend(%d, %v) = %v, want %v", c.status, c.err, got, c.want)
 		}
+	}
+}
+
+// A Retry-After longer than maxRetryAfter means the server is down: give up.
+func TestSendWithRetryGivesUpOnLongRetryAfter(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	c := retryTestClient(t, srv, 5)
+	if err := c.sendEnvelopeWithRetry([]byte(testEnvelope)); err == nil {
+		t.Fatal("want error")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("calls = %d, want 1 (Retry-After beyond the cap)", got)
+	}
+}
+
+// Retries never run past one request-timeout budget.
+func TestSendWithRetryRespectsBudget(t *testing.T) {
+	srv, calls := statusSequence(t, 503)
+	c := retryTestClient(t, srv, 1)
+	sendRetryDelays = []time.Duration{2 * time.Second, 2 * time.Second}
+	if err := c.sendEnvelopeWithRetry([]byte(testEnvelope)); err == nil {
+		t.Fatal("want error")
+	}
+	if got := atomic.LoadInt32(calls); got != 1 {
+		t.Fatalf("calls = %d, want 1 (next wait would exceed the 1s budget)", got)
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if parseRetryAfter("2") != 2*time.Second || parseRetryAfter("") != 0 || parseRetryAfter("Wed, 21 Oct 2015") != 0 {
+		t.Fatal("parseRetryAfter: want seconds form only")
 	}
 }
