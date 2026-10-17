@@ -44,6 +44,11 @@ var configShowCmd = &cobra.Command{
 			autoUpdate = "disabled"
 		}
 		cmd.Printf("Auto-update: %s\n", autoUpdate)
+		usagePing := "disabled"
+		if telemetryEnabled(cfg) {
+			usagePing = "enabled (anonymous, daily)"
+		}
+		cmd.Printf("Usage ping:  %s\n", usagePing)
 		eventLog := "enabled"
 		if cfg.DisableEventLog {
 			eventLog = "disabled"
@@ -89,6 +94,7 @@ var (
 	setAPIURL                string
 	setDebug                 bool
 	setDisableAutoUpdate     bool
+	setDisableTelemetry      bool
 	setDisableEventLog       bool
 	setLocalOnly             bool
 	setEventLogRetentionDays int
@@ -114,6 +120,9 @@ Examples:
 
   # Re-enable automatic background upgrades
   promptconduit config set --disable-auto-update=false
+
+  # Opt out of the anonymous daily usage ping
+  promptconduit config set --disable-telemetry=true
 
   # Opt out of the local event log (~/.promptconduit/events.ndjson)
   promptconduit config set --disable-event-log=true
@@ -157,6 +166,10 @@ Examples:
 			fc.DisableAutoUpdate = setDisableAutoUpdate
 			changed = true
 		}
+		if cmd.Flags().Changed("disable-telemetry") {
+			fc.DisableTelemetry = setDisableTelemetry
+			changed = true
+		}
 		if cmd.Flags().Changed("disable-event-log") {
 			fc.DisableEventLog = setDisableEventLog
 			changed = true
@@ -171,7 +184,7 @@ Examples:
 		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-event-log, --local-only, or --event-log-retention-days")
+			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -194,6 +207,13 @@ Examples:
 				state = "disabled"
 			}
 			cmd.Printf("  Auto-update: %s\n", state)
+		}
+		if cmd.Flags().Changed("disable-telemetry") {
+			state := "enabled"
+			if fc.DisableTelemetry {
+				state = "disabled"
+			}
+			cmd.Printf("  Usage ping:  %s\n", state)
 		}
 		if cmd.Flags().Changed("disable-event-log") {
 			state := "enabled"
@@ -436,6 +456,7 @@ func init() {
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
 	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
+	configSetCmd.Flags().BoolVar(&setDisableTelemetry, "disable-telemetry", false, "Disable the anonymous daily usage ping")
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
 	configSetCmd.Flags().BoolVar(&setLocalOnly, "local-only", false, "Free / local-only mode: capture events locally, never send to the cloud")
 	configSetCmd.Flags().IntVar(&setEventLogRetentionDays, "event-log-retention-days", 0, "Days of local hook history to keep (default 30; -1 = keep forever)")

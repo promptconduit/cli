@@ -36,6 +36,9 @@ type Config struct {
 	// DisableAutoUpdate opts out of the background "check + self-upgrade"
 	// behaviour. Zero value (false) leaves auto-update enabled.
 	DisableAutoUpdate bool `json:"disable_auto_update,omitempty"`
+	// DisableTelemetry opts out of the anonymous daily usage ping (see
+	// internal/telemetry). Zero value (false) leaves it enabled.
+	DisableTelemetry bool `json:"disable_telemetry,omitempty"`
 	// DisableEventLog opts out of the local full-fidelity event log written
 	// to ~/.promptconduit/ (events.ndjson, errors.log, status.json). Zero
 	// value (false) leaves the event log enabled — it's on by default.
@@ -65,6 +68,7 @@ type FileConfig struct {
 	Debug                 bool   `json:"debug,omitempty"`
 	Timeout               int    `json:"timeout_seconds,omitempty"`
 	DisableAutoUpdate     bool   `json:"disable_auto_update,omitempty"`
+	DisableTelemetry      bool   `json:"disable_telemetry,omitempty"`
 	DisableEventLog       bool   `json:"disable_event_log,omitempty"`
 	LocalOnly             bool   `json:"local_only,omitempty"`
 	EventLogRetentionDays int    `json:"event_log_retention_days,omitempty"`
@@ -195,6 +199,7 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 		if cfg, ok := fc.Environments[fc.CurrentEnv]; ok && cfg != nil {
 			merged := *cfg
 			merged.DisableAutoUpdate = merged.DisableAutoUpdate || fc.DisableAutoUpdate
+			merged.DisableTelemetry = merged.DisableTelemetry || fc.DisableTelemetry
 			merged.DisableEventLog = merged.DisableEventLog || fc.DisableEventLog
 			merged.LocalOnly = merged.LocalOnly || fc.LocalOnly
 			// Retention is a global default too: use it when the env didn't set one.
@@ -206,13 +211,14 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableTelemetry || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 {
 		return &Config{
 			APIKey:                fc.APIKey,
 			APIURL:                fc.APIURL,
 			Debug:                 fc.Debug,
 			TimeoutSeconds:        fc.Timeout,
 			DisableAutoUpdate:     fc.DisableAutoUpdate,
+			DisableTelemetry:      fc.DisableTelemetry,
 			DisableEventLog:       fc.DisableEventLog,
 			LocalOnly:             fc.LocalOnly,
 			EventLogRetentionDays: fc.EventLogRetentionDays,
@@ -249,6 +255,9 @@ func LoadConfig() *Config {
 			}
 			if fileCfg.DisableAutoUpdate {
 				cfg.DisableAutoUpdate = true
+			}
+			if fileCfg.DisableTelemetry {
+				cfg.DisableTelemetry = true
 			}
 			if fileCfg.DisableEventLog {
 				cfg.DisableEventLog = true
