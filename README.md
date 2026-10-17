@@ -294,8 +294,11 @@ Detected 3 skills:
 ## Free Tier — Local-Only Mode
 
 PromptConduit has a **Free tier that is 100% local**: every event is captured to
-a file on your machine and **nothing is ever sent to the cloud**. You register
-for free, but no telemetry leaves your computer.
+a file on your machine and **none of your event data is ever sent to the cloud**.
+You register for free, and your prompts, sessions, and costs never leave your
+computer. The only network calls are the update check, the public rate-card
+refresh, and an anonymous daily usage ping you can turn off (see
+[Anonymous usage ping](#anonymous-usage-ping)).
 
 Local-only mode is the default whenever no API key is configured — installing
 hooks and capturing events works with no account at all. You can also opt in
@@ -448,6 +451,8 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_DEBUG` | No | `false` | Enable debug logging |
 | `PROMPTCONDUIT_TIMEOUT` | No | `30` | HTTP timeout in seconds |
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
+| `PROMPTCONDUIT_TELEMETRY` | No | on | `0`/`false`/`off` disables the [anonymous usage ping](#anonymous-usage-ping) |
+| `DO_NOT_TRACK` | No | unset | `1` disables the [anonymous usage ping](#anonymous-usage-ping) |
 
 > **Warning**: If using multi-environment config, avoid setting `PROMPTCONDUIT_API_KEY` in your shell profile. The env var will override the config file's environment-specific key, which can cause mismatches (e.g., prod API key with local URL). Use the config file exclusively or env vars exclusively, but not both.
 
@@ -669,6 +674,34 @@ make snapshot
   payload uploaded). Disable with
   `promptconduit config set --disable-auto-update=true` or
   `PROMPTCONDUIT_AUTO_UPDATE=0`.
+- **Anonymous usage ping**: see [below](#anonymous-usage-ping).
+
+### Anonymous usage ping
+
+To count active installs, the CLI sends **one anonymous ping per day** to
+`POST https://api.promptconduit.dev/v1/ping`. This is the complete payload:
+
+| Field | Example | What it is |
+|-------|---------|------------|
+| `install_id` | `3f2b8c1e-…` | Random UUID generated on your machine (stored in `~/.config/promptconduit/telemetry.json`) |
+| `cli_version` | `0.28.0` | CLI version |
+| `os`, `arch` | `darwin`, `arm64` | Operating system and CPU architecture |
+| `tools` | `["claude-code","cursor"]` | Which AI tools have PromptConduit hooks installed |
+| `extension_version` | `0.23.0` | Installed cost extension version, if any |
+| `logged_in` | `false` | Whether an API key is configured |
+
+It never includes your name, email, file paths, repository or branch names,
+prompts, or costs, and the server does not store your IP address with it. The
+request is mirrored to `outbound.ndjson` like every other request, so
+`promptconduit watch` shows it.
+
+- **Notice first.** Nothing is sent until an interactive command has printed a
+  one-time notice. Hooks never print, and never send before that.
+- **Never blocks.** The send runs in a detached background process.
+- **Opt out** with any of:
+  `promptconduit config set --disable-telemetry=true`, `DO_NOT_TRACK=1`, or
+  `PROMPTCONDUIT_TELEMETRY=0`. It is also off when `CI` is set and in dev builds.
+  `promptconduit config show` reports the current state.
 
 ## License
 
