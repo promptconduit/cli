@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,8 +29,12 @@ func TestEnabled(t *testing.T) {
 	}{
 		{name: "default on", version: "1.2.3", want: true},
 		{name: "config opt-out", version: "1.2.3", disabled: true, want: false},
+		{name: "v-prefixed release", version: "v1.2.3", want: true},
 		{name: "dev build", version: "dev", want: false},
 		{name: "empty version", version: "", want: false},
+		{name: "make build (git describe)", version: "v1.2.3-4-gabc1234-dirty", want: false},
+		{name: "goreleaser snapshot", version: "1.2.4-dev", want: false},
+		{name: "prerelease", version: "1.2.3-rc.1", want: false},
 		{name: "DO_NOT_TRACK=1", version: "1.2.3", env: map[string]string{"DO_NOT_TRACK": "1"}, want: false},
 		{name: "DO_NOT_TRACK=true", version: "1.2.3", env: map[string]string{"DO_NOT_TRACK": "true"}, want: false},
 		{name: "DO_NOT_TRACK=0", version: "1.2.3", env: map[string]string{"DO_NOT_TRACK": "0"}, want: true},
@@ -49,6 +54,14 @@ func TestEnabled(t *testing.T) {
 				t.Fatalf("Enabled(%v, %q) = %v, want %v", tc.disabled, tc.version, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNoticeNamesEveryPayloadField(t *testing.T) {
+	for _, want := range []string{"install ID", "CLI version", "OS", "CPU architecture", "tool hooks", "editor extension version", "signed in", "--disable-telemetry=true"} {
+		if !strings.Contains(Notice, want) {
+			t.Errorf("Notice is missing %q", want)
+		}
 	}
 }
 

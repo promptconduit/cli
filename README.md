@@ -679,7 +679,8 @@ make snapshot
 ### Anonymous usage ping
 
 To count active installs, the CLI sends **one anonymous ping per day** to
-`POST https://api.promptconduit.dev/v1/ping`. This is the complete payload:
+`POST /v1/ping` on the configured API URL (`https://api.promptconduit.dev` by
+default). This is the complete payload:
 
 | Field | Example | What it is |
 |-------|---------|------------|
@@ -700,7 +701,9 @@ request is mirrored to `outbound.ndjson` like every other request, so
 - **Never blocks.** The send runs in a detached background process.
 - **Opt out** with any of:
   `promptconduit config set --disable-telemetry=true`, `DO_NOT_TRACK=1`, or
-  `PROMPTCONDUIT_TELEMETRY=0`. It is also off when `CI` is set and in dev builds.
+  `PROMPTCONDUIT_TELEMETRY=0`. It is also off when `CI` is set, and only
+  tagged release builds send it (local `make` and snapshot builds never do).
+  If `config.json` can't be parsed, the ping stays off rather than guessing.
   `promptconduit config show` reports the current state.
 
 ## License

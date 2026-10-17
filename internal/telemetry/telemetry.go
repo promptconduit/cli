@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -40,9 +41,16 @@ const (
 )
 
 // Notice is printed once, on an interactive command, before anything is sent.
-const Notice = "promptconduit: sends one anonymous usage ping per day (random install ID, version, OS, installed tools) " +
-	"with no prompts, paths, or personal data. Opt out: promptconduit config set --disable-telemetry=true " +
-	"(details: https://promptconduit.dev/privacy)"
+// It names every field in Payload.
+const Notice = "promptconduit: sends one anonymous usage ping per day: a random install ID, CLI version, OS and " +
+	"CPU architecture, which tool hooks and editor extension version are installed, and whether you're signed in. " +
+	"No prompts, paths, repos, or personal data. Opt out: promptconduit config set --disable-telemetry=true " +
+	"(details: https://github.com/promptconduit/cli#anonymous-usage-ping)"
+
+// releaseVersion matches tagged release builds only. Local `make` builds
+// (git describe: v1.2.3-4-gabc123-dirty), snapshots (1.2.4-dev), and plain
+// `go build` ("dev") never ping.
+var releaseVersion = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 // now is swapped in tests.
 var now = time.Now
@@ -67,9 +75,10 @@ type Payload struct {
 }
 
 // Enabled reports whether telemetry may run, given the config opt-out and the
-// running version. Environment opt-outs are read here.
+// running version. Environment opt-outs are read here. Only release builds
+// are eligible.
 func Enabled(configDisabled bool, version string) bool {
-	if configDisabled || version == "" || version == "dev" {
+	if configDisabled || !releaseVersion.MatchString(version) {
 		return false
 	}
 	if v := os.Getenv("DO_NOT_TRACK"); v != "" && !isFalsy(v) {
@@ -138,7 +147,13 @@ func Save(dir string, st *State) error {
 		_ = os.Remove(tmp.Name())
 		return err
 	}
-	return os.Rename(tmp.Name(), Path(dir))
+	if err := os.Rename(tmp.Name(), Path(dir)); err != nil {
+		// Windows refuses to replace a file another process has open; drop
+		// the temp file rather than leaving it behind.
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // today is the current UTC day, matching the server's bucketing.

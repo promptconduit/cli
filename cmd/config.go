@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/promptconduit/cli/internal/client"
-	"github.com/promptconduit/cli/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -46,7 +45,7 @@ var configShowCmd = &cobra.Command{
 		}
 		cmd.Printf("Auto-update: %s\n", autoUpdate)
 		usagePing := "disabled"
-		if telemetry.Enabled(cfg.DisableTelemetry, Version) {
+		if telemetryEnabled(cfg) {
 			usagePing = "enabled (anonymous, daily)"
 		}
 		cmd.Printf("Usage ping:  %s\n", usagePing)

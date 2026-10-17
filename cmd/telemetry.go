@@ -39,9 +39,20 @@ func init() {
 	rootCmd.AddCommand(telemetryPingCmd)
 }
 
+// telemetryEnabled applies the opt-out rules and fails closed when the config
+// file exists but can't be read, since LoadConfig would otherwise drop a
+// --disable-telemetry=true it couldn't parse.
+func telemetryEnabled(cfg *client.Config) bool {
+	if !telemetry.Enabled(cfg.DisableTelemetry, Version) {
+		return false
+	}
+	_, err := client.LoadFileConfig()
+	return err == nil
+}
+
 func runTelemetryPing() {
 	cfg := client.LoadConfig()
-	if !telemetry.Enabled(cfg.DisableTelemetry, Version) {
+	if !telemetryEnabled(cfg) {
 		return
 	}
 	dir := client.ConfigDir()
@@ -80,7 +91,7 @@ func maybeTelemetry(cmd *cobra.Command) {
 		return
 	}
 	cfg := client.LoadConfig()
-	if !telemetry.Enabled(cfg.DisableTelemetry, Version) {
+	if !telemetryEnabled(cfg) {
 		return
 	}
 	dir := client.ConfigDir()
@@ -103,7 +114,7 @@ func maybeTelemetry(cmd *cobra.Command) {
 // nothing until an interactive command has shown the notice. Hot-path cost is
 // one small file read.
 func maybeSpawnTelemetry(cfg *client.Config) {
-	if !telemetry.Enabled(cfg.DisableTelemetry, Version) {
+	if !telemetryEnabled(cfg) {
 		return
 	}
 	dir := client.ConfigDir()

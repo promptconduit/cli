@@ -93,6 +93,17 @@ func TestMaybeSpawnTelemetryRespectsOptOut(t *testing.T) {
 	}
 }
 
+func TestTelemetryFailsClosedOnUnreadableConfig(t *testing.T) {
+	dir := setupTelemetryEnv(t)
+	if !telemetryEnabled(&client.Config{}) {
+		t.Fatal("expected telemetry enabled with no config file")
+	}
+	writeFile(t, filepath.Join(dir, client.ConfigFileName), `{"disable_telemetry": true,`)
+	if telemetryEnabled(&client.Config{}) {
+		t.Fatal("a config file that can't be parsed must disable telemetry")
+	}
+}
+
 func TestTelemetrySkippedForConfigAndInternalCommands(t *testing.T) {
 	for _, c := range []string{"config", "hook", "telemetry-ping"} {
 		cmd, _, err := rootCmd.Find([]string{c})

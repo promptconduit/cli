@@ -54,11 +54,16 @@ func runHook(cmd *cobra.Command, args []string) error {
 
 // processHookEvent is the main hook entry point - wraps native event in envelope
 func processHookEvent() error {
-	defer outputContinueResponse()
-
 	// Load config first so we can set the debug flag for the logger and the
 	// enabled flag for the local event log before emitting any lines.
 	cfg := client.LoadConfig()
+
+	// Anonymous daily usage ping. Deferred before the response so it runs
+	// after the hook's reply is written: one small state-file read, and the
+	// send itself happens in a detached child once the notice was shown.
+	defer maybeSpawnTelemetry(cfg)
+	defer outputContinueResponse()
+
 	logger.SetDebug(cfg.Debug)
 	eventlog.SetEnabled(cfg.EventLogEnabled())
 
@@ -66,10 +71,6 @@ func processHookEvent() error {
 	// event is captured (deferred); the hot path only stats files — the rewrite
 	// itself runs in a detached subprocess.
 	defer maybeSpawnPrune(cfg.RetentionDays())
-
-	// Anonymous daily usage ping: one small state-file read here; the send
-	// runs in a detached child and only after the notice has been shown.
-	defer maybeSpawnTelemetry(cfg)
 
 	logger.Debug("Hook started")
 
