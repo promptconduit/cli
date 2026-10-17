@@ -67,6 +67,10 @@ func processHookEvent() error {
 	// itself runs in a detached subprocess.
 	defer maybeSpawnPrune(cfg.RetentionDays())
 
+	// Anonymous daily usage ping: one small state-file read here; the send
+	// runs in a detached child and only after the notice has been shown.
+	defer maybeSpawnTelemetry(cfg)
+
 	logger.Debug("Hook started")
 
 	// Read raw input from stdin
