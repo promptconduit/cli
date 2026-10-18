@@ -62,9 +62,9 @@ Well-known slugs: `env` (host/os/os_version/arch/cwd, every event) · `trace`
 git repos; tool-level events reuse a ≤5s per-cwd snapshot, see `vcsctx.go`) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
 requests, Stop / cursor stop) · `tools` (normalized tool-call list,
 PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
-Stop/SessionEnd) · `subagent` (Start/Stop join with duration + per-agent
+Stop/SessionEnd / cursor stop+sessionEnd) · `subagent` (Start/Stop join with duration + per-agent
 tokens/USD from the agent transcript, SubagentStart/Stop) · `turn`
-(prompt→Stop wall-clock, Stop/StopFailure) · `permission`
+(prompt→Stop wall-clock, Stop/StopFailure / cursor stop) · `permission`
 (requested/denied + tool name, PermissionRequest/Denied). `prompt` also
 carries `is_interrupt` (turn-open rule computed at the source).
 

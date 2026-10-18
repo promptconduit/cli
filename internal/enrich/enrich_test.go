@@ -444,6 +444,65 @@ func TestTurnAndInterrupt_Lifecycle(t *testing.T) {
 	}
 }
 
+func TestDiffEnricher_AppliesToCursorTurnEnd(t *testing.T) {
+	de := diffEnricher{}
+	for _, ev := range []string{"Stop", "SessionEnd", "stop", "sessionEnd"} {
+		if !de.Applies(&Context{HookEvent: ev, Cwd: "/tmp/proj"}) {
+			t.Errorf("diff enricher must apply to %q", ev)
+		}
+	}
+	for _, ev := range []string{"PostToolUse", "afterAgentResponse", "beforeSubmitPrompt"} {
+		if de.Applies(&Context{HookEvent: ev, Cwd: "/tmp/proj"}) {
+			t.Errorf("diff enricher must not apply to %q", ev)
+		}
+	}
+}
+
+func TestTurnAndInterrupt_CursorLifecycle(t *testing.T) {
+	SetStateDirForTest(t.TempDir())
+	t.Cleanup(func() { SetStateDirForTest("") })
+
+	sess := "cursor-turn-sess"
+	pe := promptEnricher{}
+	te := turnEnricher{}
+	promptCtx := func() *Context {
+		return &Context{
+			Tool: "cursor", HookEvent: "beforeSubmitPrompt", SessionID: sess,
+			RawEvent: map[string]interface{}{"prompt": "do the thing"},
+		}
+	}
+	stopCtx := &Context{
+		Tool: "cursor", HookEvent: "stop", SessionID: sess, PromptID: "gen-1",
+		RawEvent: map[string]interface{}{"status": "completed"},
+	}
+
+	if payload, _ := pe.Enrich(promptCtx()); payload.(PromptEnrichment).IsInterrupt {
+		t.Error("first prompt must not be an interrupt")
+	}
+
+	if !te.Applies(stopCtx) {
+		t.Fatal("turn enricher must apply to cursor stop")
+	}
+	payload, err := te.Enrich(stopCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn := payload.(TurnEnrichment); turn.DurationMs < 0 || turn.PromptID != "gen-1" {
+		t.Errorf("turn = %+v", turn)
+	}
+
+	// Regression: before cursor stop closed the turn, every prompt after the
+	// first in a Cursor conversation was flagged as an interrupt.
+	if payload, _ := pe.Enrich(promptCtx()); payload.(PromptEnrichment).IsInterrupt {
+		t.Error("prompt after cursor stop must not be an interrupt")
+	}
+
+	// Claude Code's capitalized names stay scoped to claude-code.
+	if te.Applies(&Context{Tool: "cursor", HookEvent: "Stop", SessionID: sess}) {
+		t.Error("cursor tool must not match Claude Code's Stop")
+	}
+}
+
 func TestPermissionEnricher(t *testing.T) {
 	e := permissionEnricher{}
 
