@@ -3,14 +3,15 @@ package enrich
 import "time"
 
 // TurnEnrichment is the "turn" slug, attached to turn-close events (Stop,
-// StopFailure; Cursor stop): how long the turn took, wall-clock, from the prompt that
-// opened it. Combined with the cost and diff slugs on the same event this
-// completes the headline metric — "this turn took 4m, cost $0.31, changed
-// +120/−40".
+// StopFailure; Cursor stop): how long the turn took, wall-clock, from the
+// prompt that opened it. Combined with the cost and diff slugs on the same
+// event this completes the headline metric — "this turn took 4m, cost $0.31,
+// changed +120/−40".
 //
-// The turn clock starts at UserPromptSubmit / Cursor beforeSubmitPrompt (recorded by the prompt enricher
-// in the per-session state). An interrupting prompt restarts the clock, so an
-// interrupted turn's duration measures from its LAST prompt.
+// The turn clock starts at UserPromptSubmit / Cursor beforeSubmitPrompt
+// (recorded by the prompt enricher in the per-session state). An interrupting
+// prompt restarts the clock, so an interrupted turn's duration measures from
+// its LAST prompt.
 type TurnEnrichment struct {
 	DurationMs int64 `json:"duration_ms"`
 	// PromptID of the prompt that closed with this Stop (from the envelope).
