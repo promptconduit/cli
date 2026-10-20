@@ -135,8 +135,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 }
 
 // persistLocalOnly writes the local_only flag into the config file so the Free
-// tier survives across hook invocations. Mirrors how `config set --local-only`
-// persists the same setting.
+// tier survives across hook invocations. Like `config set --local-only`, it
+// also clears per-env copies so the global value applies in every profile.
 func persistLocalOnly(v bool) error {
 	fc, err := client.LoadFileConfig()
 	if err != nil {
@@ -146,6 +146,7 @@ func persistLocalOnly(v bool) error {
 		fc = &client.FileConfig{}
 	}
 	fc.LocalOnly = v
+	forEachEnv(fc, func(c *client.Config) { c.LocalOnly = false })
 	return client.SaveFileConfig(fc)
 }
 

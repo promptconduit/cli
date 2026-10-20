@@ -37,6 +37,10 @@ func isolateConfigSet(t *testing.T) {
 	t.Setenv(client.EnvAPIKey, "")
 	t.Setenv(client.EnvAPIURL, "")
 	t.Setenv(client.EnvDebug, "")
+	t.Setenv(client.EnvLocalOnly, "")
+	t.Setenv(client.EnvAutoUpdate, "")
+	t.Setenv(client.EnvEventLog, "")
+	t.Setenv(client.EnvEventLogRetentionDays, "")
 }
 
 func saveFileConfig(t *testing.T, fc *client.FileConfig) {
@@ -150,6 +154,21 @@ func TestConfigSet_GlobalOptOutsOverridePerEnvValues(t *testing.T) {
 	runConfigSet(t, map[string]string{"local-only": "true"})
 	if client.LoadConfig().ShouldSend() {
 		t.Error("ShouldSend true after --local-only=true")
+	}
+}
+
+func TestPersistLocalOnly_OverridesPerEnvValue(t *testing.T) {
+	isolateConfigSet(t)
+	saveFileConfig(t, &client.FileConfig{
+		CurrentEnv:   "prod",
+		Environments: map[string]*client.Config{"prod": {APIKey: "sk_prod", LocalOnly: true}},
+	})
+
+	if err := persistLocalOnly(false); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := client.LoadConfig(); cfg.LocalOnly || !cfg.ShouldSend() {
+		t.Errorf("still local-only after persistLocalOnly(false): local=%v", cfg.LocalOnly)
 	}
 }
 
