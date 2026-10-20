@@ -11,7 +11,8 @@ import (
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage PromptConduit configuration",
-	Long: `Manage PromptConduit configuration stored in ~/.promptconduit/config.json.
+	Long: `Manage PromptConduit configuration stored in ~/.config/promptconduit/config.json
+(or $XDG_CONFIG_HOME/promptconduit/config.json when XDG_CONFIG_HOME is set).
 
 This config file is used by hooks when environment variables are not set,
 making it ideal for use with tools like Claude Code that spawn subprocesses.
@@ -112,7 +113,8 @@ func forEachEnv(fc *client.FileConfig, fn func(*client.Config)) {
 var configSetCmd = &cobra.Command{
 	Use:   "set",
 	Short: "Set configuration values",
-	Long: `Set configuration values in ~/.config/promptconduit/config.json.
+	Long: `Set configuration values in ~/.config/promptconduit/config.json
+(or $XDG_CONFIG_HOME/promptconduit/config.json when XDG_CONFIG_HOME is set).
 
 When an environment is active (see "config env use"), --api-key, --api-url and
 --debug apply to that environment's profile. The other flags are global and
@@ -137,7 +139,7 @@ Examples:
   # Opt out of the anonymous daily usage ping
   promptconduit config set --disable-telemetry=true
 
-  # Opt out of the local event log (~/.promptconduit/events.ndjson)
+  # Opt out of the local event log (~/.promptconduit/events.jsonl)
   promptconduit config set --disable-event-log=true
 
   # Free / local-only mode: capture events locally, never send to the cloud
