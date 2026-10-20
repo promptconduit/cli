@@ -37,6 +37,10 @@ func isolateConfigSet(t *testing.T) {
 	t.Setenv(client.EnvAPIKey, "")
 	t.Setenv(client.EnvAPIURL, "")
 	t.Setenv(client.EnvDebug, "")
+	t.Setenv(client.EnvLocalOnly, "")
+	t.Setenv(client.EnvAutoUpdate, "")
+	t.Setenv(client.EnvEventLog, "")
+	t.Setenv(client.EnvEventLogRetentionDays, "")
 }
 
 func saveFileConfig(t *testing.T, fc *client.FileConfig) {
@@ -104,5 +108,76 @@ func TestConfigSet_LegacyFlatConfig(t *testing.T) {
 	}
 	if fc.APIKey != "sk_flat2" || fc.Environments != nil {
 		t.Errorf("flat config not updated in place: %+v", fc)
+	}
+}
+
+func TestConfigSet_GlobalOptOutsOverridePerEnvValues(t *testing.T) {
+	isolateConfigSet(t)
+	saveFileConfig(t, &client.FileConfig{
+		CurrentEnv: "prod",
+		Environments: map[string]*client.Config{
+			"prod": {APIKey: "sk_prod", LocalOnly: true, DisableAutoUpdate: true, DisableTelemetry: true, DisableEventLog: true, EventLogRetentionDays: 7},
+			"dev":  {APIKey: "sk_dev", LocalOnly: true},
+		},
+	})
+
+	runConfigSet(t, map[string]string{
+		"local-only":               "false",
+		"disable-auto-update":      "false",
+		"disable-telemetry":        "false",
+		"disable-event-log":        "false",
+		"event-log-retention-days": "90",
+	})
+	cfg := client.LoadConfig()
+	if cfg.LocalOnly || cfg.DisableAutoUpdate || cfg.DisableTelemetry || cfg.DisableEventLog {
+		t.Errorf("per-env opt-outs still win: local=%v auto=%v telemetry=%v eventlog=%v",
+			cfg.LocalOnly, cfg.DisableAutoUpdate, cfg.DisableTelemetry, cfg.DisableEventLog)
+	}
+	if cfg.EventLogRetentionDays != 90 {
+		t.Errorf("retention = %d, want 90", cfg.EventLogRetentionDays)
+	}
+	if !cfg.ShouldSend() {
+		t.Error("ShouldSend false after --local-only=false")
+	}
+
+	fc, err := client.LoadFileConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fc.Environments["dev"].LocalOnly {
+		t.Error("dev profile still local-only: global set should apply to every env")
+	}
+	if fc.Environments["prod"].APIKey != "sk_prod" {
+		t.Errorf("unrelated profile field changed: %+v", fc.Environments["prod"])
+	}
+
+	runConfigSet(t, map[string]string{"local-only": "true"})
+	if client.LoadConfig().ShouldSend() {
+		t.Error("ShouldSend true after --local-only=true")
+	}
+}
+
+func TestPersistLocalOnly_OverridesPerEnvValue(t *testing.T) {
+	isolateConfigSet(t)
+	saveFileConfig(t, &client.FileConfig{
+		CurrentEnv:   "prod",
+		Environments: map[string]*client.Config{"prod": {APIKey: "sk_prod", LocalOnly: true}},
+	})
+
+	if err := persistLocalOnly(false); err != nil {
+		t.Fatal(err)
+	}
+	if cfg := client.LoadConfig(); cfg.LocalOnly || !cfg.ShouldSend() {
+		t.Errorf("still local-only after persistLocalOnly(false): local=%v", cfg.LocalOnly)
+	}
+}
+
+func TestConfigSet_GlobalOptOutsFlatConfig(t *testing.T) {
+	isolateConfigSet(t)
+	saveFileConfig(t, &client.FileConfig{APIKey: "sk_flat", LocalOnly: true})
+
+	runConfigSet(t, map[string]string{"local-only": "false"})
+	if cfg := client.LoadConfig(); cfg.LocalOnly || cfg.APIKey != "sk_flat" {
+		t.Errorf("flat config: local=%v key=%q", cfg.LocalOnly, cfg.APIKey)
 	}
 }

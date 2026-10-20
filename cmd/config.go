@@ -100,13 +100,23 @@ var (
 	setEventLogRetentionDays int
 )
 
+// forEachEnv applies fn to every stored environment profile.
+func forEachEnv(fc *client.FileConfig, fn func(*client.Config)) {
+	for _, c := range fc.Environments {
+		if c != nil {
+			fn(c)
+		}
+	}
+}
+
 var configSetCmd = &cobra.Command{
 	Use:   "set",
 	Short: "Set configuration values",
 	Long: `Set configuration values in ~/.config/promptconduit/config.json.
 
 When an environment is active (see "config env use"), --api-key, --api-url and
---debug apply to that environment's profile. The other flags are global.
+--debug apply to that environment's profile. The other flags are global and
+replace any value set inside an individual environment.
 
 Examples:
   # Basic setup (most users)
@@ -178,24 +188,33 @@ Examples:
 		if active == nil {
 			fc.APIKey, fc.APIURL, fc.Debug = conn.APIKey, conn.APIURL, conn.Debug
 		}
+		// The remaining flags are global defaults. GetCurrentConfig lets a
+		// per-env value win over them (true ORs in, a non-zero retention
+		// overrides), so clear each env's copy when setting the global one:
+		// otherwise --local-only=false would report "saved" and change nothing.
 		if cmd.Flags().Changed("disable-auto-update") {
 			fc.DisableAutoUpdate = setDisableAutoUpdate
+			forEachEnv(fc, func(c *client.Config) { c.DisableAutoUpdate = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("disable-telemetry") {
 			fc.DisableTelemetry = setDisableTelemetry
+			forEachEnv(fc, func(c *client.Config) { c.DisableTelemetry = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("disable-event-log") {
 			fc.DisableEventLog = setDisableEventLog
+			forEachEnv(fc, func(c *client.Config) { c.DisableEventLog = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("local-only") {
 			fc.LocalOnly = setLocalOnly
+			forEachEnv(fc, func(c *client.Config) { c.LocalOnly = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("event-log-retention-days") {
 			fc.EventLogRetentionDays = setEventLogRetentionDays
+			forEachEnv(fc, func(c *client.Config) { c.EventLogRetentionDays = 0 })
 			changed = true
 		}
 
