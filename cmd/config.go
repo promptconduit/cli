@@ -103,7 +103,10 @@ var (
 var configSetCmd = &cobra.Command{
 	Use:   "set",
 	Short: "Set configuration values",
-	Long: `Set configuration values in ~/.promptconduit/config.json.
+	Long: `Set configuration values in ~/.config/promptconduit/config.json.
+
+When an environment is active (see "config env use"), --api-key, --api-url and
+--debug apply to that environment's profile. The other flags are global.
 
 Examples:
   # Basic setup (most users)
@@ -148,19 +151,32 @@ Examples:
 			fc = &client.FileConfig{}
 		}
 
+		// Connection settings (api key, api url, debug) are per-environment:
+		// when an environment profile is active, GetCurrentConfig reads them
+		// from that profile and ignores the top-level fields, so write them
+		// there. The opt-out flags below stay top-level global defaults.
+		conn := &client.Config{APIKey: fc.APIKey, APIURL: fc.APIURL, Debug: fc.Debug}
+		active := fc.ActiveEnv()
+		if active != nil {
+			conn = active
+		}
+
 		// Update values if provided
 		changed := false
 		if setAPIKey != "" {
-			fc.APIKey = setAPIKey
+			conn.APIKey = setAPIKey
 			changed = true
 		}
 		if cmd.Flags().Changed("api-url") {
-			fc.APIURL = setAPIURL
+			conn.APIURL = setAPIURL
 			changed = true
 		}
 		if cmd.Flags().Changed("debug") {
-			fc.Debug = setDebug
+			conn.Debug = setDebug
 			changed = true
+		}
+		if active == nil {
+			fc.APIKey, fc.APIURL, fc.Debug = conn.APIKey, conn.APIURL, conn.Debug
 		}
 		if cmd.Flags().Changed("disable-auto-update") {
 			fc.DisableAutoUpdate = setDisableAutoUpdate
@@ -192,14 +208,17 @@ Examples:
 		}
 
 		cmd.Println("Configuration saved")
-		if fc.APIKey != "" {
-			cmd.Printf("  API Key:     %s\n", client.MaskAPIKey(fc.APIKey))
+		if active != nil {
+			cmd.Printf("  Environment: %s\n", fc.CurrentEnv)
 		}
-		if fc.APIURL != "" {
-			cmd.Printf("  API URL:     %s\n", fc.APIURL)
+		if conn.APIKey != "" {
+			cmd.Printf("  API Key:     %s\n", client.MaskAPIKey(conn.APIKey))
 		}
-		if fc.Debug {
-			cmd.Printf("  Debug:       %v\n", fc.Debug)
+		if conn.APIURL != "" {
+			cmd.Printf("  API URL:     %s\n", conn.APIURL)
+		}
+		if cmd.Flags().Changed("debug") || conn.Debug {
+			cmd.Printf("  Debug:       %v\n", conn.Debug)
 		}
 		if cmd.Flags().Changed("disable-auto-update") {
 			state := "enabled"
