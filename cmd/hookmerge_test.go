@@ -265,6 +265,26 @@ func TestUninstall_RemovesHooksKeyWhenOnlyOurs(t *testing.T) {
 	}
 }
 
+func TestIsPromptConduitHandler(t *testing.T) {
+	cases := map[string]bool{
+		"/opt/bin/promptconduit hook":                         true,
+		"/opt/bin/promptconduit hook --tool codex":            true,
+		`C:\Tools\promptconduit.exe hook`:                     true,
+		"/Users/me/My Apps/promptconduit hook":                true,
+		"/Users/me/promptconduit/scripts/notify.sh":           false,
+		"/Users/me/promptconduit/bin/lint hook":               false,
+		"/opt/bin/promptconduit-helper hooker":                false,
+		"echo promptconduit":                                  false,
+		"/Users/me/code/promptconduit/.claude/hooks/x.sh --a": false,
+	}
+	for cmd, want := range cases {
+		got := isPromptConduitHandler(map[string]interface{}{"command": cmd})
+		if got != want {
+			t.Errorf("isPromptConduitHandler(%q) = %v, want %v", cmd, got, want)
+		}
+	}
+}
+
 func TestStripPromptConduitHooks_SharedMatcherGroup(t *testing.T) {
 	// A single matcher group holding both a user handler and ours: only ours
 	// is removed, the group (and its matcher) stays.

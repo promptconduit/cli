@@ -1,6 +1,6 @@
 package cmd
 
-import "strings"
+import "regexp"
 
 // Shared-file hook merging.
 //
@@ -17,16 +17,22 @@ import "strings"
 // whole matcher group that still holds someone else's hook) and append ours
 // alongside whatever the user already has.
 
+// ourHookCommand matches the command we install: the promptconduit binary
+// (any directory, optional suffix like ".exe") followed by the `hook`
+// subcommand, e.g. "/usr/local/bin/promptconduit hook --tool codex". Requiring
+// the binary basename + `hook` keeps user scripts that merely live under a
+// directory named "promptconduit" from being mistaken for ours.
+var ourHookCommand = regexp.MustCompile(`(?i)promptconduit[^/\\\s]*\s+hook(\s|$)`)
+
 // isPromptConduitHandler reports whether a single hook handler is one we
-// installed. Our handlers always invoke the promptconduit binary, so the
-// command string references "promptconduit".
+// installed.
 func isPromptConduitHandler(v interface{}) bool {
 	m, ok := v.(map[string]interface{})
 	if !ok {
 		return false
 	}
 	cmd, ok := m["command"].(string)
-	return ok && strings.Contains(strings.ToLower(cmd), "promptconduit")
+	return ok && ourHookCommand.MatchString(cmd)
 }
 
 // stripPromptConduitHooks removes every PromptConduit handler from a hooks
