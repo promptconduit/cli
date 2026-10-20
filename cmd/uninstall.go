@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/spf13/cobra"
@@ -80,14 +79,8 @@ func uninstallClaudeCode() error {
 		return nil
 	}
 
-	// Remove all hooks containing "promptconduit"
-	removed := 0
-	for hookName, hookConfig := range hooks {
-		if containsPromptConduit(hookConfig) {
-			delete(hooks, hookName)
-			removed++
-		}
-	}
+	// Remove only our handlers; user hooks on the same events are kept.
+	removed := stripPromptConduitHooks(hooks)
 
 	if removed == 0 {
 		fmt.Println("No PromptConduit hooks found in Claude Code settings")
@@ -141,14 +134,8 @@ func uninstallCursor() error {
 		return nil
 	}
 
-	// Remove all hooks containing "promptconduit"
-	removed := 0
-	for hookName, hookConfig := range hooks {
-		if containsPromptConduit(hookConfig) {
-			delete(hooks, hookName)
-			removed++
-		}
-	}
+	// Remove only our handlers; user hooks on the same events are kept.
+	removed := stripPromptConduitHooks(hooks)
 
 	if removed == 0 {
 		fmt.Println("No PromptConduit hooks found in Cursor settings")
@@ -202,14 +189,8 @@ func uninstallGemini() error {
 		return nil
 	}
 
-	// Remove all hooks containing "promptconduit"
-	removed := 0
-	for hookName, hookConfig := range hooks {
-		if containsPromptConduit(hookConfig) {
-			delete(hooks, hookName)
-			removed++
-		}
-	}
+	// Remove only our handlers; user hooks on the same events are kept.
+	removed := stripPromptConduitHooks(hooks)
 
 	if removed == 0 {
 		fmt.Println("No PromptConduit hooks found in Gemini CLI settings")
@@ -233,27 +214,6 @@ func uninstallGemini() error {
 
 	fmt.Printf("Successfully removed %d PromptConduit hook(s) from Gemini CLI\n", removed)
 	return nil
-}
-
-// containsPromptConduit recursively checks if a value contains "promptconduit"
-func containsPromptConduit(v interface{}) bool {
-	switch val := v.(type) {
-	case string:
-		return strings.Contains(strings.ToLower(val), "promptconduit")
-	case map[string]interface{}:
-		for _, v := range val {
-			if containsPromptConduit(v) {
-				return true
-			}
-		}
-	case []interface{}:
-		for _, item := range val {
-			if containsPromptConduit(item) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func uninstallCodex() error {
@@ -284,13 +244,8 @@ func uninstallCodex() error {
 		return nil
 	}
 
-	removed := 0
-	for hookName, hookConfig := range hooks {
-		if containsPromptConduit(hookConfig) {
-			delete(hooks, hookName)
-			removed++
-		}
-	}
+	// Remove only our handlers; user hooks on the same events are kept.
+	removed := stripPromptConduitHooks(hooks)
 
 	if removed == 0 {
 		fmt.Println("No PromptConduit hooks found in Codex CLI settings")

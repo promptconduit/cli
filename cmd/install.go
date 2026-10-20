@@ -295,23 +295,10 @@ func installClaudeCode(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildClaudeCodeHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -440,23 +427,10 @@ func installCursor(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildCursorHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -564,23 +538,10 @@ func installGemini(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildGeminiHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -692,21 +653,10 @@ func installCodex(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook --tool codex", exePath)
 	hooks := buildCodexHooks(hookCmd)
 
-	// Strip any of OUR previously-installed entries first so removed events
-	// (or stale --tool flags from earlier versions) self-heal on re-install.
-	// User-owned hook entries are left alone.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
 		return fmt.Errorf("failed to create settings directory: %w", err)
