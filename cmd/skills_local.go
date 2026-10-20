@@ -208,7 +208,7 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(allConvos) == 0 {
-		return fmt.Errorf("no transcripts found\n\nInstall Claude Code hooks first: promptconduit install claude-code")
+		return fmt.Errorf("no transcripts found\n\nLocal skills are generated from your AI coding tool's transcripts (no hooks needed). Use Claude Code, Codex CLI, or Copilot CLI for a few sessions, then run again")
 	}
 
 	// 4. Filter by repo if scoped
@@ -222,7 +222,7 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 		}
 		allConvos = filtered
 		if len(allConvos) == 0 {
-			return fmt.Errorf("no transcripts found for repo %q (found %d global transcripts)\n\nUse --repo='' to analyze all transcripts globally, or run from outside a git repo", repo, globalCount)
+			return fmt.Errorf("no transcripts found for repo %q (found %d global transcripts)\n\nUse --repo='' to analyze all transcripts globally", repo, globalCount)
 		}
 	}
 
@@ -262,7 +262,7 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 			fmt.Printf("%d transcript(s) were already analyzed. Use --force to re-analyze all %d.\n", already, total)
 		} else {
 			fmt.Printf("Need at least %d conversations to detect patterns, found %d.\n", localMinConversations, len(toAnalyze))
-			fmt.Println("Use Claude Code more and run again, or use --force to analyze what's available now.")
+			fmt.Println("Use your AI coding tool more and run again.")
 		}
 		return nil
 	}
@@ -295,7 +295,7 @@ func runSkillsGenerateLocal(cmd *cobra.Command, args []string) error {
 
 	// 9. Dry-run: preview without writing
 	if skillsDryRun {
-		outputLocalSkillsDryRun(skills, len(toAnalyze))
+		outputLocalSkillsDryRun(skills, len(toAnalyze), gitRoot, repo)
 		return nil
 	}
 
@@ -514,7 +514,7 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Anthropic API request failed: %w", err)
+		return "", fmt.Errorf("anthropic API request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -524,7 +524,7 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("Anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+		return "", fmt.Errorf("anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 	}
 	var result struct {
 		Content []struct {
@@ -540,14 +540,14 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 		return "", fmt.Errorf("failed to parse Anthropic response: %w", err)
 	}
 	if result.Error != nil {
-		return "", fmt.Errorf("Anthropic API error (%s): %s", result.Error.Type, result.Error.Message)
+		return "", fmt.Errorf("anthropic API error (%s): %s", result.Error.Type, result.Error.Message)
 	}
 	for _, c := range result.Content {
 		if c.Type == "text" {
 			return c.Text, nil
 		}
 	}
-	return "", fmt.Errorf("Anthropic API returned no text content")
+	return "", fmt.Errorf("anthropic API returned no text content")
 }
 
 // callViaOpenAI calls the OpenAI Chat Completions API.
@@ -683,12 +683,7 @@ func writeLocalSkills(skills []localDetectedSkill, gitRoot, repo string) (writte
 	}
 
 	for _, skill := range skills {
-		var targetDir string
-		if gitRoot != "" && repo != "" {
-			targetDir = filepath.Join(gitRoot, ".claude", "skills", skill.Name)
-		} else {
-			targetDir = filepath.Join(home, ".claude", "skills", skill.Name)
-		}
+		targetDir := localSkillDir(home, gitRoot, repo, skill.Name)
 
 		if err := os.MkdirAll(targetDir, 0755); err != nil {
 			errs = append(errs, fmt.Errorf("failed to create dir for %s: %w", skill.Name, err))
@@ -704,6 +699,17 @@ func writeLocalSkills(skills []localDetectedSkill, gitRoot, repo string) (writte
 		written[skill.Name] = dest
 	}
 	return
+}
+
+// localSkillDir is the directory one skill is written to. The writer and the
+// dry run share it so --dry-run reports the path a real run writes to:
+// repo-scoped runs inside a git repo use <gitRoot>/.claude/skills/<name>;
+// global runs (or runs with no git root) use ~/.claude/skills/<name>.
+func localSkillDir(home, gitRoot, repo, name string) string {
+	if gitRoot != "" && repo != "" {
+		return filepath.Join(gitRoot, ".claude", "skills", name)
+	}
+	return filepath.Join(home, ".claude", "skills", name)
 }
 
 func formatLocalSkillFile(s localDetectedSkill) string {
@@ -837,7 +843,8 @@ func outputLocalSkillsGenerated(skills []localDetectedSkill, written map[string]
 	}
 }
 
-func outputLocalSkillsDryRun(skills []localDetectedSkill, convCount int) {
+func outputLocalSkillsDryRun(skills []localDetectedSkill, convCount int, gitRoot, repo string) {
+	home, _ := os.UserHomeDir()
 	fmt.Printf("Dry run — %d skill%s would be generated from %d transcripts:\n\n",
 		len(skills), pluralS(len(skills)), convCount)
 
@@ -845,7 +852,7 @@ func outputLocalSkillsDryRun(skills []localDetectedSkill, convCount int) {
 		fmt.Printf("  /%s  (%s, %d%%)\n", s.Name, s.SkillType, int(s.Confidence*100))
 		fmt.Printf("    %s\n", s.DisplayName)
 		fmt.Printf("    %s\n", truncateString(s.Description, 80))
-		fmt.Printf("    → Would write to: ~/.claude/skills/%s/SKILL.md\n", s.Name)
+		fmt.Printf("    → Would write to: %s\n", filepath.Join(localSkillDir(home, gitRoot, repo, s.Name), "SKILL.md"))
 		fmt.Println()
 	}
 

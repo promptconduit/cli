@@ -84,6 +84,20 @@ func recordLockTimeout(sm *sync.StateManager, filePath string, cause error) erro
 // of the same transcript (large transcripts upload in chunks).
 const transcriptLockWait = 10 * time.Minute
 
+// checkSyncAllowed refuses an upload when the config forbids one. Local-only
+// mode (config or PROMPTCONDUIT_LOCAL_ONLY) wins over an API key: the user
+// asked for nothing to leave the machine, so a manual sync must not upload
+// either — automatic sync is already gated the same way.
+func checkSyncAllowed(cfg *client.Config) error {
+	if cfg.LocalOnly {
+		return fmt.Errorf("sync is disabled in local-only mode: transcripts stay on this machine\n\nTo enable cloud sync, run: promptconduit config set --local-only=false")
+	}
+	if cfg.APIKey == "" {
+		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+	}
+	return nil
+}
+
 func runSync(cmd *cobra.Command, args []string) error {
 	// Handle delay (used by auto-sync to wait for transcript file flush)
 	if syncDelay > 0 {
@@ -92,8 +106,8 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// Load config
 	config := client.LoadConfig()
-	if config.APIKey == "" {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+	if err := checkSyncAllowed(config); err != nil {
+		return err
 	}
 
 	// Single-file (auto-)sync: never upload the same transcript from two
