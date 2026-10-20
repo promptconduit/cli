@@ -183,6 +183,16 @@ func SaveFileConfig(fc *FileConfig) error {
 	return os.WriteFile(ConfigPath(), data, 0600)
 }
 
+// ActiveEnv returns the stored profile for current_env, or nil when the file
+// uses the legacy flat config. Unlike GetCurrentConfig it is not a copy:
+// callers write per-env settings (api key, api url, debug) through it.
+func (fc *FileConfig) ActiveEnv() *Config {
+	if fc == nil || fc.CurrentEnv == "" || fc.Environments == nil {
+		return nil
+	}
+	return fc.Environments[fc.CurrentEnv]
+}
+
 // GetCurrentConfig returns the active config from the file (based on current_env)
 func (fc *FileConfig) GetCurrentConfig() *Config {
 	if fc == nil {
