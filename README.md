@@ -178,7 +178,41 @@ promptconduit upgrade
 promptconduit watch
 promptconduit watch --verbose    # also pretty-print request/response bodies
 promptconduit watch --lines 20   # backfill the last 20 entries before going live
+
+# Team AI spend, savings, budgets and client tags (add --json for agents)
+promptconduit team [subcommand]
 ```
+
+### Team spend from your terminal (or your agent)
+
+Everything on the web team page is also a command, so you can ask your
+coding agent "what did we spend on AI this week, and are we over budget?"
+and it can answer, and act, without anyone opening a dashboard. Every
+subcommand takes `--json`.
+
+```bash
+promptconduit team                                   # teams you belong to
+promptconduit team create "Acme Eng"                 # start a team (free up to 3 people)
+promptconduit team invite dev@example.com            # prints an invite link
+promptconduit team join <invite-link>                # accept an invite
+
+promptconduit team spend --period 7d                 # totals + top members, repos, models
+promptconduit team spend --by client --json          # one breakdown: member|repo|client|model|branch|pr|day
+promptconduit team savings                           # cache savings, model mix, runaway sessions
+promptconduit team export --by member -o spend.csv   # CSV: client|repo|member|pr|day
+
+promptconduit team budgets                           # month-to-date and projected spend per budget
+promptconduit team budgets set --org-wide --monthly 2000
+promptconduit team budgets set --repo acme/api --monthly 500
+promptconduit team budgets set --member dev@example.com --monthly 150
+promptconduit team budgets rm <budget-id>
+
+promptconduit team tag acme/api "Acme Corp"          # roll a repo's spend up to a client
+promptconduit team tag acme/api --clear
+```
+
+If you belong to more than one team, pass `--org <id|slug|name>` or set
+`PROMPTCONDUIT_ORG`. Budgets, tags and invites need an owner or admin.
 
 ### Tail outbound traffic
 
@@ -627,6 +661,7 @@ make snapshot
 │   ├── upgrade.go          # `promptconduit upgrade` (self-replace)
 │   ├── watch.go            # `promptconduit watch` (tail outbound traffic)
 │   ├── insights.go         # Personal usage insights
+│   ├── team.go             # Team spend, savings, budgets, client tags, invites
 │   ├── skills.go           # Skill detection (platform)
 │   ├── skills_local.go     # Skill detection (local, no account)
 │   ├── correlation.go      # W3C trace_id/span_id helpers
