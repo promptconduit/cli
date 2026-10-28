@@ -60,6 +60,7 @@ func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(insightsCmd)
+	rootCmd.AddCommand(teamCmd)
 	rootCmd.AddCommand(skillsCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(upgradeCmd)
