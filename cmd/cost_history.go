@@ -141,24 +141,33 @@ func aggregateLine(line []byte, start, nowLocal time.Time, loc *time.Location, s
 	}
 }
 
+// loadCostHistory aggregates the last n days of priced requests from the
+// local event log. A missing log is an empty history, not an error.
+func loadCostHistory(n int) ([]costDay, error) {
+	f, err := os.Open(eventlog.EventsJSONLPath())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read event log: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	days, err := aggregateCostHistory(f, time.Now(), n, time.Local)
+	if err != nil {
+		return nil, fmt.Errorf("read event log: %w", err)
+	}
+	return days, nil
+}
+
 func runCostHistory(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 	if costDays < 1 {
 		return fmt.Errorf("--days must be at least 1, got %d", costDays)
 	}
 
-	var days []costDay
-	f, err := os.Open(eventlog.EventsJSONLPath())
-	switch {
-	case os.IsNotExist(err):
-		// No events yet: an empty history, not an error.
-	case err != nil:
-		return fmt.Errorf("read event log: %w", err)
-	default:
-		defer func() { _ = f.Close() }()
-		if days, err = aggregateCostHistory(f, time.Now(), costDays, time.Local); err != nil {
-			return fmt.Errorf("read event log: %w", err)
-		}
+	days, err := loadCostHistory(costDays)
+	if err != nil {
+		return err
 	}
 
 	if costJSON {
