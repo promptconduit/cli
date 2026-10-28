@@ -214,6 +214,37 @@ promptconduit team tag acme/api --clear
 If you belong to more than one team, pass `--org <id|slug|name>` or set
 `PROMPTCONDUIT_ORG`. Budgets, tags and invites need an owner or admin.
 
+### MCP server: ask your agent
+
+The CLI includes a [Model Context Protocol](https://modelcontextprotocol.io)
+server, so Claude Code, Cursor and Gemini CLI can answer cost questions
+themselves: "what has this session cost?", "what did we spend on AI this
+week?", "is any budget about to run over?". `promptconduit install` registers it
+for those three tools automatically (skip with `--no-mcp`).
+
+```bash
+promptconduit mcp install            # register with every tool that has hooks installed
+promptconduit mcp install cursor     # or name tools: claude-code, cursor, gemini-cli
+promptconduit mcp uninstall          # remove everywhere (and don't re-add after upgrades)
+promptconduit mcp tools              # list what agents see
+```
+
+| Tool | Needs an account | What it does |
+|------|------------------|--------------|
+| `session_cost` | no | Cost of the current session (tokens, per-model USD) |
+| `cost_history` | no | Daily cost on this machine |
+| `recent_sessions` | no | Recent sessions with their resume ids |
+| `setup_status` | no | What's installed, signed in, local or syncing |
+| `team_spend`, `team_savings`, `team_budgets`, `team_export_csv`, `team_list` | yes | Team spend by member, repo, client, model, PR and day, savings levers, budgets, CSV |
+| `team_set_budget`, `team_remove_budget`, `team_tag_repo`, `team_invite`, `team_create`, `team_join` | yes | Change team settings (marked as writes, so your agent asks first) |
+
+The local tools read only files on your machine. The server also ships three
+prompts that show up as slash commands in Claude Code: `spend_review`,
+`budget_check` and `session_cost`.
+
+To register it with another MCP client, point it at `promptconduit mcp` (stdio).
+For Claude Code by hand: `claude mcp add --scope user promptconduit -- "$(which promptconduit)" mcp`.
+
 ### Tail outbound traffic
 
 `promptconduit watch` streams every HTTP request the CLI makes to the
@@ -662,6 +693,7 @@ make snapshot
 │   ├── watch.go            # `promptconduit watch` (tail outbound traffic)
 │   ├── insights.go         # Personal usage insights
 │   ├── team.go             # Team spend, savings, budgets, client tags, invites
+│   ├── mcp*.go             # MCP server command, tools/prompts, agent registration
 │   ├── skills.go           # Skill detection (platform)
 │   ├── skills_local.go     # Skill detection (local, no account)
 │   ├── correlation.go      # W3C trace_id/span_id helpers
