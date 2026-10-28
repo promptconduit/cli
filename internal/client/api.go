@@ -1216,6 +1216,11 @@ func (c *Client) deleteRequest(path string) *APIResponse {
 
 // patchRequest sends a PATCH request with a JSON payload
 func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
+	return c.jsonRequest("PATCH", path, payload)
+}
+
+// jsonRequest sends a request with a JSON payload and parses a JSON reply.
+func (c *Client) jsonRequest(method, path string, payload interface{}) *APIResponse {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to marshal payload: %v", err)}
@@ -1224,7 +1229,7 @@ func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "PATCH", c.config.APIURL+path, bytes.NewReader(jsonData))
+	req, err := http.NewRequestWithContext(ctx, method, c.config.APIURL+path, bytes.NewReader(jsonData))
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to create request: %v", err)}
 	}
