@@ -76,6 +76,7 @@ func TestInviteToken(t *testing.T) {
 		"https://app.promptconduit.dev/invite/abc?x=1": "abc",
 		"  abc123 ":                             "abc123",
 		"https://app.promptconduit.dev/invite/": "",
+		"https://click.example.com/r/abc123":    "",
 	}
 	for in, want := range cases {
 		if got := inviteToken(in); got != want {
@@ -106,9 +107,37 @@ func TestTeamByDefaults(t *testing.T) {
 func TestUSD(t *testing.T) {
 	cases := map[float64]string{0: "$0.00", 3.456: "$3.46", 1234.5: "$1,234.50", 1234567.891: "$1,234,567.89", -12: "-$12.00"}
 	for in, want := range cases {
-		if got := usd(in); got != want {
-			t.Errorf("usd(%v) = %q, want %q", in, got, want)
+		if got := fmtUSD(in); got != want {
+			t.Errorf("fmtUSD(%v) = %q, want %q", in, got, want)
 		}
+	}
+	for in, want := range map[float64]string{-123456: "-123,456", -12: "-12", 1000: "1,000"} {
+		if got := fmtCount(in); got != want {
+			t.Errorf("fmtCount(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A mistyped subcommand must fail, not silently run the parent's list.
+func TestTeamRejectsUnknownSubcommand(t *testing.T) {
+	for _, c := range []*cobra.Command{teamCmd, teamBudgetsCmd} {
+		if err := c.Args(c, []string{"spnd"}); err == nil {
+			t.Errorf("%s accepted a stray arg", c.Name())
+		}
+	}
+}
+
+func TestWriteTeamSpendDaysNewestFirst(t *testing.T) {
+	data := decode(t, `{"period": "7d", "totals": {}, "byDay": [
+		{"day": "2026-10-01", "usd": 1}, {"day": "2026-10-02", "usd": 2}, {"day": "2026-10-03", "usd": 3}]}`)
+	var buf bytes.Buffer
+	_ = writeTeamSpend(&buf, testOrgs[0], data, "day", 2)
+	out := buf.String()
+	if !strings.Contains(out, "2026-10-03") || !strings.Contains(out, "2026-10-02") || strings.Contains(out, "2026-10-01") {
+		t.Errorf("want the two newest days:\n%s", out)
+	}
+	if strings.Index(out, "2026-10-03") > strings.Index(out, "2026-10-02") {
+		t.Errorf("newest day should come first:\n%s", out)
 	}
 }
 

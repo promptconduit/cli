@@ -78,9 +78,9 @@ func TestTeamEndpoints(t *testing.T) {
 
 func TestExportTeamCost(t *testing.T) {
 	c, rec := newTeamTestClient(t, 200, "client,spend_usd\nAcme,12.5\n")
-	csv, err := c.ExportTeamCost("o1", "30d", "client")
-	if err != nil {
-		t.Fatal(err)
+	csv, fail := c.ExportTeamCost("o1", "30d", "client")
+	if fail != nil {
+		t.Fatal(fail.Error)
 	}
 	if csv != "client,spend_usd\nAcme,12.5\n" {
 		t.Errorf("csv = %q", csv)
@@ -92,9 +92,16 @@ func TestExportTeamCost(t *testing.T) {
 
 func TestExportTeamCostError(t *testing.T) {
 	c, _ := newTeamTestClient(t, 403, `{"detail":"upgrade"}`)
-	_, err := c.ExportTeamCost("o1", "30d", "repo")
-	he, ok := err.(*HTTPError)
-	if !ok || he.StatusCode != 403 {
-		t.Fatalf("err = %v", err)
+	_, fail := c.ExportTeamCost("o1", "30d", "repo")
+	if fail == nil || fail.StatusCode != 403 || fail.Data["detail"] != "upgrade" {
+		t.Fatalf("fail = %+v", fail)
+	}
+}
+
+func TestGetEncodesQuery(t *testing.T) {
+	c, rec := newTeamTestClient(t, 200, `{}`)
+	c.GetTeamCost("o1", "7d&x=1#frag")
+	if rec.Query != "period=7d%26x%3D1%23frag" {
+		t.Errorf("query = %q", rec.Query)
 	}
 }

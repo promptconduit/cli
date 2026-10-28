@@ -59,6 +59,9 @@ Examples:
   promptconduit team budgets set --repo acme/api --monthly 500
   promptconduit team tag acme/api "Acme Corp"     # attribute a repo's spend to a client
   promptconduit team export --by member -o spend.csv`,
+	// NoArgs makes a mistyped subcommand ("team spnd") an error instead of
+	// silently running the team list.
+	Args: cobra.NoArgs,
 	RunE: runTeamList,
 }
 
@@ -120,6 +123,7 @@ var teamExportCmd = &cobra.Command{
 var teamBudgetsCmd = &cobra.Command{
 	Use:   "budgets",
 	Short: "List monthly budgets with month-to-date and projected spend",
+	Args:  cobra.NoArgs,
 	RunE:  runTeamBudgets,
 }
 
@@ -249,11 +253,11 @@ func listTeamOrgs(c *client.Client) ([]teamOrgInfo, error) {
 			continue
 		}
 		orgs = append(orgs, teamOrgInfo{
-			ID:   str(m["id"]),
-			Name: str(m["name"]),
-			Slug: str(m["slug"]),
-			Role: str(m["role"]),
-			Plan: str(m["plan"]),
+			ID:   jsonStr(m["id"]),
+			Name: jsonStr(m["name"]),
+			Slug: jsonStr(m["slug"]),
+			Role: jsonStr(m["role"]),
+			Plan: jsonStr(m["plan"]),
 		})
 	}
 	return orgs, nil
@@ -365,9 +369,9 @@ func runTeamCreate(cmd *cobra.Command, args []string) error {
 		return outputJSON(resp.Data)
 	}
 	org, _ := resp.Data["organization"].(map[string]interface{})
-	fmt.Printf("Created %s (%s). You're the owner.\n", str(org["name"]), str(org["slug"]))
-	if n := num(resp.Data["attachedEvents"]); n > 0 {
-		fmt.Printf("Added %s of your recent events to the team.\n", count(n))
+	fmt.Printf("Created %s (%s). You're the owner.\n", jsonStr(org["name"]), jsonStr(org["slug"]))
+	if n := jsonNum(resp.Data["attachedEvents"]); n > 0 {
+		fmt.Printf("Added %s of your recent events to the team.\n", fmtCount(n))
 	}
 	fmt.Println("Invite people: promptconduit team invite <email>")
 	return nil
@@ -390,17 +394,20 @@ func runTeamInvite(cmd *cobra.Command, args []string) error {
 		return outputJSON(withOrg(resp.Data, org))
 	}
 	inv, _ := resp.Data["invite"].(map[string]interface{})
-	fmt.Printf("Invited %s to %s as %s.\n", str(inv["email"]), org.Name, str(inv["role"]))
-	fmt.Printf("Send them this link: %s\n", str(inv["inviteUrl"]))
+	fmt.Printf("Invited %s to %s as %s.\n", jsonStr(inv["email"]), org.Name, jsonStr(inv["role"]))
+	fmt.Printf("Send them this link: %s\n", jsonStr(inv["inviteUrl"]))
 	fmt.Println("They can also accept from their terminal: promptconduit team join <link>")
 	return nil
 }
 
 // inviteToken accepts a full invite link (…/invite/<token>) or a bare token.
+// Any other URL yields "" rather than a garbage token.
 func inviteToken(arg string) string {
 	arg = strings.TrimSpace(arg)
 	if i := strings.LastIndex(arg, "/invite/"); i >= 0 {
 		arg = arg[i+len("/invite/"):]
+	} else if strings.Contains(arg, "://") {
+		return ""
 	}
 	if i := strings.IndexAny(arg, "?#/"); i >= 0 {
 		arg = arg[:i]
@@ -411,7 +418,7 @@ func inviteToken(arg string) string {
 func runTeamJoin(cmd *cobra.Command, args []string) error {
 	token := inviteToken(args[0])
 	if token == "" {
-		return fmt.Errorf("pass an invite link or token")
+		return fmt.Errorf("%q is not an invite link (…/invite/<token>) or token", args[0])
 	}
 	c, err := newTeamClient()
 	if err != nil {
@@ -421,20 +428,32 @@ func runTeamJoin(cmd *cobra.Command, args []string) error {
 	if !resp.Success {
 		return teamAPIError("failed to join team", resp)
 	}
-	org, _ := resp.Data["organization"].(map[string]interface{})
+	data := resp.Data
+	if data == nil {
+		data = map[string]interface{}{}
+	}
+	org, _ := data["organization"].(map[string]interface{})
+
+	// The join already happened, so a failed history share is a warning, not
+	// a failure: retrying the join would only hit "invite already accepted".
+	shareErr := ""
 	if joinShare {
-		share := c.AttachHistory(str(org["id"]))
-		if !share.Success {
-			return teamAPIError("joined, but failed to share history", share)
+		if share := c.AttachHistory(jsonStr(org["id"])); share.Success {
+			data["attachedEvents"] = share.Data["attachedEvents"]
+		} else {
+			shareErr = teamAPIError("sharing history failed", share).Error()
+			data["shareHistoryError"] = shareErr
 		}
-		resp.Data["attachedEvents"] = share.Data["attachedEvents"]
 	}
 	if teamJSON {
-		return outputJSON(resp.Data)
+		return outputJSON(data)
 	}
-	fmt.Printf("Joined %s.\n", str(org["name"]))
-	if joinShare {
-		fmt.Printf("Shared %s of your recent events with the team.\n", count(num(resp.Data["attachedEvents"])))
+	fmt.Printf("Joined %s.\n", orUnknown(jsonStr(org["name"]), "the team"))
+	switch {
+	case shareErr != "":
+		_, _ = fmt.Fprintf(os.Stderr, "Warning: %s. Your earlier usage stays private.\n", shareErr)
+	case joinShare:
+		fmt.Printf("Shared %s of your recent events with the team.\n", fmtCount(jsonNum(data["attachedEvents"])))
 	}
 	return nil
 }
@@ -482,12 +501,12 @@ func writeTeamSpend(out io.Writer, org teamOrgInfo, data map[string]interface{},
 	totals, _ := data["totals"].(map[string]interface{})
 	cache, _ := data["cache"].(map[string]interface{})
 
-	_, _ = fmt.Fprintf(out, "%s · last %s\n\n", org.Name, str(data["period"]))
-	_, _ = fmt.Fprintf(out, "  Spend        %s\n", usd(num(totals["usd"])))
+	_, _ = fmt.Fprintf(out, "%s · last %s\n\n", org.Name, jsonStr(data["period"]))
+	_, _ = fmt.Fprintf(out, "  Spend        %s\n", fmtUSD(jsonNum(totals["usd"])))
 	_, _ = fmt.Fprintf(out, "  Activity     %s runs · %s sessions · %s members\n",
-		count(num(totals["runs"])), count(num(totals["sessions"])), count(num(totals["members"])))
-	if s := num(cache["savingsUsd"]); s > 0 {
-		_, _ = fmt.Fprintf(out, "  Cache saved  %s (%.0f%% hit rate)\n", usd(s), num(cache["hitRate"])*100)
+		fmtCount(jsonNum(totals["runs"])), fmtCount(jsonNum(totals["sessions"])), fmtCount(jsonNum(totals["members"])))
+	if s := jsonNum(cache["savingsUsd"]); s > 0 {
+		_, _ = fmt.Fprintf(out, "  Cache saved  %s (%.0f%% hit rate)\n", fmtUSD(s), jsonNum(cache["hitRate"])*100)
 	}
 
 	sections := []string{"member", "repo", "model"}
@@ -496,6 +515,10 @@ func writeTeamSpend(out io.Writer, org teamOrgInfo, data map[string]interface{},
 	}
 	for _, s := range sections {
 		rows, _ := data[spendBreakdowns[s]].([]interface{})
+		if s == "day" {
+			// byDay comes oldest first; the recent days are what --limit should keep.
+			rows = reversed(rows)
+		}
 		_, _ = fmt.Fprintf(out, "\nBy %s\n", s)
 		if len(rows) == 0 {
 			_, _ = fmt.Fprintln(out, "  (no spend)")
@@ -509,7 +532,7 @@ func writeTeamSpend(out io.Writer, org teamOrgInfo, data map[string]interface{},
 			}
 			m, _ := r.(map[string]interface{})
 			label, detail := spendRowLabel(s, m)
-			_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", label, usd(num(m["usd"])), detail)
+			_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\n", label, fmtUSD(jsonNum(m["usd"])), detail)
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -520,32 +543,32 @@ func writeTeamSpend(out io.Writer, org teamOrgInfo, data map[string]interface{},
 
 // spendRowLabel names a breakdown row and summarizes its counts.
 func spendRowLabel(by string, m map[string]interface{}) (string, string) {
-	sessions := plural(num(m["sessions"]), "session")
+	sessions := fmtPlural(jsonNum(m["sessions"]), "session")
 	switch by {
 	case "member":
-		name := str(m["name"])
+		name := jsonStr(m["name"])
 		if name == "" {
-			name = str(m["email"])
-		} else if e := str(m["email"]); e != "" {
+			name = jsonStr(m["email"])
+		} else if e := jsonStr(m["email"]); e != "" {
 			name += " <" + e + ">"
 		}
 		return name, sessions
 	case "repo":
-		label := orUnknown(str(m["repoName"]), "(no repo)")
-		if cl := str(m["client"]); cl != "" {
+		label := orUnknown(jsonStr(m["repoName"]), "(no repo)")
+		if cl := jsonStr(m["client"]); cl != "" {
 			label += " [" + cl + "]"
 		}
 		return label, sessions
 	case "client":
-		return orUnknown(str(m["client"]), "(untagged)"), plural(num(m["repos"]), "repo") + " · " + sessions
+		return orUnknown(jsonStr(m["client"]), "(untagged)"), fmtPlural(jsonNum(m["repos"]), "repo") + " · " + sessions
 	case "model":
-		return orUnknown(str(m["model"]), "(unknown)"), plural(num(m["runs"]), "run")
+		return orUnknown(jsonStr(m["model"]), "(unknown)"), fmtPlural(jsonNum(m["runs"]), "run")
 	case "branch":
-		return str(m["repoName"]) + "@" + str(m["branch"]), sessions
+		return jsonStr(m["repoName"]) + "@" + jsonStr(m["branch"]), sessions
 	case "pr":
-		return fmt.Sprintf("%s#%s", str(m["repoName"]), str(m["prNumber"])), sessions
+		return fmt.Sprintf("%s#%s", jsonStr(m["repoName"]), jsonStr(m["prNumber"])), sessions
 	default: // day
-		return str(m["day"]), ""
+		return jsonStr(m["day"]), ""
 	}
 }
 
@@ -580,28 +603,28 @@ func writeTeamSavings(out io.Writer, org teamOrgInfo, data map[string]interface{
 	runaway, _ := data["runaway"].(map[string]interface{})
 	opp, _ := data["opportunity"].(map[string]interface{})
 
-	_, _ = fmt.Fprintf(out, "%s savings · last %s\n\n", org.Name, str(data["period"]))
-	_, _ = fmt.Fprintf(out, "  Spend            %s  (≈ %s/month)\n", usd(num(spend["usd"])), usd(num(spend["monthlyUsd"])))
-	_, _ = fmt.Fprintf(out, "  Cache saved      %s  (≈ %s/month)\n", usd(num(cache["savingsUsd"])), usd(num(cache["monthlyUsd"])))
+	_, _ = fmt.Fprintf(out, "%s savings · last %s\n\n", org.Name, jsonStr(data["period"]))
+	_, _ = fmt.Fprintf(out, "  Spend            %s  (≈ %s/month)\n", fmtUSD(jsonNum(spend["usd"])), fmtUSD(jsonNum(spend["monthlyUsd"])))
+	_, _ = fmt.Fprintf(out, "  Cache saved      %s  (≈ %s/month)\n", fmtUSD(jsonNum(cache["savingsUsd"])), fmtUSD(jsonNum(cache["monthlyUsd"])))
 	_, _ = fmt.Fprintf(out, "  Model mix        %s/month if %s light premium-model turns ran on Sonnet\n",
-		usd(num(mix["monthlyUsd"])), count(num(mix["turns"])))
+		fmtUSD(jsonNum(mix["monthlyUsd"])), fmtCount(jsonNum(mix["turns"])))
 	_, _ = fmt.Fprintf(out, "  Runaway sessions %s costing %s (≥ %s each, typical %s)\n",
-		count(num(runaway["count"])), usd(num(runaway["usd"])), usd(num(runaway["thresholdUsd"])), usd(num(runaway["typicalSessionUsd"])))
+		fmtCount(jsonNum(runaway["count"])), fmtUSD(jsonNum(runaway["usd"])), fmtUSD(jsonNum(runaway["thresholdUsd"])), fmtUSD(jsonNum(runaway["typicalSessionUsd"])))
 
 	if top, _ := runaway["top"].([]interface{}); len(top) > 0 {
 		_, _ = fmt.Fprintln(out)
 		w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 		for _, r := range top {
 			m, _ := r.(map[string]interface{})
-			who := str(m["name"])
+			who := jsonStr(m["name"])
 			if who == "" {
-				who = str(m["email"])
+				who = jsonStr(m["email"])
 			}
-			_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", usd(num(m["usd"])), who, orUnknown(str(m["repoName"]), "(no repo)"), str(m["sessionId"]))
+			_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\n", fmtUSD(jsonNum(m["usd"])), who, orUnknown(jsonStr(m["repoName"]), "(no repo)"), jsonStr(m["sessionId"]))
 		}
 		_ = w.Flush()
 	}
-	_, _ = fmt.Fprintf(out, "\n  Opportunity      %s/month\n", usd(num(opp["monthlyUsd"])))
+	_, _ = fmt.Fprintf(out, "\n  Opportunity      %s/month\n", fmtUSD(jsonNum(opp["monthlyUsd"])))
 }
 
 // ============================================================================
@@ -617,9 +640,9 @@ func runTeamExport(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	csv, err := c.ExportTeamCost(org.ID, teamPeriod, exportBy)
-	if err != nil {
-		return fmt.Errorf("failed to export team spend: %w", err)
+	csv, fail := c.ExportTeamCost(org.ID, teamPeriod, exportBy)
+	if fail != nil {
+		return teamAPIError("failed to export team spend", fail)
 	}
 	if teamOutput == "" {
 		_, err = fmt.Fprint(os.Stdout, csv)
@@ -675,9 +698,9 @@ func writeBudgets(out io.Writer, org teamOrgInfo, data map[string]interface{}) e
 	for _, b := range budgets {
 		m, _ := b.(map[string]interface{})
 		_, _ = fmt.Fprintf(w, "  %s\t%s\t%s\t%s\t%.0f%%\t%s\t%s\n",
-			str(m["scope"]), orUnknown(str(m["label"]), str(m["scopeValue"])),
-			usd(num(m["spendUsd"])), usd(num(m["monthlyUsd"])), num(m["pct"]),
-			usd(num(m["projectedUsd"])), str(m["id"]))
+			jsonStr(m["scope"]), orUnknown(jsonStr(m["label"]), jsonStr(m["scopeValue"])),
+			fmtUSD(jsonNum(m["spendUsd"])), fmtUSD(jsonNum(m["monthlyUsd"])), jsonNum(m["pct"]),
+			fmtUSD(jsonNum(m["projectedUsd"])), jsonStr(m["id"]))
 	}
 	return w.Flush()
 }
@@ -742,8 +765,8 @@ func memberUserID(c *client.Client, org teamOrgInfo, who string) (string, error)
 	for _, r := range members {
 		m, _ := r.(map[string]interface{})
 		u, _ := m["user"].(map[string]interface{})
-		if strings.EqualFold(str(u["email"]), who) || str(u["id"]) == who {
-			return str(u["id"]), nil
+		if strings.EqualFold(jsonStr(u["email"]), who) || jsonStr(u["id"]) == who {
+			return jsonStr(u["id"]), nil
 		}
 	}
 	return "", fmt.Errorf("%s is not a member of %s", who, org.Name)
@@ -808,7 +831,7 @@ func runTeamTag(cmd *cobra.Command, args []string) error {
 // Formatting helpers
 // ============================================================================
 
-func str(v interface{}) string {
+func jsonStr(v interface{}) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
@@ -824,7 +847,7 @@ func str(v interface{}) string {
 	}
 }
 
-func num(v interface{}) float64 {
+func jsonNum(v interface{}) float64 {
 	f, _ := v.(float64)
 	return f
 }
@@ -837,7 +860,7 @@ func orUnknown(s, fallback string) string {
 }
 
 // usd formats dollars with thousands separators: 12345.6 → $12,345.60.
-func usd(v float64) string {
+func fmtUSD(v float64) string {
 	sign := ""
 	if v < 0 {
 		sign, v = "-", -v
@@ -847,18 +870,29 @@ func usd(v float64) string {
 }
 
 // count formats a whole number with thousands separators.
-func count(v float64) string {
+func fmtCount(v float64) string {
 	return groupThousands(int64(math.Round(v)))
 }
 
-func plural(v float64, noun string) string {
+func fmtPlural(v float64, noun string) string {
 	if math.Round(v) == 1 {
 		return "1 " + noun
 	}
-	return count(v) + " " + noun + "s"
+	return fmtCount(v) + " " + noun + "s"
+}
+
+func reversed(rows []interface{}) []interface{} {
+	out := make([]interface{}, len(rows))
+	for i, r := range rows {
+		out[len(rows)-1-i] = r
+	}
+	return out
 }
 
 func groupThousands(n int64) string {
+	if n < 0 {
+		return "-" + groupThousands(-n)
+	}
 	s := fmt.Sprintf("%d", n)
 	if len(s) <= 3 {
 		return s

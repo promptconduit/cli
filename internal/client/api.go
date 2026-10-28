@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -587,55 +588,7 @@ func (c *Client) attemptEventSendCtx(parent context.Context, envJSON []byte) (st
 
 // sendRequest performs an HTTP request to the API
 func (c *Client) sendRequest(path string, payload interface{}) *APIResponse {
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to marshal payload: %v", err),
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+path, bytes.NewReader(jsonData))
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to create request: %v", err),
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("request failed: %v", err),
-		}
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	result := &APIResponse{
-		StatusCode: resp.StatusCode,
-		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,
-	}
-
-	if len(body) > 0 {
-		var data map[string]interface{}
-		if err := json.Unmarshal(body, &data); err == nil {
-			result.Data = data
-		}
-	}
-
-	if !result.Success {
-		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return result
+	return c.jsonRequest("POST", path, payload)
 }
 
 // setHeaders sets common HTTP headers
@@ -955,16 +908,16 @@ func (c *Client) Get(path string, query map[string]string) *APIResponse {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	url := c.config.APIURL + path
+	reqURL := c.config.APIURL + path
 	if len(query) > 0 {
-		params := make([]string, 0, len(query))
+		params := neturl.Values{}
 		for k, v := range query {
-			params = append(params, k+"="+v)
+			params.Set(k, v)
 		}
-		url += "?" + strings.Join(params, "&")
+		reqURL += "?" + params.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return &APIResponse{
 			Success: false,

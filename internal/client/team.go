@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -91,39 +92,36 @@ func (c *Client) SetRepoClient(orgID, repoName, clientName string) *APIResponse 
 }
 
 // ExportTeamCost returns team spend as CSV, grouped by client|repo|member|pr|day.
-func (c *Client) ExportTeamCost(orgID, period, by string) (string, error) {
+// On failure the CSV is empty and the APIResponse carries the error (with the
+// problem body parsed into Data, like every other call); it is nil on success.
+func (c *Client) ExportTeamCost(orgID, period, by string) (string, *APIResponse) {
+	fail := func(msg string) (string, *APIResponse) {
+		return "", &APIResponse{Success: false, Error: msg}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
 	q := url.Values{"period": {period}, "by": {by}}
 	req, err := http.NewRequestWithContext(ctx, "GET", c.config.APIURL+orgPath(orgID, "/analytics/export")+"?"+q.Encode(), nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
+		return fail(fmt.Sprintf("failed to create request: %v", err))
 	}
 	c.setHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return fail(fmt.Sprintf("request failed: %v", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
+		return fail(fmt.Sprintf("failed to read response: %v", err))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", &HTTPError{StatusCode: resp.StatusCode, Body: string(body)}
+		res := &APIResponse{StatusCode: resp.StatusCode, Error: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))}
+		_ = json.Unmarshal(body, &res.Data)
+		return "", res
 	}
 	return string(body), nil
-}
-
-// HTTPError is a non-2xx reply whose body could not be parsed into an APIResponse.
-type HTTPError struct {
-	StatusCode int
-	Body       string
-}
-
-func (e *HTTPError) Error() string {
-	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Body)
 }
