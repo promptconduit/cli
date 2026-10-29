@@ -109,7 +109,7 @@ func teamData(action string, resp *client.APIResponse, o teamOrgInfo) (interface
 // ============================================================================
 
 func mcpTools() []*mcp.Tool {
-	return []*mcp.Tool{
+	return append([]*mcp.Tool{
 		// ---- local, Free tier ----
 		{
 			Name:  "session_cost",
@@ -281,7 +281,7 @@ func mcpTools() []*mcp.Tool {
 			Annotations: teamWrite("Join a team", false, false),
 			Handler:     toolTeamJoin,
 		},
-	}
+	}, adminMCPTools()...)
 }
 
 // ---- local handlers ----
