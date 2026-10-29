@@ -431,6 +431,27 @@ func TestWriteMCPStatusOnlySuggestsToolsWithHooks(t *testing.T) {
 	}
 }
 
+func TestBuildMCPStatusJSON(t *testing.T) {
+	home := isolatedHome(t)
+	cursor, _ := mcpTargetFor("cursor")
+	writeFile(t, cursor.hooksFile(home), `{"hooks":{"stop":[{"command":"/x/promptconduit hook"}]}}`)
+
+	r := buildMCPStatus(home, mcpState{})
+	if len(r.Tools) != len(mcpTargets) || len(r.Suggest) != 1 || r.Suggest[0] != "cursor" {
+		t.Fatalf("report = %+v", r)
+	}
+	data, _ := json.Marshal(r)
+	if !strings.Contains(string(data), `{"tool":"cursor","label":"Cursor","registered":false,"hooks_installed":true,"turned_off":false}`) {
+		t.Errorf("json shape changed: %s", data)
+	}
+
+	writeFile(t, cursor.configFile(home), `{"mcpServers":{"promptconduit":{"command":"/x/promptconduit","args":["mcp"]}}}`)
+	r = buildMCPStatus(home, mcpState{})
+	if r.Suggest == nil || len(r.Suggest) != 0 {
+		t.Errorf("registered → no suggestion (and [] not null), got %#v", r.Suggest)
+	}
+}
+
 func TestMCPInstallToolsSelection(t *testing.T) {
 	home := isolatedHome(t)
 	all, _ := mcpInstallTools(nil, home)
