@@ -44,7 +44,7 @@ var mcpInstallCmd = &cobra.Command{
 
 var mcpUninstallCmd = &cobra.Command{
 	Use:          "uninstall [tool...]",
-	Short:        "Remove the MCP server registration (and don't re-add it on upgrade)",
+	Short:        "Remove the MCP server registration and don't re-add it after upgrades",
 	SilenceUsage: true,
 	RunE:         runMCPUninstall,
 }
@@ -141,10 +141,10 @@ func runMCPInstall(cmd *cobra.Command, args []string) error {
 			}
 			continue
 		}
+		setToolOptOut(t.Tool, false)
 		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "✓ Registered the PromptConduit MCP server with %s\n", t.Label)
 	}
 	if len(failed) < len(targets) {
-		_ = saveMCPState(mcpState{Disabled: false})
 		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "  Start a new agent session to pick it up.")
 	}
 	if len(failed) > 0 {
@@ -158,14 +158,20 @@ func runMCPUninstall(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Uninstalling is an opt-out: the post-upgrade reconcile won't re-add it,
+	// for the named tools or (with no args) anywhere.
 	targets := mcpTargets
 	if len(args) > 0 {
 		if targets, err = mcpInstallTools(args, home); err != nil {
 			return err
 		}
+		for _, t := range targets {
+			setToolOptOut(t.Tool, true)
+		}
 	} else {
-		// Removing everywhere is an opt-out; don't re-add after upgrades.
-		_ = saveMCPState(mcpState{Disabled: true})
+		s := loadMCPState()
+		s.Disabled = true
+		_ = saveMCPState(s)
 	}
 	for _, t := range targets {
 		removed, err := t.unregister(home)

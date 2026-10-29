@@ -169,7 +169,7 @@ func (sm *StateManager) Save() error {
 	if err != nil {
 		return err
 	}
-	if err := writeFileAtomic(sm.statePath, data, 0644); err != nil {
+	if err := WriteFileAtomic(sm.statePath, data, 0644); err != nil {
 		return err
 	}
 	sm.state = merged
@@ -177,10 +177,10 @@ func (sm *StateManager) Save() error {
 	return nil
 }
 
-// writeFileAtomic writes data to a temp file in path's directory and renames
+// WriteFileAtomic writes data to a temp file in path's directory and renames
 // it over path, so readers see either the old or the new content, never a mix.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".sync_state-*")
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}

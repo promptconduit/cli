@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testServer() *Server {
@@ -200,6 +202,25 @@ func TestProtocolErrors(t *testing.T) {
 	}
 	if errCode(got["9"]) != codeMethodNotFound || errCode(got["10"]) != codeInvalidRequest {
 		t.Errorf("method/version = %v / %v", got["9"], got["10"])
+	}
+}
+
+// A host stopping the server with SIGTERM cancels ctx while Serve is blocked
+// reading stdin; Serve must return instead of hanging until SIGKILL.
+func TestServeReturnsOnCancelWhileBlocked(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- testServer().Serve(ctx, pr, io.Discard) }()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after cancel")
 	}
 }
 

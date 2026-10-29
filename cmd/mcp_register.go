@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	intsync "github.com/promptconduit/cli/internal/sync"
 )
 
 // Registering `promptconduit mcp` with the agents that speak MCP, so the
@@ -92,31 +93,55 @@ var errNoClaudeCLI = errors.New("the `claude` command isn't on your PATH")
 
 // claudeMCPAddCommand is the manual fallback when `claude` isn't on PATH.
 func claudeMCPAddCommand(exe string) string {
-	return fmt.Sprintf("claude mcp add --scope user %s -- %s mcp", mcpServerName, exe)
+	return fmt.Sprintf("claude mcp add --scope user %s -- %s mcp", mcpServerName, shellQuote(exe))
+}
+
+// entry returns our server entry from the target's config, if any.
+func (t mcpTarget) entry(home string) (map[string]interface{}, bool) {
+	servers, _, err := readMCPServers(t.configFile(home))
+	if err != nil {
+		return nil, false
+	}
+	e, ok := servers[mcpServerName].(map[string]interface{})
+	return e, ok
 }
 
 // registered reports whether our server entry exists in the target's config.
 func (t mcpTarget) registered(home string) bool {
-	servers, _, err := readMCPServers(t.configFile(home))
-	if err != nil {
-		return false
-	}
-	_, ok := servers[mcpServerName]
+	_, ok := t.entry(home)
 	return ok
 }
 
-// hooksInstalled reports whether `promptconduit install <tool>` ran here.
+// upToDate reports whether our entry already runs `<exe> mcp`.
+func (t mcpTarget) upToDate(home, exe string) bool {
+	e, ok := t.entry(home)
+	if !ok || e["command"] != exe {
+		return false
+	}
+	args, _ := e["args"].([]interface{})
+	return len(args) == 1 && args[0] == "mcp"
+}
+
+// hooksInstalled reports whether `promptconduit install <tool>` ran here:
+// install writes hook commands of the form "<abs path>/promptconduit hook".
 func (t mcpTarget) hooksInstalled(home string) bool {
 	data, err := os.ReadFile(t.hooksFile(home))
-	return err == nil && bytes.Contains(data, []byte("promptconduit")) && bytes.Contains(data, []byte(" hook"))
+	return err == nil &&
+		(bytes.Contains(data, []byte("promptconduit hook")) || bytes.Contains(data, []byte("promptconduit.exe hook")))
 }
 
 // register adds (or refreshes) our server entry pointing at exe.
 func (t mcpTarget) register(home, exe string) error {
+	if t.upToDate(home, exe) {
+		return nil
+	}
 	if t.viaClaudeCLI {
-		// Remove first so a moved binary path is refreshed; a missing entry
-		// makes remove fail, which is fine.
-		_ = runClaudeCLI("mcp", "remove", "--scope", "user", mcpServerName)
+		// `claude mcp add` refuses an existing name, so a stale entry (the
+		// binary moved) is removed first. Only then: a working entry is never
+		// removed by a re-install.
+		if t.registered(home) {
+			_ = runClaudeCLI("mcp", "remove", "--scope", "user", mcpServerName)
+		}
 		return runClaudeCLI("mcp", "add", "--scope", "user", mcpServerName, "--", exe, "mcp")
 	}
 	path := t.configFile(home)
@@ -189,17 +214,61 @@ func updateMCPServers(path string, edit func(map[string]interface{}) bool) error
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	// Atomic: the agent may read its config while we write; a crash or a
+	// concurrent read must never see a truncated file with the user's other
+	// servers and settings gone.
+	return intsync.WriteFileAtomic(path, append(data, '\n'), fileMode(path, 0o644))
+}
+
+// fileMode keeps an existing file's permissions.
+func fileMode(path string, fallback os.FileMode) os.FileMode {
+	if st, err := os.Stat(path); err == nil {
+		return st.Mode().Perm()
+	}
+	return fallback
 }
 
 // ============================================================================
 // Opt-out state
 // ============================================================================
 
-// mcpState remembers an explicit opt-out (`mcp uninstall`, `install --no-mcp`)
-// so the post-upgrade reconcile doesn't add the server back.
+// mcpState remembers explicit opt-outs (`mcp uninstall`, `install --no-mcp`)
+// so the post-upgrade reconcile doesn't add the server back: Disabled for
+// everywhere, DisabledTools per tool.
 type mcpState struct {
-	Disabled bool `json:"disabled"`
+	Disabled      bool     `json:"disabled"`
+	DisabledTools []string `json:"disabled_tools,omitempty"`
+}
+
+func (s mcpState) disabledFor(tool string) bool {
+	if s.Disabled {
+		return true
+	}
+	for _, t := range s.DisabledTools {
+		if t == tool {
+			return true
+		}
+	}
+	return false
+}
+
+// setToolOptOut records (or clears) a per-tool opt-out. Clearing one also
+// lifts a global opt-out, since the user just asked for MCP on that tool.
+func setToolOptOut(tool string, out bool) {
+	s := loadMCPState()
+	kept := s.DisabledTools[:0]
+	for _, t := range s.DisabledTools {
+		if t != tool {
+			kept = append(kept, t)
+		}
+	}
+	s.DisabledTools = kept
+	if out {
+		s.DisabledTools = append(s.DisabledTools, tool)
+	} else {
+		s.Disabled = false
+	}
+	_ = saveMCPState(s)
 }
 
 func mcpStatePath() string { return filepath.Join(client.ConfigDir(), "mcp.json") }
@@ -235,12 +304,16 @@ func registerMCPForInstall(tool, exe string, skip bool) {
 	if !ok {
 		return
 	}
-	if skip {
-		_ = saveMCPState(mcpState{Disabled: true})
-		return
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		return
+	}
+	if skip {
+		// --no-mcp is for this tool only: record it and drop an existing entry.
+		setToolOptOut(tool, true)
+		if removed, err := t.unregister(home); err == nil && removed {
+			fmt.Printf("✓ Removed the PromptConduit MCP server from %s (--no-mcp)\n\n", t.Label)
+		}
 		return
 	}
 	if err := t.register(home, exe); err != nil {
@@ -251,7 +324,7 @@ func registerMCPForInstall(tool, exe string, skip bool) {
 		fmt.Println()
 		return
 	}
-	_ = saveMCPState(mcpState{Disabled: false})
+	setToolOptOut(tool, false)
 	fmt.Printf("✓ Registered the PromptConduit MCP server with %s\n", t.Label)
 	fmt.Println("  Ask your agent \"what has this session cost?\" or \"how is the team tracking against budget?\"")
 	if t.Tool == "cursor" {
@@ -283,7 +356,8 @@ func unregisterMCPForUninstall(tool string) {
 // before the MCP server existed, so register it for every tool whose hooks
 // are installed — unless they opted out. Quiet unless it changed something.
 func reconcileMCP(notice func(format string, args ...interface{})) {
-	if loadMCPState().Disabled {
+	state := loadMCPState()
+	if state.Disabled {
 		return
 	}
 	home, err := os.UserHomeDir()
@@ -298,7 +372,7 @@ func reconcileMCP(notice func(format string, args ...interface{})) {
 		return
 	}
 	for _, t := range mcpTargets {
-		if !t.hooksInstalled(home) || t.registered(home) {
+		if state.disabledFor(t.Tool) || !t.hooksInstalled(home) || t.registered(home) {
 			continue
 		}
 		if err := t.register(home, exe); err != nil {

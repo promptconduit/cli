@@ -279,14 +279,24 @@ func TestMCPRegisterClaudeCodeUsesCLI(t *testing.T) {
 	if err := cc.register(home, "/bin/pc"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*calls) != 2 || strings.Join((*calls)[1], " ") != "mcp add --scope user promptconduit -- /bin/pc mcp" {
+	// Not registered yet: just add, no remove.
+	if len(*calls) != 1 || strings.Join((*calls)[0], " ") != "mcp add --scope user promptconduit -- /bin/pc mcp" {
 		t.Errorf("claude calls = %v", *calls)
 	}
 	if _, err := os.Stat(cc.configFile(home)); err == nil {
 		t.Error("~/.claude.json must not be written directly")
 	}
 
-	writeFile(t, cc.configFile(home), `{"mcpServers":{"promptconduit":{"command":"/bin/pc"}}}`)
+	// Up to date: a re-install touches nothing, so a working entry is never removed.
+	writeFile(t, cc.configFile(home), `{"mcpServers":{"promptconduit":{"type":"stdio","command":"/bin/pc","args":["mcp"]}}}`)
+	*calls = nil
+	if err := cc.register(home, "/bin/pc"); err != nil || len(*calls) != 0 {
+		t.Errorf("up-to-date register ran %v (%v)", *calls, err)
+	}
+	// Stale (binary moved): remove, then add.
+	if err := cc.register(home, "/new/pc"); err != nil || len(*calls) != 2 || (*calls)[0][1] != "remove" {
+		t.Errorf("stale register ran %v (%v)", *calls, err)
+	}
 	if !cc.registered(home) {
 		t.Error("registered should read ~/.claude.json")
 	}
@@ -326,6 +336,68 @@ func TestReconcileMCPRegistersWhereHooksAreInstalled(t *testing.T) {
 	reconcileMCP(notice)
 	if cursor.registered(home) {
 		t.Error("reconcile ignored the opt-out")
+	}
+}
+
+func TestPerToolOptOut(t *testing.T) {
+	home := isolatedHome(t)
+	fakeClaudeCLI(t)
+	cursor, _ := mcpTargetFor("cursor")
+	gemini, _ := mcpTargetFor("gemini-cli")
+	writeFile(t, cursor.hooksFile(home), `{"hooks":{"stop":[{"command":"/x/promptconduit hook"}]}}`)
+	writeFile(t, gemini.hooksFile(home), `{"hooks":{"Stop":[{"command":"/x/promptconduit hook"}]}}`)
+	if err := cursor.register(home, "/x/promptconduit"); err != nil {
+		t.Fatal(err)
+	}
+
+	// install cursor --no-mcp: removes Cursor's entry and opts out only Cursor.
+	registerMCPForInstall("cursor", "/x/promptconduit", true)
+	if cursor.registered(home) {
+		t.Error("--no-mcp left the existing entry")
+	}
+	reconcileMCP(func(string, ...interface{}) {})
+	if cursor.registered(home) || !gemini.registered(home) {
+		t.Errorf("reconcile: cursor=%v (want false) gemini=%v (want true)", cursor.registered(home), gemini.registered(home))
+	}
+
+	// Registering again lifts the opt-out.
+	registerMCPForInstall("cursor", "/x/promptconduit", false)
+	if s := loadMCPState(); s.disabledFor("cursor") {
+		t.Errorf("state after re-register = %+v", s)
+	}
+}
+
+func TestHooksInstalledIsPrecise(t *testing.T) {
+	home := isolatedHome(t)
+	cc, _ := mcpTargetFor("claude-code")
+	writeFile(t, cc.hooksFile(home), `{"permissions":{"allow":["Bash(promptconduit status)"]},"hooks":{"Stop":[{"command":"other hook"}]}}`)
+	if cc.hooksInstalled(home) {
+		t.Error("unrelated mentions counted as installed hooks")
+	}
+	writeFile(t, cc.hooksFile(home), `{"hooks":{"Stop":[{"command":"/usr/local/bin/promptconduit hook"}]}}`)
+	if !cc.hooksInstalled(home) {
+		t.Error("real hook not detected")
+	}
+}
+
+func TestClaudeMCPAddCommandQuotesPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"/usr/local/bin/promptconduit": "/usr/local/bin/promptconduit",
+		"/Users/x/App Support/pc":      "'/Users/x/App Support/pc'",
+		"/tmp/it's":                    `'/tmp/it'\''s'`,
+	} {
+		if got := claudeMCPAddCommand(in); got != "claude mcp add --scope user promptconduit -- "+want+" mcp" {
+			t.Errorf("claudeMCPAddCommand(%q) = %q", in, got)
+		}
+	}
+}
+
+func TestMCPTeamSpendRejectsBadLimit(t *testing.T) {
+	isolatedHome(t)
+	for _, args := range []string{`{"limit":-1}`, `{"limit":501}`} {
+		if r := callTool(t, "team_spend", args); r["isError"] != true || !strings.Contains(toolText(r), "limit") {
+			t.Errorf("%s: %v", args, r)
+		}
 	}
 }
 

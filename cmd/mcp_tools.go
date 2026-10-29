@@ -116,7 +116,7 @@ func mcpTools() []*mcp.Tool {
 			Description: "What the newest AI coding session in a workspace has cost so far: total USD, tokens, and a per-model breakdown, " +
 				"priced locally from Claude Code transcripts and Cursor hook data. No account needed; nothing leaves the machine.",
 			InputSchema: objectSchema(schemaProps{
-				"cwd": strProp("Workspace directory (default: the directory the agent is running in)."),
+				"cwd": strProp("Absolute workspace directory. Default: the directory the agent runs in, falling back to the newest session on the machine."),
 			}),
 			Annotations: readOnly("Current session cost"),
 			Handler:     toolSessionCost,
@@ -291,19 +291,39 @@ func toolSessionCost(_ context.Context, raw json.RawMessage) (interface{}, error
 	if err := decodeArgs(raw, &a); err != nil {
 		return nil, err
 	}
+	explicit := a.Cwd != ""
 	cwd := a.Cwd
-	if cwd == "" {
+	if !explicit {
+		// Claude Code starts MCP servers in the project directory; other hosts
+		// may not, which the fallback below covers.
 		cwd, _ = os.Getwd()
+	}
+	if abs, err := filepath.Abs(cwd); err == nil {
+		cwd = abs
 	}
 	summary, ok, err := latestSessionCost(cwd)
 	if err != nil {
 		return nil, err
 	}
-	if !ok {
-		return fmt.Sprintf("No AI session cost recorded yet for %s. Claude Code sessions are priced from their transcripts; "+
-			"for Cursor run `promptconduit install cursor`.", cwd), nil
+	if ok {
+		return map[string]interface{}{"workspace": cwd, "session": summary}, nil
 	}
-	return summary, nil
+	if !explicit {
+		// Not started in a project with sessions: report the newest session
+		// on this machine and say so.
+		if summary, ok, err = newestSessionCostAnywhere(); err != nil {
+			return nil, err
+		}
+		if ok {
+			return map[string]interface{}{
+				"workspace": "newest session on this machine",
+				"note":      fmt.Sprintf("No session found for %s; pass cwd to pick a workspace.", cwd),
+				"session":   summary,
+			}, nil
+		}
+	}
+	return fmt.Sprintf("No AI session cost recorded yet for %s. Claude Code sessions are priced from their transcripts; "+
+		"for Cursor run `promptconduit install cursor`.", cwd), nil
 }
 
 func toolCostHistory(_ context.Context, raw json.RawMessage) (interface{}, error) {
@@ -443,6 +463,9 @@ func toolTeamSpend(_ context.Context, raw json.RawMessage) (interface{}, error) 
 	}
 	if a.Limit == 0 {
 		a.Limit = 10
+	}
+	if a.Limit < 1 || a.Limit > 500 {
+		return nil, fmt.Errorf("limit must be between 1 and 500")
 	}
 	return teamCall(a.Org, func(c *client.Client, o teamOrgInfo) (interface{}, error) {
 		resp := c.GetTeamCost(o.ID, period)

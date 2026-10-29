@@ -147,28 +147,55 @@ type response struct {
 // Serve reads requests from r and writes responses to w until r reaches EOF
 // or ctx is done. Tool calls run concurrently so a slow network call doesn't
 // block pings; responses are written whole, one per line.
+//
+// Reads happen on their own goroutine so a cancelled ctx (SIGTERM from the
+// host) returns promptly even while blocked on stdin; in-flight tool calls
+// see the cancelled ctx and Serve waits for them before returning.
 func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	s.out = w
-	reader := bufio.NewReaderSize(r, 64*1024)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 
+	type readResult struct {
+		line     []byte
+		tooLarge bool
+		err      error
+	}
+	lines := make(chan readResult)
+	go func() {
+		reader := bufio.NewReaderSize(r, 64*1024)
+		for {
+			line, tooLarge, err := readLine(reader)
+			select {
+			case lines <- readResult{line, tooLarge, err}:
+			case <-ctx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		line, tooLarge, err := readLine(reader)
-		switch {
-		case tooLarge:
-			s.writeError(json.RawMessage("null"), codeInvalidRequest, "message too large")
-		case len(line) > 0:
-			s.handleLine(ctx, line, &wg)
-		}
-		if err == io.EOF {
+		select {
+		case <-ctx.Done():
 			return nil
-		}
-		if err != nil {
-			return err
+		case res := <-lines:
+			switch {
+			case res.tooLarge:
+				s.writeError(json.RawMessage("null"), codeInvalidRequest, "message too large")
+			case len(res.line) > 0:
+				s.handleLine(ctx, res.line, &wg)
+			}
+			if res.err == io.EOF {
+				return nil
+			}
+			if res.err != nil {
+				return res.err
+			}
 		}
 	}
 }
