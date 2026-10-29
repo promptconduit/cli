@@ -227,6 +227,7 @@ promptconduit mcp install            # register with every tool that has hooks i
 promptconduit mcp install cursor     # or name tools: claude-code, cursor, gemini-cli
 promptconduit mcp uninstall          # remove everywhere (and don't re-add after upgrades)
 promptconduit mcp tools              # list what agents see
+promptconduit mcp status --json      # where it is registered (machine-readable)
 ```
 
 | Tool | Needs an account | What it does |

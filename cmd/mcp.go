@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -26,6 +27,7 @@ To manage the registration yourself:
   promptconduit mcp install [tool...]     # default: every tool with hooks installed
   promptconduit mcp uninstall [tool...]   # and stop re-adding it after upgrades
   promptconduit mcp tools                 # list the tools agents see
+  promptconduit mcp status [--json]       # where it is registered
 
 Local tools (session_cost, cost_history, recent_sessions, setup_status) work on
 the Free tier and read only files on this machine. team_* tools need
@@ -67,8 +69,31 @@ var mcpToolsCmd = &cobra.Command{
 	},
 }
 
+var mcpStatusJSON bool
+
+var mcpStatusCmd = &cobra.Command{
+	Use:          "status",
+	Short:        "Show where the MCP server is registered",
+	Args:         cobra.NoArgs,
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		if mcpStatusJSON {
+			enc := json.NewEncoder(cmd.OutOrStdout())
+			enc.SetIndent("", "  ")
+			return enc.Encode(buildMCPStatus(home, loadMCPState()))
+		}
+		writeMCPStatus(cmd.OutOrStdout(), home, loadMCPState())
+		return nil
+	},
+}
+
 func init() {
-	mcpCmd.AddCommand(mcpInstallCmd, mcpUninstallCmd, mcpToolsCmd)
+	mcpStatusCmd.Flags().BoolVar(&mcpStatusJSON, "json", false, "Print machine-readable JSON")
+	mcpCmd.AddCommand(mcpInstallCmd, mcpUninstallCmd, mcpToolsCmd, mcpStatusCmd)
 }
 
 func firstSentence(s string) string {

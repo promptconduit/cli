@@ -78,31 +78,64 @@ func printMCPStatus() {
 	writeMCPStatus(os.Stdout, home, loadMCPState())
 }
 
+// mcpToolStatus is one tool's MCP registration, as `mcp status --json`
+// reports it. The editor extension reads this shape: keep fields stable.
+type mcpToolStatus struct {
+	Tool           string `json:"tool"`
+	Label          string `json:"label"`
+	Registered     bool   `json:"registered"`
+	HooksInstalled bool   `json:"hooks_installed"`
+	TurnedOff      bool   `json:"turned_off"`
+}
+
+// mcpStatusReport is the full `mcp status --json` payload. Suggest lists the
+// tools worth registering: hooks installed, not registered, not opted out.
+type mcpStatusReport struct {
+	Tools   []mcpToolStatus `json:"tools"`
+	Suggest []string        `json:"suggest"`
+}
+
+func buildMCPStatus(home string, state mcpState) mcpStatusReport {
+	r := mcpStatusReport{Tools: []mcpToolStatus{}, Suggest: []string{}}
+	for _, t := range mcpTargets {
+		s := mcpToolStatus{
+			Tool:           t.Tool,
+			Label:          t.Label,
+			Registered:     t.registered(home),
+			HooksInstalled: t.hooksInstalled(home),
+			TurnedOff:      state.disabledFor(t.Tool),
+		}
+		if !s.Registered && !s.TurnedOff && s.HooksInstalled {
+			r.Suggest = append(r.Suggest, t.Tool)
+		}
+		r.Tools = append(r.Tools, s)
+	}
+	return r
+}
+
 // writeMCPStatus lists each MCP-capable tool's registration. The register
 // hint names only tools that have PromptConduit hooks, aren't registered,
 // and weren't opted out — never a tool the user doesn't have.
 func writeMCPStatus(out io.Writer, home string, state mcpState) {
 	_, _ = fmt.Fprintln(out)
 	_, _ = fmt.Fprintln(out, "MCP Server (agents can query your cost data):")
-	var suggest []string
-	for _, t := range mcpTargets {
-		hooks := t.hooksInstalled(home)
+	r := buildMCPStatus(home, state)
+	for _, s := range r.Tools {
 		var line string
 		switch {
-		case t.registered(home):
+		case s.Registered:
 			line = "Registered"
-		case state.disabledFor(t.Tool):
+		case s.TurnedOff:
 			line = "Not registered (turned off)"
-		case !hooks:
+		case !s.HooksInstalled:
 			line = "Not registered (no PromptConduit hooks)"
 		default:
 			line = "Not registered"
-			suggest = append(suggest, t.Tool)
 		}
-		_, _ = fmt.Fprintf(out, "  %-12s %s\n", t.Label+":", line)
+		_, _ = fmt.Fprintf(out, "  %-12s %s\n", s.Label+":", line)
 	}
-	if len(suggest) > 0 {
-		_, _ = fmt.Fprintf(out, "  Register with: promptconduit mcp install %s\n", strings.Join(suggest, " "))
+	if len(r.Suggest) > 0 {
+		_, _ = fmt.Fprintf(out, "  Register with: promptconduit mcp install %s\n", strings.Join(r.Suggest, " "))
 	}
 }
 
