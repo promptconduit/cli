@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,20 +75,34 @@ func printMCPStatus() {
 	if err != nil {
 		return
 	}
-	fmt.Println()
-	fmt.Println("MCP Server (agents can query your cost data):")
-	missing := false
+	writeMCPStatus(os.Stdout, home, loadMCPState())
+}
+
+// writeMCPStatus lists each MCP-capable tool's registration. The register
+// hint names only tools that have PromptConduit hooks, aren't registered,
+// and weren't opted out — never a tool the user doesn't have.
+func writeMCPStatus(out io.Writer, home string, state mcpState) {
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "MCP Server (agents can query your cost data):")
+	var suggest []string
 	for _, t := range mcpTargets {
-		state := "Not registered"
-		if t.registered(home) {
-			state = "Registered"
-		} else {
-			missing = true
+		hooks := t.hooksInstalled(home)
+		var line string
+		switch {
+		case t.registered(home):
+			line = "Registered"
+		case state.disabledFor(t.Tool):
+			line = "Not registered (turned off)"
+		case !hooks:
+			line = "Not registered (no PromptConduit hooks)"
+		default:
+			line = "Not registered"
+			suggest = append(suggest, t.Tool)
 		}
-		fmt.Printf("  %-12s %s\n", t.Label+":", state)
+		_, _ = fmt.Fprintf(out, "  %-12s %s\n", t.Label+":", line)
 	}
-	if missing && !loadMCPState().Disabled {
-		fmt.Println("  Register with: promptconduit mcp install")
+	if len(suggest) > 0 {
+		_, _ = fmt.Fprintf(out, "  Register with: promptconduit mcp install %s\n", strings.Join(suggest, " "))
 	}
 }
 

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -398,6 +399,35 @@ func TestMCPTeamSpendRejectsBadLimit(t *testing.T) {
 		if r := callTool(t, "team_spend", args); r["isError"] != true || !strings.Contains(toolText(r), "limit") {
 			t.Errorf("%s: %v", args, r)
 		}
+	}
+}
+
+func TestWriteMCPStatusOnlySuggestsToolsWithHooks(t *testing.T) {
+	home := isolatedHome(t)
+	cc, _ := mcpTargetFor("claude-code")
+	cursor, _ := mcpTargetFor("cursor")
+	writeFile(t, cc.configFile(home), `{"mcpServers":{"promptconduit":{"command":"/x/promptconduit","args":["mcp"]}}}`)
+	writeFile(t, cursor.hooksFile(home), `{"hooks":{"stop":[{"command":"/x/promptconduit hook"}]}}`)
+
+	var buf bytes.Buffer
+	writeMCPStatus(&buf, home, mcpState{})
+	out := buf.String()
+	for _, want := range []string{
+		"Claude Code: Registered",
+		"Cursor:      Not registered\n",
+		"Gemini CLI:  Not registered (no PromptConduit hooks)",
+		"Register with: promptconduit mcp install cursor\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	// Gemini not installed and Cursor opted out: nothing to suggest.
+	buf.Reset()
+	writeMCPStatus(&buf, home, mcpState{DisabledTools: []string{"cursor"}})
+	if out := buf.String(); strings.Contains(out, "Register with") || !strings.Contains(out, "Cursor:      Not registered (turned off)") {
+		t.Errorf("opted out:\n%s", out)
 	}
 }
 
