@@ -35,6 +35,9 @@ Supported tools:
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
   - grok:        Grok Build (xAI)           (~/.grok/hooks/promptconduit.json; also accepts "grok-build")
 
+Claude Code, Cursor and Gemini CLI also get the PromptConduit MCP server, so
+your agent can answer cost and budget questions itself (skip with --no-mcp).
+
 The hooks capture events locally and realtime cost tracking works immediately.
 This is the Free tier: 100% local — every event is captured to
 ~/.promptconduit/events.jsonl and nothing is sent anywhere. Set an API key
@@ -53,7 +56,13 @@ var installLocalOnly bool
 // into the editor (Cursor) during install.
 var installNoExtension bool
 
+// installNoMCP skips registering the PromptConduit MCP server with the tool
+// (and stops the post-upgrade reconcile from adding it later).
+var installNoMCP bool
+
 func init() {
+	installCmd.Flags().BoolVar(&installNoMCP, "no-mcp", false,
+		"Don't register the PromptConduit MCP server (Claude Code, Cursor, Gemini CLI)")
 	installCmd.Flags().BoolVar(&installLocalOnly, "local-only", false,
 		"Free / local-only mode: capture events locally, never send to the cloud")
 	installCmd.Flags().BoolVar(&installNoExtension, "no-extension", false,
@@ -158,6 +167,14 @@ func stableExecutablePath(exePath string) (string, error) {
 
 // installTool dispatches to the per-tool installer.
 func installTool(name, exePath string) error {
+	if err := installToolHooks(name, exePath); err != nil {
+		return err
+	}
+	registerMCPForInstall(normalizeToolName(name), exePath, installNoMCP)
+	return nil
+}
+
+func installToolHooks(name, exePath string) error {
 	switch name {
 	case "claude-code":
 		return installClaudeCode(exePath)

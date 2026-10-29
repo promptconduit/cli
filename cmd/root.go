@@ -61,6 +61,7 @@ func init() {
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(insightsCmd)
 	rootCmd.AddCommand(teamCmd)
+	rootCmd.AddCommand(mcpCmd)
 	rootCmd.AddCommand(skillsCmd)
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(upgradeCmd)
@@ -121,6 +122,7 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 		// unless the user opted out of auto-update.
 		if !cfg.DisableAutoUpdate {
 			reconcileCostExtension(cmd)
+			reconcileMCP(func(format string, a ...interface{}) { _, _ = fmt.Fprintf(cmd.ErrOrStderr(), format, a...) })
 		}
 	}
 
@@ -276,7 +278,7 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "prune-auto", "telemetry-ping", "upgrade", "watch", "collect", "cost", "graph", "sessions", "resume":
+	case "hook", "prune-auto", "telemetry-ping", "upgrade", "watch", "collect", "cost", "graph", "sessions", "resume", "mcp":
 		// sessions/resume are called programmatically (the editor extension's
 		// auto-restore) and resume execs straight into claude — keep them quiet
 		// and fast, no update banner.

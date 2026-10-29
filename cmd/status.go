@@ -64,7 +64,31 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	checkCopilotInstallation()
 	checkGrokInstallation()
 
+	printMCPStatus()
 	return nil
+}
+
+// printMCPStatus shows where the PromptConduit MCP server is registered.
+func printMCPStatus() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	fmt.Println()
+	fmt.Println("MCP Server (agents can query your cost data):")
+	missing := false
+	for _, t := range mcpTargets {
+		state := "Not registered"
+		if t.registered(home) {
+			state = "Registered"
+		} else {
+			missing = true
+		}
+		fmt.Printf("  %-12s %s\n", t.Label+":", state)
+	}
+	if missing && !loadMCPState().Disabled {
+		fmt.Println("  Register with: promptconduit mcp install")
+	}
 }
 
 // printEventLogStatus shows the rolling sent/failed/dropped counters from the

@@ -296,11 +296,16 @@ func describeOrgs(orgs []teamOrgInfo) string {
 }
 
 func resolveTeamOrg(c *client.Client) (teamOrgInfo, error) {
+	return resolveTeamOrgFor(c, teamOrg)
+}
+
+// resolveTeamOrgFor picks the org named by want, falling back to
+// PROMPTCONDUIT_ORG and then to the user's only team.
+func resolveTeamOrgFor(c *client.Client, want string) (teamOrgInfo, error) {
 	orgs, err := listTeamOrgs(c)
 	if err != nil {
 		return teamOrgInfo{}, err
 	}
-	want := teamOrg
 	if want == "" {
 		want = os.Getenv("PROMPTCONDUIT_ORG")
 	}

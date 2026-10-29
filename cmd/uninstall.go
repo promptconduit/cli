@@ -33,6 +33,14 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unknown tool: %s. Supported: %v", toolName, envelope.SupportedTools())
 	}
 
+	if err := uninstallToolHooks(toolName); err != nil {
+		return err
+	}
+	unregisterMCPForUninstall(normalizeToolName(toolName))
+	return nil
+}
+
+func uninstallToolHooks(toolName string) error {
 	switch toolName {
 	case "claude-code":
 		return uninstallClaudeCode()

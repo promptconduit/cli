@@ -189,24 +189,42 @@ func resolveCwd() string {
 	return ""
 }
 
-func runCostSession(cmd *cobra.Command, args []string) error {
+// latestSessionCost prices the newest AI session for a workspace from local
+// transcripts and Cursor feeds. ok is false when nothing is recorded yet.
+func latestSessionCost(cwd string) (cost.SessionSummary, bool, error) {
+	return sessionCostIn(cwd, false)
+}
+
+// newestSessionCostAnywhere prices the newest session across every workspace.
+func newestSessionCostAnywhere() (cost.SessionSummary, bool, error) {
+	return sessionCostIn("", true)
+}
+
+func sessionCostIn(cwd string, all bool) (summary cost.SessionSummary, ok bool, err error) {
 	table, err := cost.LoadPriceTable()
 	if err != nil {
-		return fmt.Errorf("load pricing table: %w", err)
+		return summary, false, fmt.Errorf("load pricing table: %w", err)
 	}
-	cwd := resolveCwd()
-	dirs, err := cost.ResolveDirs(cwd, false)
+	dirs, err := cost.ResolveDirs(cwd, all)
 	if err != nil {
-		return fmt.Errorf("resolve transcript directories: %w", err)
+		return summary, false, fmt.Errorf("resolve transcript directories: %w", err)
 	}
 
 	// We read the summary directly rather than stream it, so the watcher's emit
 	// sink is discarded.
 	w := cost.NewWatcher(table, nil, io.Discard, false)
 	w.SeedNewest(dirs)
-	w.SeedCursorFeeds(cost.CursorFeedPaths(cwd, false))
+	w.SeedCursorFeeds(cost.CursorFeedPaths(cwd, all))
 
-	summary, ok := w.LatestSummary()
+	summary, ok = w.LatestSummary()
+	return summary, ok, nil
+}
+
+func runCostSession(cmd *cobra.Command, args []string) error {
+	summary, ok, err := latestSessionCost(resolveCwd())
+	if err != nil {
+		return err
+	}
 	out := cmd.OutOrStdout()
 	if !ok {
 		_, _ = fmt.Fprintln(out, "No AI session cost recorded yet for this workspace.")
