@@ -288,6 +288,9 @@ func TestSubagentEnricher_StartStopJoin(t *testing.T) {
 	if stop.Model != "claude-opus-4-8" {
 		t.Errorf("model = %q, want the costliest", stop.Model)
 	}
+	if stop.ModelPriced == nil || !*stop.ModelPriced || stop.UnpricedRequests != 0 {
+		t.Errorf("all-priced transcript: model_priced=%v unpriced=%d", stop.ModelPriced, stop.UnpricedRequests)
+	}
 
 	// State entry consumed: a repeated Stop degrades gracefully (no join).
 	payload, _ = e.Enrich(&Context{

@@ -207,6 +207,8 @@ func TestResolvePrice_CurrentClaudeFamily(t *testing.T) {
 		model     string
 		wantInput float64 // USD per input token
 	}{
+		{"claude-sonnet-5-5", 0.000002},
+		{"claude-haiku-5-5", 0.0000001},
 		{"claude-sonnet-5", 0.000002},
 		{"claude-opus-5", 0.000005},
 		{"claude-opus-5-5", 0.000004},

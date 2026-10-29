@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/cost"
 	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/mcp"
 	"github.com/promptconduit/cli/internal/sessions"
@@ -114,7 +115,8 @@ func mcpTools() []*mcp.Tool {
 			Name:  "session_cost",
 			Title: "Current session cost",
 			Description: "What the newest AI coding session in a workspace has cost so far: total USD, tokens, and a per-model breakdown, " +
-				"priced locally from Claude Code transcripts and Cursor hook data. No account needed; nothing leaves the machine.",
+				"priced locally from Claude Code transcripts (subagents included) and Cursor hook data. Models missing from the rate table are listed in unpriced_models. " +
+				"No account needed; nothing leaves the machine.",
 			InputSchema: objectSchema(schemaProps{
 				"cwd": strProp("Absolute workspace directory. Default: the directory the agent runs in, falling back to the newest session on the machine."),
 			}),
@@ -124,8 +126,8 @@ func mcpTools() []*mcp.Tool {
 		{
 			Name:  "cost_history",
 			Title: "Daily AI cost",
-			Description: "Daily AI coding cost on this machine over recent days (USD, requests, tokens), from the local event log. " +
-				"No account needed.",
+			Description: "Daily AI coding cost on this machine over recent days (USD, requests, tokens), from the local event log, subagent spend included. " +
+				"Requests on models missing from the rate table are counted in unpriced_models. No account needed.",
 			InputSchema: objectSchema(schemaProps{
 				"days": intProp("Number of days including today (default 7).", 1, 90),
 			}),
@@ -306,7 +308,7 @@ func toolSessionCost(_ context.Context, raw json.RawMessage) (interface{}, error
 		return nil, err
 	}
 	if ok {
-		return map[string]interface{}{"workspace": cwd, "session": summary}, nil
+		return withUnpriced(map[string]interface{}{"workspace": cwd, "session": summary}, summary), nil
 	}
 	if !explicit {
 		// Not started in a project with sessions: report the newest session
@@ -315,15 +317,31 @@ func toolSessionCost(_ context.Context, raw json.RawMessage) (interface{}, error
 			return nil, err
 		}
 		if ok {
-			return map[string]interface{}{
+			return withUnpriced(map[string]interface{}{
 				"workspace": "newest session on this machine",
 				"note":      fmt.Sprintf("No session found for %s; pass cwd to pick a workspace.", cwd),
 				"session":   summary,
-			}, nil
+			}, summary), nil
 		}
 	}
 	return fmt.Sprintf("No AI session cost recorded yet for %s. Claude Code sessions are priced from their transcripts; "+
 		"for Cursor run `promptconduit install cursor`.", cwd), nil
+}
+
+// withUnpriced names the session's unpriced models at the top level so an
+// agent can't read a partial total as the whole cost.
+func withUnpriced(out map[string]interface{}, s cost.SessionSummary) map[string]interface{} {
+	var models []string
+	for _, m := range s.ByModel {
+		if !m.ModelPriced {
+			models = append(models, m.Model)
+		}
+	}
+	if len(models) > 0 {
+		out["unpriced_models"] = models
+		out["unpriced_note"] = "These models are missing from the rate table: their tokens are counted but not their cost, so the total is a lower bound."
+	}
+	return out
 }
 
 func toolCostHistory(_ context.Context, raw json.RawMessage) (interface{}, error) {
@@ -346,12 +364,23 @@ func toolCostHistory(_ context.Context, raw json.RawMessage) (interface{}, error
 	if days == nil {
 		days = []costDay{}
 	}
-	total, unpriced := 0.0, 0
+	total, subagent, unpriced := 0.0, 0.0, 0
 	for _, d := range days {
 		total += d.CostTotal
+		subagent += d.SubagentCost
 		unpriced += d.Unpriced
 	}
-	out := map[string]interface{}{"days": days, "total_usd": total, "unpriced_requests": unpriced, "window_days": a.Days}
+	out := map[string]interface{}{
+		"days":              days,
+		"total_usd":         total,
+		"subagent_usd":      subagent,
+		"unpriced_requests": unpriced,
+		"unpriced_models":   mergeModelCounts(days),
+		"window_days":       a.Days,
+	}
+	if unpriced > 0 {
+		out["unpriced_note"] = "Requests on models missing from the rate table count tokens but no cost, so total_usd is a lower bound."
+	}
 	if retention := client.LoadConfig().RetentionDays(); retention > 0 && a.Days > retention {
 		out["note"] = fmt.Sprintf("Local history is kept for at least %d days; earlier days may be incomplete.", retention)
 	}

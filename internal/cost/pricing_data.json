@@ -1,7 +1,7 @@
 {
   "_source": "promptconduit",
-  "_updated": "2026-09-25",
-  "_comment": "Curated USD per-token price snapshot (2026-09-25), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 cache reads are 0.05x. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
+  "_updated": "2026-10-29",
+  "_comment": "Curated USD per-token price snapshot (2026-10-29), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 cache reads are 0.05x. Claude Haiku 5.5 has a second rate card (5x) for prompts above 100K tokens, stored as long_context with long_context_threshold_tokens. Keys ending in @fast hold Anthropic fast-mode rates, used only when a Claude Code transcript records usage.speed=fast; the @ keeps prefix-trim from reaching them. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
   "claude-fable-5": {
     "input_cost_per_token": 0.00001,
     "output_cost_per_token": 0.00005,
@@ -37,6 +37,28 @@
     "cache_creation_input_token_cost_1h": 0.000004,
     "cache_read_input_token_cost": 0.0000002
   },
+  "claude-sonnet-5-5": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.00001,
+    "cache_creation_input_token_cost": 0.0000025,
+    "cache_creation_input_token_cost_1h": 0.000004,
+    "cache_read_input_token_cost": 0.0000002
+  },
+  "claude-haiku-5-5": {
+    "input_cost_per_token": 0.0000001,
+    "output_cost_per_token": 0.0000005,
+    "cache_creation_input_token_cost": 0.000000125,
+    "cache_creation_input_token_cost_1h": 0.0000002,
+    "cache_read_input_token_cost": 0.00000001,
+    "long_context_threshold_tokens": 100000,
+    "long_context": {
+      "input_cost_per_token": 0.0000005,
+      "output_cost_per_token": 0.0000025,
+      "cache_creation_input_token_cost": 0.000000625,
+      "cache_creation_input_token_cost_1h": 0.000001,
+      "cache_read_input_token_cost": 0.00000005
+    }
+  },
   "claude-opus-5": {
     "input_cost_per_token": 0.000005,
     "output_cost_per_token": 0.000025,
@@ -50,6 +72,27 @@
     "cache_creation_input_token_cost": 0.000005,
     "cache_creation_input_token_cost_1h": 0.000008,
     "cache_read_input_token_cost": 0.0000002
+  },
+  "claude-opus-5-5@fast": {
+    "input_cost_per_token": 0.000008,
+    "output_cost_per_token": 0.00004,
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_creation_input_token_cost_1h": 0.000016,
+    "cache_read_input_token_cost": 0.0000004
+  },
+  "claude-opus-5@fast": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
+  },
+  "claude-opus-4-8@fast": {
+    "input_cost_per_token": 0.00001,
+    "output_cost_per_token": 0.00005,
+    "cache_creation_input_token_cost": 0.0000125,
+    "cache_creation_input_token_cost_1h": 0.00002,
+    "cache_read_input_token_cost": 0.000001
   },
   "claude-opus-5-fast": {
     "input_cost_per_token": 0.00001,

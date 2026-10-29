@@ -175,7 +175,10 @@ type ccLine struct {
 			OutputTokens             int64 `json:"output_tokens"`
 			CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
 			CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-			CacheCreation            struct {
+			// Speed is "standard" or "fast" (Anthropic fast mode, billed at a
+			// premium).
+			Speed         string `json:"speed"`
+			CacheCreation struct {
 				Ephemeral1h int64 `json:"ephemeral_1h_input_tokens"`
 				Ephemeral5m int64 `json:"ephemeral_5m_input_tokens"`
 			} `json:"cache_creation"`
@@ -230,7 +233,7 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		Ephemeral1hTokens:    u.CacheCreation.Ephemeral1h,
 	}
 
-	mp, priced := table.ResolvePrice(l.Message.Model)
+	mp, priced := table.ResolvePriceForSpeed(l.Message.Model, u.Speed)
 	c, cacheWriteTokens := CostForUsage(usage, mp)
 
 	sessionID := l.SessionID
