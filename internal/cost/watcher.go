@@ -180,8 +180,9 @@ func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string, 
 	}
 }
 
-// SeedNewest seeds the single newest transcript across the given directories
-// and emits its SessionSummary. Used by the one-shot `cost session` command.
+// SeedNewest seeds the single newest transcript across the given directories,
+// plus that session's subagent transcripts, and emits its SessionSummary. Used
+// by the one-shot `cost session` command.
 func (w *Watcher) SeedNewest(dirs []string) {
 	var newest string
 	var newestMod int64
@@ -197,7 +198,20 @@ func (w *Watcher) SeedNewest(dirs []string) {
 	}
 	if newest != "" {
 		w.seedFile(newest)
+		for _, sub := range subagentTranscripts(newest) {
+			w.seedFile(sub)
+		}
 	}
+}
+
+// subagentTranscripts lists a session's subagent transcripts. Claude Code
+// writes each subagent's turns to <session>/subagents/agent-*.jsonl next to
+// the session's own <session>.jsonl; those lines carry the parent sessionId,
+// so seeding them folds subagent spend into the parent session's summary.
+// The main transcript never repeats those requests.
+func subagentTranscripts(sessionPath string) []string {
+	dir := filepath.Join(strings.TrimSuffix(sessionPath, ".jsonl"), "subagents")
+	return jsonlFiles(dir)
 }
 
 // SeedCursorFeeds seeds each Cursor cost feed and emits its session summaries.

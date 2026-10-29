@@ -30,6 +30,13 @@ type SubagentEnrichment struct {
 	Model    string       `json:"model,omitempty"`
 	Tokens   *cost.Tokens `json:"tokens,omitempty"`
 	USD      *cost.Cost   `json:"usd,omitempty"`
+	// ModelPriced (stop only, set whenever Requests > 0) is false when at
+	// least one request used a model missing from the rate table: its tokens
+	// are counted but its USD is zero-because-unknown, not free.
+	// UnpricedRequests counts those requests and UnpricedModel names one.
+	ModelPriced      *bool  `json:"model_priced,omitempty"`
+	UnpricedRequests int    `json:"unpriced_requests,omitempty"`
+	UnpricedModel    string `json:"unpriced_model,omitempty"`
 }
 
 type subagentEnricher struct{}
@@ -170,10 +177,16 @@ func sumAgentTranscript(path string, out *SubagentEnrichment) {
 		usd.CacheWrite += ev.Cost.CacheWrite
 		usd.Total += ev.Cost.Total
 		modelCost[ev.Model] += ev.Cost.Total
+		if !ev.ModelPriced {
+			out.UnpricedRequests++
+			out.UnpricedModel = ev.Model
+		}
 	}
 	if out.Requests == 0 {
 		return
 	}
+	priced := out.UnpricedRequests == 0
+	out.ModelPriced = &priced
 	best, bestCost := "", -1.0
 	for m, c := range modelCost {
 		if c > bestCost {

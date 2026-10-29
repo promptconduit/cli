@@ -16,7 +16,7 @@ func TestPublishedCardOverridesNewerRowsOnly(t *testing.T) {
 
 	writeCard(t, `{
       "_source": "promptconduit",
-      "_updated": "2026-09-26",
+      "_updated": "2099-01-01",
       "claude-opus-4-8": {"input_cost_per_token": 0.000009, "output_cost_per_token": 0.000009},
       "brand-new-model": {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000004}
     }`)
@@ -53,7 +53,7 @@ func TestOlderOrUnmarkedCardDoesNotOverride(t *testing.T) {
 	}
 
 	writeCard(t, `{
-      "_updated": "2026-09-26",
+      "_updated": "2099-01-01",
       "claude-opus-4-8": {"input_cost_per_token": 0.000009, "output_cost_per_token": 0.000009}
     }`)
 	tbl, err = LoadPriceTable()
@@ -69,7 +69,7 @@ func TestOlderOrUnmarkedCardDoesNotOverride(t *testing.T) {
 func TestRefreshPublishedCardRejectsBadPayload(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"_source":"promptconduit","_updated":"2026-09-26","only-one":{"input_cost_per_token":1,"output_cost_per_token":1}}`))
+		_, _ = w.Write([]byte(`{"_source":"promptconduit","_updated":"2099-01-01","only-one":{"input_cost_per_token":1,"output_cost_per_token":1}}`))
 	}))
 	defer srv.Close()
 
@@ -85,7 +85,7 @@ func TestRefreshPublishedCardWrites(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	body := map[string]any{
 		"_source":  "promptconduit",
-		"_updated": "2026-09-26",
+		"_updated": "2099-01-01",
 	}
 	for i := 0; i < 10; i++ {
 		body[fmt.Sprintf("model-%d", i)] = map[string]float64{

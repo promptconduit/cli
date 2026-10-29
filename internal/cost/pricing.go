@@ -20,7 +20,24 @@ type ModelPrice struct {
 	CacheCreation   float64 `json:"cache_creation_input_token_cost"`    // 5-minute TTL (1.25x input)
 	CacheCreation1h float64 `json:"cache_creation_input_token_cost_1h"` // 1-hour TTL (2x input)
 	CacheRead       float64 `json:"cache_read_input_token_cost"`
+
+	// LongContextThreshold and LongContext describe a second rate card for
+	// long prompts (Claude Haiku 5.5 bills prompts above 100K tokens at 5x).
+	// A request whose prompt (input + cache read + cache write) is above the
+	// threshold is priced wholly at LongContext. Zero/nil means one rate card.
+	LongContextThreshold int64       `json:"long_context_threshold_tokens,omitempty"`
+	LongContext          *ModelPrice `json:"long_context,omitempty"`
 }
+
+// fastSuffix marks a table row that holds a model's Anthropic fast-mode rate
+// (usage.speed == "fast" in a Claude Code transcript). It is not a dash
+// segment, so prefix-trim never lands on it: Cursor's own "-fast" display ids
+// keep their separate rows.
+const fastSuffix = "@fast"
+
+// SpeedFast is the usage.speed value Claude Code records for fast-mode
+// requests.
+const SpeedFast = "fast"
 
 // Usage is the token breakdown read from a transcript turn. The Ephemeral*
 // fields capture Claude Code's split of cache-creation tokens by TTL; when a
@@ -191,25 +208,46 @@ func parsePriceDocument(data []byte) (map[string]ModelPrice, priceMeta, error) {
 // when nothing matches — callers should flag the event ModelPriced=false and
 // charge zero rather than guess.
 func (t *PriceTable) ResolvePrice(model string) (ModelPrice, bool) {
-	if model == "" {
-		return ModelPrice{}, false
+	_, mp, ok := t.resolve(model)
+	return mp, ok
+}
+
+// ResolvePriceForSpeed is ResolvePrice for a request that records its speed.
+// A fast-mode request uses the base model's "@fast" row when the table has
+// one (Anthropic bills fast mode at a premium); otherwise, and for every other
+// speed, it is priced like ResolvePrice.
+func (t *PriceTable) ResolvePriceForSpeed(model, speed string) (ModelPrice, bool) {
+	key, mp, ok := t.resolve(model)
+	if !ok || speed != SpeedFast {
+		return mp, ok
 	}
-	if mp, ok := t.lookup(model); ok {
-		return mp, true
+	if fast, found := t.models[key+fastSuffix]; found {
+		return fast, true
+	}
+	return mp, true
+}
+
+// resolve returns the table key a model id resolved to along with its rates.
+func (t *PriceTable) resolve(model string) (string, ModelPrice, bool) {
+	if model == "" {
+		return "", ModelPrice{}, false
+	}
+	if key, mp, ok := t.lookup(model); ok {
+		return key, mp, true
 	}
 	if strings.HasPrefix(model, "grok-") {
 		return t.lookup("cursor-" + model)
 	}
-	return ModelPrice{}, false
+	return "", ModelPrice{}, false
 }
 
-func (t *PriceTable) lookup(model string) (ModelPrice, bool) {
+func (t *PriceTable) lookup(model string) (string, ModelPrice, bool) {
 	if mp, ok := t.models[model]; ok {
-		return mp, true
+		return model, mp, true
 	}
 	if canonical, ok := modelAliases[model]; ok {
 		if mp, ok := t.models[canonical]; ok {
-			return mp, true
+			return canonical, mp, true
 		}
 	}
 	// Strip trailing dash-delimited segments one at a time and retry, so dated
@@ -221,10 +259,10 @@ func (t *PriceTable) lookup(model string) (ModelPrice, bool) {
 		}
 		trimmed = trimmed[:idx]
 		if mp, ok := t.models[trimmed]; ok {
-			return mp, true
+			return trimmed, mp, true
 		}
 	}
-	return ModelPrice{}, false
+	return "", ModelPrice{}, false
 }
 
 // CostForUsage prices a usage block. It returns the dollar breakdown and the
@@ -232,6 +270,7 @@ func (t *PriceTable) lookup(model string) (ModelPrice, bool) {
 // When the 5m/1h split is present it prices each tier at its own rate;
 // otherwise it prices the whole CacheCreationInput total at the 5m rate.
 func CostForUsage(u Usage, mp ModelPrice) (Cost, int64) {
+	mp = mp.rateFor(u)
 	var cacheWriteTokens, cacheWriteCost = cacheWriteCostFor(u, mp)
 
 	c := Cost{
@@ -243,6 +282,22 @@ func CostForUsage(u Usage, mp ModelPrice) (Cost, int64) {
 	}
 	c.Total = c.Input + c.Output + c.CacheRead + c.CacheWrite
 	return c, cacheWriteTokens
+}
+
+// rateFor picks the rate card for a request: the long-context card when the
+// model has one and the prompt is above its threshold, otherwise mp itself.
+func (mp ModelPrice) rateFor(u Usage) ModelPrice {
+	if mp.LongContext == nil || mp.LongContextThreshold <= 0 {
+		return mp
+	}
+	cacheWrite := u.CacheCreationInput
+	if split := u.Ephemeral5mTokens + u.Ephemeral1hTokens; split > cacheWrite {
+		cacheWrite = split
+	}
+	if u.InputTokens+u.CacheReadInputTokens+cacheWrite > mp.LongContextThreshold {
+		return *mp.LongContext
+	}
+	return mp
 }
 
 // cacheWriteCostFor returns the total cache-creation token count and its cost,
