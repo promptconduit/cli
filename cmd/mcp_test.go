@@ -91,9 +91,13 @@ func toolText(r map[string]interface{}) string {
 func TestMCPToolDefinitions(t *testing.T) {
 	snake := regexp.MustCompile(`^[a-z][a-z_]*$`)
 	writes := map[string]bool{"team_set_budget": true, "team_remove_budget": true, "team_tag_repo": true,
-		"team_invite": true, "team_create": true, "team_join": true}
+		"team_invite": true, "team_create": true, "team_join": true,
+		"team_billing_checkout": true, "team_billing_portal": true, "team_set_member_role": true,
+		"team_remove_member": true, "team_connect_slack": true, "team_disconnect_slack": true}
+	destructive := map[string]bool{"team_remove_budget": true, "team_set_member_role": true,
+		"team_remove_member": true, "team_disconnect_slack": true}
 	tools := buildMCPServer().Tools()
-	if len(tools) != 15 {
+	if len(tools) != 26 {
 		t.Errorf("tool count = %d", len(tools))
 	}
 	for _, tool := range tools {
@@ -110,7 +114,7 @@ func TestMCPToolDefinitions(t *testing.T) {
 		if tool.Annotations.ReadOnlyHint == writes[tool.Name] {
 			t.Errorf("%s: readOnlyHint = %v", tool.Name, tool.Annotations.ReadOnlyHint)
 		}
-		if tool.Annotations.DestructiveHint != (tool.Name == "team_remove_budget") {
+		if tool.Annotations.DestructiveHint != destructive[tool.Name] {
 			t.Errorf("%s: destructiveHint = %v", tool.Name, tool.Annotations.DestructiveHint)
 		}
 	}

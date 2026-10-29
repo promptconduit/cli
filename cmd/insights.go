@@ -80,7 +80,7 @@ func runInsights(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -100,7 +100,7 @@ func runInsightsTools(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get tool insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -120,7 +120,7 @@ func runInsightsErrors(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get error insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -140,7 +140,7 @@ func runInsightsSessions(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get sessions: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 

@@ -125,3 +125,63 @@ func (c *Client) ExportTeamCost(orgID, period, by string) (string, *APIResponse)
 	}
 	return string(body), nil
 }
+
+// ---- billing ----
+//
+// The CLI never sees card details: checkout and portal return a hosted Stripe
+// URL for the user to open in a browser.
+
+// GetTeamBilling returns the team's plan, seats and subscription status.
+func (c *Client) GetTeamBilling(orgID string) *APIResponse {
+	return c.Get(orgPath(orgID, "/billing"), nil)
+}
+
+// CreateTeamCheckout starts a subscription for a paid tier and returns the
+// hosted checkout URL.
+func (c *Client) CreateTeamCheckout(orgID, tier string) *APIResponse {
+	return c.jsonRequest("POST", orgPath(orgID, "/billing/checkout"), map[string]string{"tier": tier})
+}
+
+// CreateTeamBillingPortal returns a hosted billing portal URL (change plan,
+// update card, cancel).
+func (c *Client) CreateTeamBillingPortal(orgID string) *APIResponse {
+	return c.jsonRequest("POST", orgPath(orgID, "/billing/portal"), map[string]string{})
+}
+
+// ---- members ----
+
+// UpdateMemberRole changes a member's role. memberID is the membership id
+// from ListOrgMembers, not the user id.
+func (c *Client) UpdateMemberRole(orgID, memberID, role string) *APIResponse {
+	return c.jsonRequest("PATCH", orgPath(orgID, "/members/"+url.PathEscape(memberID)), map[string]string{"role": role})
+}
+
+// RemoveMember removes a member from the team (membership id).
+func (c *Client) RemoveMember(orgID, memberID string) *APIResponse {
+	return c.deleteRequest(orgPath(orgID, "/members/"+url.PathEscape(memberID)))
+}
+
+// ---- Slack budget alerts ----
+
+// ConnectSlackAlerts saves a Slack incoming webhook for budget alerts. The API
+// posts a test message first and rejects a webhook that doesn't work.
+func (c *Client) ConnectSlackAlerts(orgID, webhookURL string) *APIResponse {
+	return c.jsonRequest("PUT", orgPath(orgID, "/budget-alerts/slack"), map[string]string{"webhookUrl": webhookURL})
+}
+
+// DisconnectSlackAlerts stops posting budget alerts to Slack.
+func (c *Client) DisconnectSlackAlerts(orgID string) *APIResponse {
+	return c.deleteRequest(orgPath(orgID, "/budget-alerts/slack"))
+}
+
+// ---- personal cloud data ----
+
+// GetMyCost returns your own synced spend for a period (7d|30d|90d).
+func (c *Client) GetMyCost(period string) *APIResponse {
+	return c.Get("/v1/me/analytics/cost", map[string]string{"period": period})
+}
+
+// GetMyTrends returns your agent coaching trends for a period (7d|30d|90d).
+func (c *Client) GetMyTrends(period string) *APIResponse {
+	return c.Get("/v1/me/trends", map[string]string{"period": period})
+}
