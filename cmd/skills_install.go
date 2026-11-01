@@ -248,27 +248,58 @@ var (
 	errAbortLocalChanges = errors.New("local modifications present")
 )
 
+// installOptions says where and how a skill is written. The CLI fills it
+// from flags and may prompt; the MCP tools fill it from their arguments and
+// never prompt, so a drifted file is reported instead of overwritten.
+type installOptions struct {
+	cwd   string // working directory for scope detection (default os.Getwd)
+	scope string // "", "project" or "global"
+	force bool   // overwrite local edits without asking
+	// askOverwrite is consulted when !force and the file on disk was edited
+	// since install. nil means refuse.
+	askOverwrite func(name string) bool
+	out          io.Writer // progress line per skill; nil for none
+}
+
 func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspkg.Manifest, skill map[string]interface{}) error {
+	_, err := installSkill(apiClient, manifest, skill, installOptions{
+		scope: skillsInstallScope,
+		force: skillsInstallForce,
+		askOverwrite: func(name string) bool {
+			return confirm(fmt.Sprintf("%s has local modifications — overwrite?", name))
+		},
+		out: cmd.OutOrStderr(),
+	})
+	return err
+}
+
+// installSkill writes one skill's SKILL.md and records it in the manifest.
+// It returns the path written. errAlreadyCurrent and errAbortLocalChanges
+// are the two non-fatal outcomes.
+func installSkill(apiClient *client.Client, manifest *skillspkg.Manifest, skill map[string]interface{}, opts installOptions) (string, error) {
 	id, _ := skill["id"].(string)
 	name, _ := skill["name"].(string)
 	repoName, _ := skill["repo_name"].(string)
 	if id == "" || name == "" {
-		return errors.New("skill record missing id or name")
+		return "", errors.New("skill record missing id or name")
 	}
 	if err := skillspkg.ValidateName(name); err != nil {
-		return err
+		return "", err
 	}
 
-	cwd, _ := os.Getwd()
-	scope, base, err := skillspkg.ResolveScope(repoName, skillsInstallScope, cwd)
+	cwd := opts.cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	scope, base, err := skillspkg.ResolveScope(repoName, opts.scope, cwd)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Fetch the canonical SKILL.md body from the platform.
 	content, err := apiClient.GetSkillCommandFile(id)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return "", fmt.Errorf("download: %w", err)
 	}
 	platformSHA := skillspkg.HashContent([]byte(content))
 
@@ -278,24 +309,24 @@ func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspk
 	// the file on disk almost certainly hasn't drifted — fast no-op.
 	if existing := manifest.Find(name); existing != nil {
 		if existing.PlatformSHA256 == platformSHA && fileExistsAtSha(target, platformSHA) {
-			return errAlreadyCurrent
+			return target, errAlreadyCurrent
 		}
-		// Drifted. Refuse unless --force.
-		if !skillsInstallForce && fileExists(target) {
+		// Drifted. Refuse unless forced or the caller can ask.
+		if !opts.force && fileExists(target) {
 			diskSHA, _ := skillspkg.HashFile(target)
 			if diskSHA != "" && diskSHA != existing.PlatformSHA256 {
-				if !confirm(fmt.Sprintf("%s has local modifications — overwrite?", name)) {
-					return errAbortLocalChanges
+				if opts.askOverwrite == nil || !opts.askOverwrite(name) {
+					return target, errAbortLocalChanges
 				}
 			}
 		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("create skill dir: %w", err)
+		return "", fmt.Errorf("create skill dir: %w", err)
 	}
 	if err := writeAtomic(target, []byte(content)); err != nil {
-		return fmt.Errorf("write SKILL.md: %w", err)
+		return "", fmt.Errorf("write SKILL.md: %w", err)
 	}
 
 	manifest.Add(skillspkg.Entry{
@@ -309,8 +340,10 @@ func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspk
 		},
 	})
 
-	cmd.Printf("  [OK]   %s → %s\n", name, target)
-	return nil
+	if opts.out != nil {
+		_, _ = fmt.Fprintf(opts.out, "  [OK]   %s → %s\n", name, target)
+	}
+	return target, nil
 }
 
 func runSkillsUninstall(cmd *cobra.Command, args []string) error {

@@ -281,7 +281,7 @@ func mcpTools() []*mcp.Tool {
 			Annotations: teamWrite("Join a team", false, false),
 			Handler:     toolTeamJoin,
 		},
-	}, adminMCPTools()...)
+	}, append(adminMCPTools(), skillsMCPTools()...)...)
 }
 
 // ---- local handlers ----
@@ -793,6 +793,21 @@ Don't change any budget without asking me first.`
 			Description: "What this coding session has cost so far.",
 			Render: func(map[string]string) string {
 				return `Use the PromptConduit session_cost tool to tell me what this session has cost so far: the total, the split by model, and how much prompt caching saved. One short paragraph.`
+			},
+		},
+		{
+			Name:        "skills_review",
+			Title:       "Review new skills",
+			Description: "Go through skills detected from your usage: approve the useful ones and install them.",
+			Render: func(map[string]string) string {
+				return `Review the skills PromptConduit has detected from my AI coding sessions, using its skills_* tools.
+
+1. Call skills_list with filter "new" for this project (and again with no repo for global skills). If it is empty, call skills_generate once and list again; say that it needs synced transcripts (` + "`promptconduit sync`" + `) if there is still nothing.
+2. For each new skill show its name, what it does, its confidence and how many conversations it came from, in a small table.
+3. Recommend which to approve and why, then ask me. Only after I agree, call skills_approve for each one and skills_install with the right scope. Call skills_reject for ones I don't want.
+4. End by listing the slash commands I can now use.
+
+Never approve, install or delete a skill without asking me first.`
 			},
 		},
 	}
