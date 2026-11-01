@@ -32,8 +32,8 @@ Each request appears as a one-line summary by default:
 
 Use --verbose to also print the request body (and response body, when
 the server returned one) pretty-printed beneath the summary. Useful for
-checking what your hook is actually sending when events aren't showing
-up on the dashboard.
+checking what your hook is actually sending when synced events don't
+show up in 'promptconduit insights' or on the platform.
 
 The underlying file lives at ~/.config/promptconduit/outbound.ndjson
 (mode 0600). Authorization, Cookie, and similar credential headers are
