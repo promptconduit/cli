@@ -93,11 +93,12 @@ func TestMCPToolDefinitions(t *testing.T) {
 	writes := map[string]bool{"team_set_budget": true, "team_remove_budget": true, "team_tag_repo": true,
 		"team_invite": true, "team_create": true, "team_join": true,
 		"team_billing_checkout": true, "team_billing_portal": true, "team_set_member_role": true,
-		"team_remove_member": true, "team_connect_slack": true, "team_disconnect_slack": true}
+		"team_remove_member": true, "team_connect_slack": true, "team_disconnect_slack": true,
+		"skills_generate": true, "skills_approve": true, "skills_reject": true, "skills_install": true, "skills_delete": true}
 	destructive := map[string]bool{"team_remove_budget": true, "team_set_member_role": true,
-		"team_remove_member": true, "team_disconnect_slack": true}
+		"team_remove_member": true, "team_disconnect_slack": true, "skills_delete": true}
 	tools := buildMCPServer().Tools()
-	if len(tools) != 26 {
+	if len(tools) != 33 {
 		t.Errorf("tool count = %d", len(tools))
 	}
 	for _, tool := range tools {
@@ -197,6 +198,124 @@ func TestMCPSetMemberBudgetResolvesEmail(t *testing.T) {
 	}
 	if r := callTool(t, "team_set_budget", `{"scope":"repo","monthly_usd":10}`); r["isError"] != true {
 		t.Errorf("repo budget without target accepted: %v", r)
+	}
+}
+
+// fakeSkillsAPI serves the skills endpoints the MCP tools call.
+func fakeSkillsAPI(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var calls []string
+	const list = `{"skills":[
+		{"id":"11111111-1111-1111-1111-111111111111","name":"ship-it","description":"Ship a PR","skill_type":"workflow","confidence":0.9,"is_approved":true,"repo_name":""},
+		{"id":"22222222-2222-2222-2222-222222222222","name":"triage","description":"Triage issues","skill_type":"workflow","confidence":0.7,"is_approved":null,"repo_name":"acme/api"},
+		{"id":"33333333-3333-3333-3333-333333333333","name":"old","is_approved":false}],"total":3}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		calls = append(calls, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery+" "+string(body))
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/skills":
+			_, _ = io.WriteString(w, list)
+		case r.URL.Path == "/v1/skills/patterns":
+			_, _ = io.WriteString(w, `{"patterns":[{"theme":"shipping","count":12}]}`)
+		case r.URL.Path == "/v1/skills/11111111-1111-1111-1111-111111111111/command":
+			w.Header().Set("Content-Type", "text/markdown")
+			_, _ = io.WriteString(w, "---\nname: ship-it\n---\nShip it.\n")
+		case strings.HasPrefix(r.URL.Path, "/v1/skills/") && (r.Method == "PATCH" || r.Method == "DELETE"):
+			_, _ = io.WriteString(w, `{"ok":true}`)
+		default:
+			w.WriteHeader(404)
+			_, _ = io.WriteString(w, `{"detail":"not found"}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+func TestMCPSkillsTools(t *testing.T) {
+	home := isolatedHome(t)
+	srv, calls := fakeSkillsAPI(t)
+	t.Setenv("PROMPTCONDUIT_API_URL", srv.URL)
+	t.Setenv("PROMPTCONDUIT_API_KEY", "k")
+
+	// "new" keeps only skills whose approval is still undecided.
+	r := callTool(t, "skills_list", `{}`)
+	sc := r["structuredContent"].(map[string]interface{})
+	if r["isError"] == true || sc["count"] != float64(1) {
+		t.Fatalf("skills_list = %v", r)
+	}
+	if first := sc["skills"].([]interface{})[0].(map[string]interface{}); first["name"] != "triage" || first["state"] != "new" {
+		t.Errorf("new skill = %v", first)
+	}
+	if r := callTool(t, "skills_list", `{"filter":"later"}`); r["isError"] != true {
+		t.Errorf("bad filter accepted: %v", r)
+	}
+
+	// Approve by name goes through PATCH with the resolved id.
+	if r := callTool(t, "skills_approve", `{"skill":"triage"}`); r["isError"] == true {
+		t.Fatalf("approve = %v", r)
+	}
+	if last := (*calls)[len(*calls)-1]; !strings.HasPrefix(last, "PATCH /v1/skills/22222222-2222-2222-2222-222222222222") || !strings.Contains(last, `"is_approved":true`) {
+		t.Errorf("approve call = %s", last)
+	}
+
+	// A hand-written SKILL.md at the target is kept unless force is set.
+	target := filepath.Join(home, ".claude", "skills", "ship-it", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r = callTool(t, "skills_install", `{"skill":"ship-it","scope":"global"}`)
+	sc = r["structuredContent"].(map[string]interface{})
+	if r["isError"] == true || sc["skipped_count"] != float64(1) || sc["installed_count"] != float64(0) {
+		t.Fatalf("install over hand-written file = %v", r)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "mine\n" {
+		t.Errorf("hand-written file replaced: %q", b)
+	}
+	if r := callTool(t, "skills_install", `{"skill":"ship-it","scope":"user"}`); r["isError"] != true {
+		t.Errorf("bad scope accepted: %v", r)
+	}
+
+	// With force the install writes SKILL.md and records it.
+	r = callTool(t, "skills_install", `{"skill":"ship-it","scope":"global","force":true}`)
+	sc = r["structuredContent"].(map[string]interface{})
+	if r["isError"] == true || sc["installed_count"] != float64(1) {
+		t.Fatalf("install = %v", r)
+	}
+	if b, _ := os.ReadFile(target); !strings.Contains(string(b), "Ship it.") {
+		t.Errorf("SKILL.md not written: %q", b)
+	}
+	if r := callTool(t, "skills_install", `{"skill":"ship-it","scope":"global"}`); r["isError"] == true || r["structuredContent"].(map[string]interface{})["skipped_count"] != float64(1) {
+		t.Errorf("reinstall not a no-op: %v", r)
+	}
+	if r := callTool(t, "skills_install", `{"skill":"triage"}`); r["isError"] != true {
+		t.Errorf("unapproved install accepted: %v", r)
+	}
+	if r := callTool(t, "skills_install", `{}`); r["isError"] != true {
+		t.Errorf("install without skill or all accepted: %v", r)
+	}
+
+	// Delete needs confirm.
+	n := len(*calls)
+	if r := callTool(t, "skills_delete", `{"skill":"old","confirm":false}`); r["isError"] != true || len(*calls) != n {
+		t.Errorf("unconfirmed delete ran: %v", r)
+	}
+	if r := callTool(t, "skills_delete", `{"skill":"old","confirm":true}`); r["isError"] == true {
+		t.Errorf("delete = %v", r)
+	}
+	if last := (*calls)[len(*calls)-1]; !strings.HasPrefix(last, "DELETE /v1/skills/33333333-3333-3333-3333-333333333333") {
+		t.Errorf("delete call = %s", last)
+	}
+}
+
+func TestMCPSkillsToolsNeedLogin(t *testing.T) {
+	isolatedHome(t)
+	r := callTool(t, "skills_list", `{}`)
+	if r["isError"] != true || !strings.Contains(toolText(r), "promptconduit login") {
+		t.Errorf("skills_list without key = %v", r)
 	}
 }
 
