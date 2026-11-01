@@ -30,7 +30,7 @@ func skillsMCPTools() []*mcp.Tool {
 				"filter \"new\" (default) is what still needs a decision, \"ready\" is approved and installable, \"removed\" is rejected. Needs promptconduit login.",
 			InputSchema: objectSchema(schemaProps{
 				"filter": strProp("Which skills (default new).", "new", "ready", "removed", "all"),
-				"repo":   strProp("Only skills for this repo (e.g. acme/api). Omit for every scope."),
+				"repo":   strProp("Only skills for this repo (e.g. acme/api). Omit for every scope; each skill's repo_name says which repo it belongs to, and an empty repo_name means global."),
 				"type":   strProp("Only this skill type.", "workflow", "command", "template", "checklist"),
 				"limit":  intProp("Maximum skills to return (default 50).", 1, 100),
 			}),
@@ -98,9 +98,9 @@ func skillsMCPTools() []*mcp.Tool {
 			Name:  "skills_delete",
 			Title: "Delete a skill",
 			Description: "Soft-delete a skill on the platform so it disappears from every list. Use it for duplicates or skills you will never want; " +
-				"skills_reject is enough to hide one. Needs confirm: true after the user has agreed.",
+				"skills_reject is enough to hide one. Needs confirm: true after the user has agreed. A deleted skill no longer resolves, so don't retry on a not-found error.",
 			InputSchema: objectSchema(schemaProps{"skill": skillProp, "confirm": confirmProp}, "skill", "confirm"),
-			Annotations: teamWrite("Delete a skill", true, true),
+			Annotations: teamWrite("Delete a skill", true, false),
 			Handler:     toolSkillsDelete,
 		},
 	}
@@ -192,7 +192,13 @@ func toolSkillsList(_ context.Context, raw json.RawMessage) (interface{}, error)
 		a.Limit = 50
 	}
 	return skillsCall(func(c *client.Client) (interface{}, error) {
-		resp := c.GetSkills(approved, a.Type, a.Limit, a.Repo)
+		// "new" (is_approved null) can't be expressed server-side, so fetch
+		// the server maximum and filter here before applying limit.
+		fetch := a.Limit
+		if a.Filter == "new" {
+			fetch = 100
+		}
+		resp := c.GetSkills(approved, a.Type, fetch, a.Repo)
 		if !resp.Success {
 			return nil, teamAPIError("failed to list skills", resp)
 		}
@@ -200,6 +206,9 @@ func toolSkillsList(_ context.Context, raw json.RawMessage) (interface{}, error)
 			filterUnapproved(resp.Data)
 		}
 		skills := summarizeSkills(resp.Data)
+		if len(skills) > a.Limit {
+			skills = skills[:a.Limit]
+		}
 		out := map[string]interface{}{"filter": a.Filter, "skills": skills, "count": len(skills)}
 		if len(skills) == 0 {
 			switch a.Filter {
@@ -327,6 +336,9 @@ func toolSkillsInstall(_ context.Context, raw json.RawMessage) (interface{}, err
 	if a.All == (a.Skill != "") {
 		return nil, errors.New("pass either skill or all: true")
 	}
+	if a.Scope != "" && a.Scope != "project" && a.Scope != "global" {
+		return nil, fmt.Errorf("scope must be project or global, got %q", a.Scope)
+	}
 	cwd := a.Cwd
 	if cwd == "" {
 		cwd, _ = os.Getwd()
@@ -397,7 +409,10 @@ func toolSkillsInstall(_ context.Context, raw json.RawMessage) (interface{}, err
 			out["note"] = "Claude Code picks up new skills on its next session; the slash command is /<name>."
 		}
 		if len(failed) > 0 {
-			return out, fmt.Errorf("%d skill(s) failed to install", len(failed))
+			// Return the breakdown rather than an error: the MCP server drops
+			// the value when err != nil, and the agent needs to know what did
+			// get installed.
+			out["error"] = fmt.Sprintf("%d skill(s) failed to install; see failed", len(failed))
 		}
 		return out, nil
 	})

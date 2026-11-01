@@ -307,17 +307,18 @@ func installSkill(apiClient *client.Client, manifest *skillspkg.Manifest, skill 
 
 	// Idempotency check: if we already track this skill at the same sha,
 	// the file on disk almost certainly hasn't drifted — fast no-op.
-	if existing := manifest.Find(name); existing != nil {
-		if existing.PlatformSHA256 == platformSHA && fileExistsAtSha(target, platformSHA) {
-			return target, errAlreadyCurrent
-		}
-		// Drifted. Refuse unless forced or the caller can ask.
-		if !opts.force && fileExists(target) {
-			diskSHA, _ := skillspkg.HashFile(target)
-			if diskSHA != "" && diskSHA != existing.PlatformSHA256 {
-				if opts.askOverwrite == nil || !opts.askOverwrite(name) {
-					return target, errAbortLocalChanges
-				}
+	existing := manifest.Find(name)
+	if existing != nil && existing.PlatformSHA256 == platformSHA && fileExistsAtSha(target, platformSHA) {
+		return target, errAlreadyCurrent
+	}
+	// A file we didn't write (hand-made, or edited since install) is never
+	// replaced silently: refuse unless forced or the caller can ask.
+	if !opts.force && fileExists(target) {
+		diskSHA, _ := skillspkg.HashFile(target)
+		known := diskSHA == platformSHA || (existing != nil && diskSHA == existing.PlatformSHA256)
+		if diskSHA != "" && !known {
+			if opts.askOverwrite == nil || !opts.askOverwrite(name) {
+				return target, errAbortLocalChanges
 			}
 		}
 	}

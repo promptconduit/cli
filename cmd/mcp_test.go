@@ -259,14 +259,37 @@ func TestMCPSkillsTools(t *testing.T) {
 		t.Errorf("approve call = %s", last)
 	}
 
-	// Install writes SKILL.md under the global skills dir and records it.
+	// A hand-written SKILL.md at the target is kept unless force is set.
+	target := filepath.Join(home, ".claude", "skills", "ship-it", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	r = callTool(t, "skills_install", `{"skill":"ship-it","scope":"global"}`)
+	sc = r["structuredContent"].(map[string]interface{})
+	if r["isError"] == true || sc["skipped_count"] != float64(1) || sc["installed_count"] != float64(0) {
+		t.Fatalf("install over hand-written file = %v", r)
+	}
+	if b, _ := os.ReadFile(target); string(b) != "mine\n" {
+		t.Errorf("hand-written file replaced: %q", b)
+	}
+	if r := callTool(t, "skills_install", `{"skill":"ship-it","scope":"user"}`); r["isError"] != true {
+		t.Errorf("bad scope accepted: %v", r)
+	}
+
+	// With force the install writes SKILL.md and records it.
+	r = callTool(t, "skills_install", `{"skill":"ship-it","scope":"global","force":true}`)
 	sc = r["structuredContent"].(map[string]interface{})
 	if r["isError"] == true || sc["installed_count"] != float64(1) {
 		t.Fatalf("install = %v", r)
 	}
-	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "ship-it", "SKILL.md")); err != nil {
-		t.Errorf("SKILL.md not written: %v", err)
+	if b, _ := os.ReadFile(target); !strings.Contains(string(b), "Ship it.") {
+		t.Errorf("SKILL.md not written: %q", b)
+	}
+	if r := callTool(t, "skills_install", `{"skill":"ship-it","scope":"global"}`); r["isError"] == true || r["structuredContent"].(map[string]interface{})["skipped_count"] != float64(1) {
+		t.Errorf("reinstall not a no-op: %v", r)
 	}
 	if r := callTool(t, "skills_install", `{"skill":"triage"}`); r["isError"] != true {
 		t.Errorf("unapproved install accepted: %v", r)
