@@ -1,7 +1,7 @@
 {
   "_source": "promptconduit",
-  "_updated": "2026-10-29",
-  "_comment": "Curated USD per-token price snapshot (2026-10-29), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 cache reads are 0.05x. Claude Haiku 5.5 has a second rate card (5x) for prompts above 100K tokens, stored as long_context with long_context_threshold_tokens. Keys ending in @fast hold Anthropic fast-mode rates, used only when a Claude Code transcript records usage.speed=fast; the @ keeps prefix-trim from reaching them. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
+  "_updated": "2026-11-02",
+  "_comment": "Curated USD per-token price snapshot (2026-11-02), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 and Sonnet 5.5 cache reads are 0.05x. Claude Haiku 5.5 has a second rate card (5x) for prompts above 100K tokens, stored as long_context with long_context_threshold_tokens. Keys ending in @fast hold Anthropic fast-mode rates, used only when a Claude Code transcript records usage.speed=fast; the @ keeps prefix-trim from reaching them. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
   "claude-fable-5": {
     "input_cost_per_token": 0.00001,
     "output_cost_per_token": 0.00005,
@@ -42,7 +42,7 @@
     "output_cost_per_token": 0.00001,
     "cache_creation_input_token_cost": 0.0000025,
     "cache_creation_input_token_cost_1h": 0.000004,
-    "cache_read_input_token_cost": 0.0000002
+    "cache_read_input_token_cost": 0.0000001
   },
   "claude-haiku-5-5": {
     "input_cost_per_token": 0.0000001,
@@ -254,6 +254,92 @@
     "input_cost_per_token": 0.0000025,
     "output_cost_per_token": 0.000015,
     "cache_read_input_token_cost": 0.00000025
+  },
+  "_cursor_third_party_comment": "Third-party models offered in Cursor's picker, at the API list prices on cursor.com/docs/models (2026-11-02). Exact keys matter: prefix-trim would otherwise price gpt-5.4-mini as gpt-5.4 (3x) and gemini-3.5-flash-lite as gemini-3.5-flash (5x). gemini-4-argon is Google's introductory rate, which doubles on 2026-12-01.",
+  "gpt-5.4-mini": {
+    "input_cost_per_token": 0.00000075,
+    "output_cost_per_token": 0.0000045,
+    "cache_read_input_token_cost": 0.000000075
+  },
+  "gpt-5.4-nano": {
+    "input_cost_per_token": 0.0000002,
+    "output_cost_per_token": 0.00000125,
+    "cache_read_input_token_cost": 0.00000002
+  },
+  "gpt-5.2": {
+    "input_cost_per_token": 0.00000175,
+    "output_cost_per_token": 0.000014,
+    "cache_read_input_token_cost": 0.000000175
+  },
+  "gpt-5.2-codex": {
+    "input_cost_per_token": 0.00000175,
+    "output_cost_per_token": 0.000014,
+    "cache_read_input_token_cost": 0.000000175
+  },
+  "gpt-5.1-codex": {
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001,
+    "cache_read_input_token_cost": 0.000000125
+  },
+  "gpt-5.1-codex-max": {
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001,
+    "cache_read_input_token_cost": 0.000000125
+  },
+  "gpt-5.1-codex-mini": {
+    "input_cost_per_token": 0.00000025,
+    "output_cost_per_token": 0.000002,
+    "cache_read_input_token_cost": 0.000000025
+  },
+  "gpt-5": {
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001,
+    "cache_read_input_token_cost": 0.000000125
+  },
+  "gpt-5-codex": {
+    "input_cost_per_token": 0.00000125,
+    "output_cost_per_token": 0.00001,
+    "cache_read_input_token_cost": 0.000000125
+  },
+  "gpt-5-mini": {
+    "input_cost_per_token": 0.00000025,
+    "output_cost_per_token": 0.000002,
+    "cache_read_input_token_cost": 0.000000025
+  },
+  "gemini-3.5-flash-lite": {
+    "input_cost_per_token": 0.0000003,
+    "output_cost_per_token": 0.0000025,
+    "cache_read_input_token_cost": 0.00000003
+  },
+  "gemini-3-pro-image-preview": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.000012,
+    "cache_read_input_token_cost": 0.0000002
+  },
+  "gemini-4-argon": {
+    "input_cost_per_token": 0.000002,
+    "output_cost_per_token": 0.00001,
+    "cache_read_input_token_cost": 0.0000001
+  },
+  "glm-5.3": {
+    "input_cost_per_token": 0.0000014,
+    "output_cost_per_token": 0.0000044,
+    "cache_read_input_token_cost": 0.00000026
+  },
+  "glm-5.3-flash": {
+    "input_cost_per_token": 0.00000015,
+    "output_cost_per_token": 0.0000005,
+    "cache_read_input_token_cost": 0.000000029
+  },
+  "deepseek-v4.1-flash": {
+    "input_cost_per_token": 0.0000003,
+    "output_cost_per_token": 0.0000012,
+    "cache_read_input_token_cost": 0.000000006
+  },
+  "muse-wonder": {
+    "input_cost_per_token": 0.000004,
+    "output_cost_per_token": 0.00002,
+    "cache_read_input_token_cost": 0.0000002
   },
   "gemini-2.5-flash": {
     "input_cost_per_token": 0.0000003,
