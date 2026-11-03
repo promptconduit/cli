@@ -30,10 +30,16 @@ Run with no arguments to pick interactively, or name one or more tools:
 Supported tools:
   - claude-code: Claude Code CLI            (~/.claude/settings.json)
   - cursor:      Cursor IDE                 (~/.cursor/hooks.json)
+
+Experimental tools (need --experimental; hooks install and capture events,
+but cost tracking and the dashboard aren't verified for them yet):
   - gemini-cli:  Gemini CLI                 (~/.gemini/settings.json; also accepts "gemini")
   - codex:       OpenAI Codex CLI           (~/.codex/hooks.json)
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
   - grok:        Grok Build (xAI)           (~/.grok/hooks/promptconduit.json; also accepts "grok-build")
+
+  promptconduit install codex --experimental # one experimental tool
+  promptconduit install all --experimental   # supported + experimental
 
 Claude Code, Cursor and Gemini CLI also get the PromptConduit MCP server, so
 your agent can answer cost and budget questions itself (skip with --no-mcp).
@@ -60,7 +66,15 @@ var installNoExtension bool
 // (and stops the post-upgrade reconcile from adding it later).
 var installNoMCP bool
 
+// allowExperimental opts into the experimental tools (shared by install and
+// init). Without it, "all", the pickers and init's defaults cover only the
+// supported tools, and naming an experimental tool is an error.
+var allowExperimental bool
+
+const experimentalFlagHelp = "Also offer experimental tools (Gemini CLI, Codex, Copilot, Grok Build)"
+
 func init() {
+	installCmd.Flags().BoolVar(&allowExperimental, "experimental", false, experimentalFlagHelp)
 	installCmd.Flags().BoolVar(&installNoMCP, "no-mcp", false,
 		"Don't register the PromptConduit MCP server (Claude Code, Cursor, Gemini CLI)")
 	installCmd.Flags().BoolVar(&installLocalOnly, "local-only", false,
@@ -94,14 +108,52 @@ func installCostExtension(e extension.Editor) {
 	}
 }
 
+type installableTool struct {
+	name, label string
+	// experimental tools install real hooks, but nothing verifies their
+	// payloads end to end (no platform adapter for codex/copilot, no live
+	// test for any of them), so they stay opt-in behind --experimental.
+	experimental bool
+}
+
 // installableTools is the ordered set offered in the interactive picker.
-var installableTools = []struct{ name, label string }{
-	{"claude-code", "Claude Code"},
-	{"cursor", "Cursor"},
-	{"gemini-cli", "Gemini CLI"},
-	{"codex", "OpenAI Codex"},
-	{"copilot", "GitHub Copilot"},
-	{"grok", "Grok Build"},
+// Supported tools come first so their picker numbers stay stable.
+var installableTools = []installableTool{
+	{"claude-code", "Claude Code", false},
+	{"cursor", "Cursor", false},
+	{"gemini-cli", "Gemini CLI", true},
+	{"codex", "OpenAI Codex", true},
+	{"copilot", "GitHub Copilot", true},
+	{"grok", "Grok Build", true},
+}
+
+// offeredTools is installableTools minus the experimental ones unless
+// --experimental is set.
+func offeredTools() []installableTool {
+	var out []installableTool
+	for _, t := range installableTools {
+		if !t.experimental || allowExperimental {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func isExperimentalTool(name string) bool {
+	for _, t := range installableTools {
+		if t.name == name {
+			return t.experimental
+		}
+	}
+	return false
+}
+
+// checkExperimental rejects an experimental tool unless --experimental is set.
+func checkExperimental(name string) error {
+	if isExperimentalTool(name) && !allowExperimental {
+		return fmt.Errorf("%s is experimental: its hooks install and capture events, but cost tracking and the dashboard aren't verified for it yet. Re-run with --experimental to install it anyway", name)
+	}
+	return nil
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
@@ -213,6 +265,9 @@ func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 		if !envelope.IsValidTool(t) {
 			return nil, fmt.Errorf("unknown tool: %s. Supported: %s (or 'all')", tok, strings.Join(toolNames(), ", "))
 		}
+		if err := checkExperimental(t); err != nil {
+			return nil, err
+		}
 		if !seen[t] {
 			seen[t] = true
 			out = append(out, t)
@@ -225,8 +280,8 @@ func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 func selectToolsInteractive(cmd *cobra.Command) ([]string, error) {
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
-	for i, t := range installableTools {
-		_, _ = fmt.Fprintf(out, "  %d) %s\n", i+1, t.label)
+	for i, t := range offeredTools() {
+		_, _ = fmt.Fprintf(out, "  %d) %s\n", i+1, toolLabel(t))
 	}
 	_, _ = fmt.Fprint(out, "Enter numbers (e.g. 1,2), names, or 'all': ")
 
@@ -256,14 +311,18 @@ func parseToolSelection(input string) ([]string, error) {
 		}
 		var name string
 		if n, err := strconv.Atoi(tok); err == nil {
-			if n < 1 || n > len(installableTools) {
-				return nil, fmt.Errorf("invalid choice: %s (pick 1-%d)", tok, len(installableTools))
+			offered := offeredTools()
+			if n < 1 || n > len(offered) {
+				return nil, fmt.Errorf("invalid choice: %s (pick 1-%d)", tok, len(offered))
 			}
-			name = installableTools[n-1].name
+			name = offered[n-1].name
 		} else {
 			name = normalizeToolName(tok)
 			if !envelope.IsValidTool(name) {
 				return nil, fmt.Errorf("unknown tool: %s", tok)
+			}
+			if err := checkExperimental(name); err != nil {
+				return nil, err
 			}
 		}
 		if !seen[name] {
@@ -284,12 +343,22 @@ func normalizeToolName(s string) string {
 	return s
 }
 
+// toolNames lists the offered tools: what "all" expands to and what the
+// pickers default to.
 func toolNames() []string {
-	names := make([]string, len(installableTools))
-	for i, t := range installableTools {
+	offered := offeredTools()
+	names := make([]string, len(offered))
+	for i, t := range offered {
 		names[i] = t.name
 	}
 	return names
+}
+
+func toolLabel(t installableTool) string {
+	if t.experimental {
+		return t.label + " (experimental)"
+	}
+	return t.label
 }
 
 func installClaudeCode(exePath string) error {

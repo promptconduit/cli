@@ -35,12 +35,21 @@ PromptConduit CLI captures prompts, tool executions, and session events from AI 
 
 | Tool | Events Captured |
 |------|-----------------|
-| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments |
-| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
+| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments, Cost |
+| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments, Cost |
+
+**Experimental** (opt in with `--experimental`). The hooks install and capture events, but cost tracking and the dashboard aren't verified for these tools yet:
+
+| Tool | Events Captured |
+|------|-----------------|
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
 | [OpenAI Codex CLI](https://github.com/openai/codex) | Prompts, Tools, Permissions, Sessions |
 | [GitHub Copilot CLI](https://github.com/github/copilot-cli) | Prompts, Tools, Subagents, Errors, Sessions |
 | [Grok Build](https://docs.x.ai/build/features/hooks) | Prompts, Tools, Sessions, Subagents |
+
+```bash
+promptconduit install codex --experimental
+```
 
 **Local skill generation** (no account required):
 
@@ -132,7 +141,7 @@ promptconduit status
 
 ```bash
 promptconduit login                  # browser sign-in; saves your key to config
-promptconduit install claude-code    # or: cursor | gemini-cli | codex | copilot | grok
+promptconduit install claude-code    # or: cursor (experimental: gemini-cli | codex | copilot | grok, with --experimental)
 promptconduit status
 ```
 
