@@ -12,14 +12,15 @@ func near(a, b float64) bool { return math.Abs(a-b) < 1e-12 }
 // TestResolvePrice_ClaudeFiveFive pins the 5.5 generation to Anthropic's list
 // rates. claude-haiku-5-5 used to miss the table entirely (trim found nothing,
 // so subagent spend on it showed $0), and claude-sonnet-5-5 only priced by
-// accident through the claude-sonnet-5 trim.
+// accident through the claude-sonnet-5 trim. Sonnet 5.5 cache reads are 0.05x
+// input ($0.10/MTok), like Opus 5.5 — not Sonnet 5's standard 0.1x.
 func TestResolvePrice_ClaudeFiveFive(t *testing.T) {
 	tbl := mustTable(t)
 	cases := []struct {
-		model                               string
+		model                              string
 		in, out, write5m, write1h, cacheRd float64
 	}{
-		{"claude-sonnet-5-5", 2e-6, 10e-6, 2.5e-6, 4e-6, 0.2e-6},
+		{"claude-sonnet-5-5", 2e-6, 10e-6, 2.5e-6, 4e-6, 0.1e-6},
 		{"claude-haiku-5-5", 0.1e-6, 0.5e-6, 0.125e-6, 0.2e-6, 0.01e-6},
 		{"claude-opus-5-5", 4e-6, 20e-6, 5e-6, 8e-6, 0.2e-6},
 		{"claude-fable-5-1", 10e-6, 50e-6, 12.5e-6, 20e-6, 0.25e-6},
@@ -151,5 +152,35 @@ func TestSeedNewestIncludesSubagents(t *testing.T) {
 	}
 	if len(s.ByModel) != 2 {
 		t.Errorf("by_model = %+v, want Opus 5.5 and Haiku 5.5", s.ByModel)
+	}
+}
+
+// TestResolvePrice_CursorThirdParty pins the smaller variants of models in
+// Cursor's picker to their own rows. Without exact keys, prefix-trim lands on
+// the bigger sibling (gpt-5.4-mini -> gpt-5.4 is 3x, gemini-3.5-flash-lite ->
+// gemini-3.5-flash is 5x) or on nothing at all.
+func TestResolvePrice_CursorThirdParty(t *testing.T) {
+	tbl := mustTable(t)
+	cases := []struct {
+		model            string
+		in, out, cacheRd float64
+	}{
+		{"gpt-5.4-mini", 0.75e-6, 4.5e-6, 0.075e-6},
+		{"gpt-5.4-nano", 0.2e-6, 1.25e-6, 0.02e-6},
+		{"gpt-5.1-codex-mini", 0.25e-6, 2e-6, 0.025e-6},
+		{"gpt-5-mini", 0.25e-6, 2e-6, 0.025e-6},
+		{"gemini-3.5-flash-lite", 0.3e-6, 2.5e-6, 0.03e-6},
+		{"gemini-4-argon", 2e-6, 10e-6, 0.1e-6},
+		{"glm-5.3-flash", 0.15e-6, 0.5e-6, 0.029e-6},
+	}
+	for _, tc := range cases {
+		key, mp, ok := tbl.resolve(tc.model)
+		if !ok || key != tc.model {
+			t.Errorf("%s: resolved to %q ok=%v, want its own row", tc.model, key, ok)
+			continue
+		}
+		if !near(mp.Input, tc.in) || !near(mp.Output, tc.out) || !near(mp.CacheRead, tc.cacheRd) {
+			t.Errorf("%s: rates %+v", tc.model, mp)
+		}
 	}
 }
