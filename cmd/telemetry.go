@@ -98,8 +98,9 @@ func maybeTelemetry(cmd *cobra.Command) {
 	st := telemetry.Load(dir)
 	if st.NoticeShownAt.IsZero() {
 		// Only count the notice as shown when a person can actually see it,
-		// not when a tool runs the CLI with stderr captured.
-		if !outbound.IsTerminal(os.Stderr) {
+		// not when a tool runs the CLI with stderr captured. --quiet defers
+		// it too, and nothing is sent until the notice has been shown.
+		if !outbound.IsTerminal(os.Stderr) || quiet() {
 			return
 		}
 		printTelemetryNotice(cmd.ErrOrStderr())

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/promptconduit/cli/internal/logger"
 )
 
 // DefaultMaxBodyBytes is the per-direction body cap recorded in the mirror.
@@ -78,8 +80,24 @@ func (m *Mirror) RoundTrip(req *http.Request) (*http.Response, error) {
 		_ = respOriginal // recorded for completeness; not currently exposed
 	}
 
-	m.record(req, reqBody, reqOriginal, reqTrunc, resp, respBody, respTrunc, 0, time.Since(start), sendErr)
+	elapsed := time.Since(start)
+	m.record(req, reqBody, reqOriginal, reqTrunc, resp, respBody, respTrunc, 0, elapsed, sendErr)
+	debugLog(req, resp, elapsed, sendErr)
 	return resp, sendErr
+}
+
+// debugLog writes one line per request at debug level (shown on stderr with
+// the global --debug flag). Host and path only: query strings and headers
+// can carry credentials.
+func debugLog(req *http.Request, resp *http.Response, elapsed time.Duration, err error) {
+	outcome := "no response"
+	switch {
+	case err != nil:
+		outcome = "error: " + err.Error()
+	case resp != nil:
+		outcome = resp.Status
+	}
+	logger.Debug("http %s %s%s → %s (%s)", req.Method, req.URL.Host, req.URL.Path, outcome, elapsed.Round(time.Millisecond))
 }
 
 func (m *Mirror) maxBody() int {

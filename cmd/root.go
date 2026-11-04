@@ -27,29 +27,49 @@ var rootCmd = &cobra.Command{
 	Long: `PromptConduit captures events from AI coding assistants and sends them to
 the PromptConduit API for analysis and insights.
 
-Supported tools:
-  - Claude Code
-  - Cursor
-  - Gemini CLI
-  - Codex
-  - GitHub Copilot
-  - Grok Build
+Supported tools: Claude Code and Cursor.
+Experimental (install with --experimental): Gemini CLI, Codex,
+GitHub Copilot and Grok Build.
 
 Get started:
   1. Install: curl -fsSL https://promptconduit.dev/install | bash
   2. Sign in:  promptconduit login
-  3. Set up:   promptconduit init`,
+  3. Set up:   promptconduit init
+
+Docs: https://promptconduit.dev/docs
+Report a problem: promptconduit feedback`,
+	// Errors print just the message. Usage errors (bad flag or arguments)
+	// add a one-line pointer to --help; see Execute.
+	SilenceUsage: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		maybeBackgroundUpdateCheck(cmd)
 		maybeTelemetry(cmd)
 	},
 }
 
+// Execute runs the CLI. main exits 1 on any returned error.
 func Execute() error {
-	return rootCmd.Execute()
+	rootCmd.Version = Version
+	// Every init() has run by now, so the whole command tree is built.
+	markUsageErrors(rootCmd)
+	cmd, err := rootCmd.ExecuteC()
+	if err != nil && isUsageError(err) {
+		printUsageHint(cmd.ErrOrStderr(), cmd)
+	}
+	return err
 }
 
 func init() {
+	// cmd.Print* writes to stderr unless an output is set. Command output
+	// belongs on stdout so it can be piped; errors still go to stderr.
+	rootCmd.SetOut(os.Stdout)
+	rootCmd.SetVersionTemplate("promptconduit {{.Version}}\n")
+	rootCmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return usageError{err}
+	})
+	registerGlobalFlags(rootCmd)
+	cobra.OnInitialize(applyGlobalFlags)
+
 	rootCmd.AddCommand(installCmd)
 	rootCmd.AddCommand(uninstallCmd)
 	rootCmd.AddCommand(loginCmd)
@@ -166,6 +186,9 @@ func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
 }
 
 func notifyNewer(cmd *cobra.Command, latest, releaseURL string, disabled bool) {
+	if quiet() {
+		return
+	}
 	hint := "run `promptconduit upgrade` to install"
 	if !disabled {
 		hint = "downloading in background; next invocation will use the new version"
@@ -204,6 +227,9 @@ func reconcileCostExtension(cmd *cobra.Command) {
 }
 
 func notifyUpgraded(cmd *cobra.Command, from, to, releaseURL string) {
+	if quiet() {
+		return
+	}
 	w := cmd.ErrOrStderr()
 	_, _ = fmt.Fprintf(w, "promptconduit: upgraded %s → %s\n", from, to)
 	if releaseURL != "" {

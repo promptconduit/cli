@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/promptconduit/cli/internal/client"
-	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +30,8 @@ var (
 
 func init() {
 	initCmd.Flags().BoolVar(&initLocalOnly, "local-only", false, "Local-only mode — no account or cloud sync")
-	initCmd.Flags().StringVar(&initAPIKey, "api-key", "", "Set API key directly (skips login)")
+	initCmd.Flags().StringVar(&initAPIKey, "api-key", "", "Set API key directly, skipping login (visible in shell history; prefer --api-key-stdin)")
+	addAPIKeyStdinFlag(initCmd, &initAPIKey)
 	initCmd.Flags().BoolVar(&initYes, "yes", false, "Non-interactive: install all detected tools")
 	initCmd.Flags().StringVar(&initTools, "tools", "", "Comma-separated tools to install (skips picker)")
 	initCmd.Flags().BoolVar(&allowExperimental, "experimental", false, experimentalFlagHelp)
@@ -47,12 +47,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	cloudMode := !initLocalOnly
 
 	// Step 1: Choose mode (unless flags preset it)
-	if !initLocalOnly && !initYes && outbound.IsTerminal(os.Stdin) && initAPIKey == "" {
+	if !initLocalOnly && !initYes && canPrompt() && initAPIKey == "" {
 		cloudMode, initLocalOnly = promptInitMode(cmd)
-	} else if !initLocalOnly && !outbound.IsTerminal(os.Stdin) && initAPIKey == "" {
+	} else if !initLocalOnly && !canPrompt() && initAPIKey == "" {
 		cfg := client.LoadConfig()
 		if !cfg.IsConfigured() {
-			return fmt.Errorf("non-interactive mode: pass --local-only, --api-key, or run in a terminal to sign in")
+			return fmt.Errorf("non-interactive mode: pass --local-only or --api-key-stdin, or run in a terminal to sign in")
 		}
 	}
 
@@ -80,8 +80,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 		} else {
 			cfg := client.LoadConfig()
 			if !cfg.IsConfigured() {
-				if !outbound.IsTerminal(os.Stdin) {
-					return fmt.Errorf("non-interactive mode: pass --api-key or run promptconduit login in a terminal first")
+				if !canPrompt() {
+					return fmt.Errorf("non-interactive mode: pass --api-key-stdin, or run promptconduit login in a terminal first")
 				}
 				_, _ = fmt.Fprintln(out, "No API key found — starting login...")
 				_, _ = fmt.Fprintln(out)
@@ -190,7 +190,7 @@ func promptInitMode(cmd *cobra.Command) (cloudMode bool, localOnly bool) {
 
 // selectToolsForInit shows the tool picker with detected tools pre-selected.
 func selectToolsForInit(cmd *cobra.Command, detected []string) ([]string, error) {
-	if !outbound.IsTerminal(os.Stdin) {
+	if !canPrompt() {
 		if len(detected) > 0 {
 			return detected, nil
 		}

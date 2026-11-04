@@ -18,7 +18,7 @@ This config file is used by hooks when environment variables are not set,
 making it ideal for use with tools like Claude Code that spawn subprocesses.
 
 Quick start:
-  promptconduit config set --api-key=sk_xxx
+  promptconduit login
 
 Priority order: environment variables > config file > defaults`,
 }
@@ -122,10 +122,10 @@ replace any value set inside an individual environment.
 
 Examples:
   # Basic setup (most users)
-  promptconduit config set --api-key=sk_xxx
+  pbpaste | promptconduit config set --api-key-stdin
 
   # With custom API URL
-  promptconduit config set --api-key=sk_xxx --api-url=http://localhost:8787
+  promptconduit config set --api-key-stdin --api-url=http://localhost:8787 < key.txt
 
   # Enable debug mode
   promptconduit config set --debug
@@ -221,7 +221,7 @@ Examples:
 		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
+			return fmt.Errorf("no values provided. Use --api-key-stdin, --api-key, --api-url, --debug, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -296,7 +296,7 @@ var configEnvCmd = &cobra.Command{
 	Long: `Manage multiple environment configurations for switching between
 local development, staging, and production.
 
-Most users don't need this - just use 'promptconduit config set --api-key=...'`,
+Most users don't need this - just use 'promptconduit login'`,
 }
 
 var configEnvListCmd = &cobra.Command{
@@ -310,7 +310,7 @@ var configEnvListCmd = &cobra.Command{
 
 		if fc == nil || len(fc.Environments) == 0 {
 			cmd.Println("No environments configured.")
-			cmd.Println("Add one with: promptconduit config env add <name> --api-key=...")
+			cmd.Println("Add one with: promptconduit config env add <name> --api-key-stdin")
 			return nil
 		}
 
@@ -338,14 +338,14 @@ var configEnvAddCmd = &cobra.Command{
 	Long: `Add or update a named environment configuration.
 
 Examples:
-  promptconduit config env add local --api-key=sk_xxx --api-url=http://localhost:8787
-  promptconduit config env add prod --api-key=sk_xxx`,
+  promptconduit config env add local --api-key-stdin --api-url=http://localhost:8787 < key.txt
+  pbpaste | promptconduit config env add prod --api-key-stdin`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		envName := args[0]
 
 		if envAPIKey == "" {
-			return fmt.Errorf("--api-key is required")
+			return fmt.Errorf("an API key is required: pass --api-key-stdin (recommended) or --api-key")
 		}
 
 		fc, err := client.LoadFileConfig()
@@ -492,7 +492,8 @@ func init() {
 	configCmd.AddCommand(configSetEnvCmd) // Shortcut for env use
 
 	// config set flags
-	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "API key")
+	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", apiKeyFlagHelp)
+	addAPIKeyStdinFlag(configSetCmd, &setAPIKey)
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
 	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
@@ -508,7 +509,8 @@ func init() {
 	configEnvCmd.AddCommand(configEnvRemoveCmd)
 
 	// config env add flags
-	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", "API key (required)")
+	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", apiKeyFlagHelp+" (this or --api-key-stdin is required)")
+	addAPIKeyStdinFlag(configEnvAddCmd, &envAPIKey)
 	configEnvAddCmd.Flags().StringVar(&envAPIURL, "api-url", "", "API URL")
 	configEnvAddCmd.Flags().BoolVar(&envDebug, "debug", false, "Enable debug mode")
 }

@@ -54,7 +54,7 @@ func init() {
 
 func runWatch(cmd *cobra.Command, args []string) error {
 	path := filepath.Join(client.ConfigDir(), outbound.MirrorFileName)
-	color := outbound.IsTerminal(os.Stdout)
+	color := outbound.ColorEnabled(os.Stdout)
 
 	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

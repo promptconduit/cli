@@ -78,6 +78,16 @@ func IsTerminal(f *os.File) bool {
 	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
+// ColorEnabled reports whether ANSI color should be written to f: f is a
+// terminal, NO_COLOR is unset or empty (https://no-color.org), and TERM is
+// not "dumb". The global --no-color flag sets NO_COLOR.
+func ColorEnabled(f *os.File) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return IsTerminal(f)
+}
+
 // pathOnly strips scheme/host from a URL for the summary line; full URL
 // is still in the underlying entry for users who want it.
 func pathOnly(s string) string {

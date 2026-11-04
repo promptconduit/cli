@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/spf13/cobra"
@@ -18,6 +19,8 @@ var uninstallCmd = &cobra.Command{
 Supported tools:
   - claude-code: Claude Code CLI
   - cursor:      Cursor IDE
+
+Experimental tools (no --experimental needed to remove them):
   - gemini-cli:  Gemini CLI (also accepts "gemini")
   - codex:       OpenAI Codex CLI
   - copilot:     GitHub Copilot CLI
@@ -30,7 +33,7 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	toolName := args[0]
 
 	if !envelope.IsValidTool(toolName) {
-		return fmt.Errorf("unknown tool: %s. Supported: %v", toolName, envelope.SupportedTools())
+		return fmt.Errorf("unknown tool %q. Choose one of: %s", toolName, strings.Join(envelope.SupportedTools(), ", "))
 	}
 
 	if err := uninstallToolHooks(toolName); err != nil {

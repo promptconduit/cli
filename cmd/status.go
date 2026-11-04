@@ -17,11 +17,97 @@ import (
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show PromptConduit installation status",
-	Long:  `Display the current configuration and installation status of PromptConduit hooks.`,
-	RunE:  runStatus,
+	Long: `Display the current configuration and installation status of PromptConduit hooks.
+
+Exits 1 when no AI tool has PromptConduit hooks installed (nothing is being
+captured), so scripts can use it as a health check. Local-only mode and a
+missing API key are normal states, not failures.`,
+	Example: `  promptconduit status
+  promptconduit status --json | jq '.tools[] | select(.installed)'
+  promptconduit status >/dev/null || promptconduit install`,
+	RunE: runStatus,
+}
+
+var statusJSON bool
+
+func init() {
+	statusCmd.Flags().BoolVar(&statusJSON, "json", false, "Print machine-readable JSON")
+}
+
+// errNothingInstalled is status's failure: no tool has hooks installed.
+var errNothingInstalled = fmt.Errorf("no AI tool has PromptConduit hooks installed. Run: promptconduit install")
+
+// statusReport is the `status --json` payload. Keep fields stable: scripts
+// read it.
+type statusReport struct {
+	CLIVersion       string              `json:"cli_version"`
+	Mode             string              `json:"mode"` // "cloud" or "local-only"
+	APIKeyConfigured bool                `json:"api_key_configured"`
+	APIURL           string              `json:"api_url"`
+	Debug            bool                `json:"debug"`
+	EventLog         eventLogReport      `json:"event_log"`
+	Tools            []toolInstallStatus `json:"tools"`
+	MCP              mcpStatusReport     `json:"mcp"`
+	// Ready is true when at least one tool has hooks installed.
+	Ready bool `json:"ready"`
+}
+
+type eventLogReport struct {
+	Enabled        bool            `json:"enabled"`
+	Counters       eventlog.Status `json:"counters"`
+	Queued         int             `json:"queued"`
+	CapturedPath   string          `json:"captured_path"`
+	CapturedEvents *int            `json:"captured_events,omitempty"`
+}
+
+func buildStatusReport() statusReport {
+	cfg := client.LoadConfig()
+	home, _ := os.UserHomeDir()
+	r := statusReport{
+		CLIVersion:       Version,
+		Mode:             "local-only",
+		APIKeyConfigured: cfg.IsConfigured(),
+		APIURL:           cfg.APIURL,
+		Debug:            cfg.Debug,
+		EventLog: eventLogReport{
+			Enabled:      cfg.EventLogEnabled(),
+			CapturedPath: eventlog.EventsJSONLPath(),
+		},
+		Tools: inspectToolInstalls(home),
+		MCP:   buildMCPStatus(home, loadMCPState()),
+	}
+	if cfg.ShouldSend() {
+		r.Mode = "cloud"
+	}
+	if r.EventLog.Enabled {
+		r.EventLog.Counters = eventlog.LoadStatus()
+		r.EventLog.Queued = eventlog.OutboxCount(cfg.APIURL)
+		if n, ok := eventlog.CountCaptured(); ok {
+			r.EventLog.CapturedEvents = &n
+		}
+	}
+	for _, t := range r.Tools {
+		if t.Installed {
+			r.Ready = true
+		}
+	}
+	return r
 }
 
 func runStatus(cmd *cobra.Command, args []string) error {
+	if statusJSON {
+		r := buildStatusReport()
+		enc := json.NewEncoder(cmd.OutOrStdout())
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(r); err != nil {
+			return err
+		}
+		if !r.Ready {
+			return errNothingInstalled
+		}
+		return nil
+	}
+
 	fmt.Printf("PromptConduit CLI v%s\n\n", Version)
 
 	if self, err := os.Executable(); err == nil {
@@ -45,7 +131,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			fmt.Printf("API Key: %s (configured, unused in local-only mode)\n", client.MaskAPIKey(cfg.APIKey))
 		} else {
 			fmt.Println("API Key: Not set — add one to enable cloud sync:")
-			fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+			fmt.Println("  promptconduit login")
 		}
 	}
 
@@ -58,15 +144,138 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Check tool installations
 	fmt.Println("Tool Installations:")
-	checkClaudeCodeInstallation()
-	checkCursorInstallation()
-	checkGeminiInstallation()
-	checkCodexInstallation()
-	checkCopilotInstallation()
-	checkGrokInstallation()
+	home, _ := os.UserHomeDir()
+	tools := inspectToolInstalls(home)
+	ready := false
+	for _, t := range tools {
+		fmt.Printf("  %-12s %s\n", t.Label+":", t.describe())
+		ready = ready || t.Installed
+	}
 
 	printMCPStatus()
+	if !ready {
+		fmt.Println()
+		return errNothingInstalled
+	}
 	return nil
+}
+
+// toolInstallStatus is one tool's hook installation, as `status --json`
+// reports it.
+type toolInstallStatus struct {
+	Tool         string `json:"tool"`
+	Label        string `json:"label"`
+	Experimental bool   `json:"experimental"`
+	Installed    bool   `json:"installed"`
+	Hooks        int    `json:"hooks"`
+	// Detail explains a not-installed state ("no settings file") or an
+	// error reading the tool's config.
+	Detail string `json:"detail,omitempty"`
+	Error  bool   `json:"error,omitempty"`
+}
+
+func (t toolInstallStatus) describe() string {
+	switch {
+	case t.Error:
+		return t.Detail
+	case t.Installed && t.Hooks > 0:
+		return fmt.Sprintf("Installed (%d hooks)", t.Hooks)
+	case t.Installed:
+		return "Installed"
+	case t.Detail != "":
+		return "Not installed (" + t.Detail + ")"
+	default:
+		return "Not installed"
+	}
+}
+
+// inspectToolInstalls checks every tool's hook config for PromptConduit
+// hooks, supported tools first.
+func inspectToolInstalls(home string) []toolInstallStatus {
+	return []toolInstallStatus{
+		inspectHooksMap("claude-code", "Claude Code", filepath.Join(home, ".claude", "settings.json"), "no settings file"),
+		inspectHooksMap("cursor", "Cursor", filepath.Join(home, ".cursor", "hooks.json"), "no hooks file"),
+		inspectHooksMap("gemini-cli", "Gemini CLI", filepath.Join(home, ".gemini", "settings.json"), "no settings file"),
+		inspectHooksMap("codex", "Codex", filepath.Join(home, ".codex", "hooks.json"), "no hooks file"),
+		inspectCopilot(home),
+		inspectGrok(home),
+	}
+}
+
+func newToolStatus(tool, label string) toolInstallStatus {
+	return toolInstallStatus{Tool: tool, Label: label, Experimental: isExperimentalTool(tool)}
+}
+
+// inspectHooksMap handles tools whose config is JSON with a top-level
+// "hooks" object keyed by event name.
+func inspectHooksMap(tool, label, path, missing string) toolInstallStatus {
+	s := newToolStatus(tool, label)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		s.Detail = missing
+		return s
+	}
+	var settings map[string]interface{}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		s.Error, s.Detail = true, "Error reading "+filepath.Base(path)
+		return s
+	}
+	hooks, ok := settings["hooks"].(map[string]interface{})
+	if !ok {
+		s.Detail = "no hooks"
+		return s
+	}
+	for _, hookConfig := range hooks {
+		if containsPromptConduitString(hookConfig) {
+			s.Hooks++
+		}
+	}
+	s.Installed = s.Hooks > 0
+	return s
+}
+
+func inspectCopilot(home string) toolInstallStatus {
+	s := newToolStatus("copilot", "Copilot")
+	hooksDir := filepath.Join(home, ".copilot", "hooks")
+	entries, err := os.ReadDir(hooksDir)
+	if err != nil {
+		s.Detail = "no hooks directory"
+		return s
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(hooksDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var hook map[string]interface{}
+		if err := json.Unmarshal(data, &hook); err != nil {
+			continue
+		}
+		if containsPromptConduitString(hook) {
+			s.Hooks++
+		}
+	}
+	s.Installed = s.Hooks > 0
+	return s
+}
+
+func inspectGrok(home string) toolInstallStatus {
+	s := newToolStatus("grok", "Grok Build")
+	data, err := os.ReadFile(filepath.Join(home, ".grok", "hooks", GrokHookFile))
+	if err != nil {
+		s.Detail = "no hooks file"
+		return s
+	}
+	var hook map[string]interface{}
+	if err := json.Unmarshal(data, &hook); err != nil {
+		s.Detail = "invalid hooks file"
+		return s
+	}
+	s.Installed = containsPromptConduitString(hook)
+	return s
 }
 
 // printMCPStatus shows where the PromptConduit MCP server is registered.
@@ -184,211 +393,6 @@ func localTime(ts string) string {
 		return t.Local().Format("2006-01-02 15:04:05")
 	}
 	return ts
-}
-
-func checkClaudeCodeInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	settingsPath := filepath.Join(homeDir, ".claude", "settings.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		fmt.Println("  Claude Code: Not installed (no settings file)")
-		return
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		fmt.Println("  Claude Code: Error reading settings")
-		return
-	}
-
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		fmt.Println("  Claude Code: Not installed (no hooks)")
-		return
-	}
-
-	// Count PromptConduit hooks
-	count := 0
-	for _, hookConfig := range hooks {
-		if containsPromptConduitString(hookConfig) {
-			count++
-		}
-	}
-
-	if count > 0 {
-		fmt.Printf("  Claude Code: Installed (%d hooks)\n", count)
-	} else {
-		fmt.Println("  Claude Code: Not installed")
-	}
-}
-
-func checkCursorInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	settingsPath := filepath.Join(homeDir, ".cursor", "hooks.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		fmt.Println("  Cursor:      Not installed (no hooks file)")
-		return
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		fmt.Println("  Cursor:      Error reading settings")
-		return
-	}
-
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		fmt.Println("  Cursor:      Not installed (no hooks)")
-		return
-	}
-
-	// Count PromptConduit hooks
-	count := 0
-	for _, hookConfig := range hooks {
-		if containsPromptConduitString(hookConfig) {
-			count++
-		}
-	}
-
-	if count > 0 {
-		fmt.Printf("  Cursor:      Installed (%d hooks)\n", count)
-	} else {
-		fmt.Println("  Cursor:      Not installed")
-	}
-}
-
-func checkGeminiInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	settingsPath := filepath.Join(homeDir, ".gemini", "settings.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		fmt.Println("  Gemini CLI:  Not installed (no settings file)")
-		return
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		fmt.Println("  Gemini CLI:  Error reading settings")
-		return
-	}
-
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		fmt.Println("  Gemini CLI:  Not installed (no hooks)")
-		return
-	}
-
-	// Count PromptConduit hooks
-	count := 0
-	for _, hookConfig := range hooks {
-		if containsPromptConduitString(hookConfig) {
-			count++
-		}
-	}
-
-	if count > 0 {
-		fmt.Printf("  Gemini CLI:  Installed (%d hooks)\n", count)
-	} else {
-		fmt.Println("  Gemini CLI:  Not installed")
-	}
-}
-
-func checkCodexInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	settingsPath := filepath.Join(homeDir, ".codex", "hooks.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		fmt.Println("  Codex:       Not installed (no hooks file)")
-		return
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		fmt.Println("  Codex:       Error reading hooks")
-		return
-	}
-
-	hooks, ok := settings["hooks"].(map[string]interface{})
-	if !ok {
-		fmt.Println("  Codex:       Not installed (no hooks)")
-		return
-	}
-
-	count := 0
-	for _, hookConfig := range hooks {
-		if containsPromptConduitString(hookConfig) {
-			count++
-		}
-	}
-
-	if count > 0 {
-		fmt.Printf("  Codex:       Installed (%d hooks)\n", count)
-	} else {
-		fmt.Println("  Codex:       Not installed")
-	}
-}
-
-func checkCopilotInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	hooksDir := filepath.Join(homeDir, ".copilot", "hooks")
-
-	entries, err := os.ReadDir(hooksDir)
-	if err != nil {
-		fmt.Println("  Copilot:     Not installed (no hooks directory)")
-		return
-	}
-
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(hooksDir, entry.Name()))
-		if err != nil {
-			continue
-		}
-		var hook map[string]interface{}
-		if err := json.Unmarshal(data, &hook); err != nil {
-			continue
-		}
-		if containsPromptConduitString(hook) {
-			count++
-		}
-	}
-
-	if count > 0 {
-		fmt.Printf("  Copilot:     Installed (%d hooks)\n", count)
-	} else {
-		fmt.Println("  Copilot:     Not installed")
-	}
-}
-
-func checkGrokInstallation() {
-	homeDir, _ := os.UserHomeDir()
-	hooksPath := filepath.Join(homeDir, ".grok", "hooks", GrokHookFile)
-
-	data, err := os.ReadFile(hooksPath)
-	if err != nil {
-		fmt.Println("  Grok Build:  Not installed (no hooks file)")
-		return
-	}
-
-	var hook map[string]interface{}
-	if err := json.Unmarshal(data, &hook); err != nil {
-		fmt.Println("  Grok Build:  Not installed (invalid hooks file)")
-		return
-	}
-
-	if containsPromptConduitString(hook) {
-		fmt.Println("  Grok Build:  Installed")
-	} else {
-		fmt.Println("  Grok Build:  Not installed")
-	}
 }
 
 // containsPromptConduitString checks if a value contains "promptconduit" string
