@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
@@ -43,21 +42,14 @@ func registerGlobalFlags(root *cobra.Command) {
 }
 
 // applyGlobalFlags runs after flag parsing (cobra.OnInitialize), before any
-// hook or RunE. Flags are exported as environment variables so child
-// processes (background upgrade, sync) and packages that read the
-// environment see the same choice.
+// hook or RunE. The flags stay in-process on purpose: they are NOT exported
+// as environment variables, because `resume` execs the AI tool and anything
+// in our environment would reach every hook of that whole session.
 func applyGlobalFlags() {
 	if flagNoColor {
-		_ = os.Setenv("NO_COLOR", "1")
-	}
-	if flagNoInput {
-		_ = os.Setenv(envNoInput, "1")
-	}
-	if flagQuiet {
-		_ = os.Setenv(envQuiet, "1")
+		outbound.DisableColor()
 	}
 	if flagDebug {
-		_ = os.Setenv(client.EnvDebug, "1")
 		logger.SetDebug(true)
 		logger.SetEcho(os.Stderr)
 	}

@@ -60,7 +60,7 @@ func TestConfigSet_ConnectionSettingsTargetActiveEnv(t *testing.T) {
 		},
 	})
 
-	runConfigSet(t, map[string]string{"debug": "false"})
+	runConfigSet(t, map[string]string{"debug-mode": "false"})
 	if client.LoadConfig().Debug {
 		t.Fatal("debug still on for the active env after --debug=false")
 	}
@@ -71,7 +71,7 @@ func TestConfigSet_ConnectionSettingsTargetActiveEnv(t *testing.T) {
 		t.Fatalf("active env not updated: url=%q key=%q", cfg.APIURL, cfg.APIKey)
 	}
 
-	runConfigSet(t, map[string]string{"debug": "true"})
+	runConfigSet(t, map[string]string{"debug-mode": "true"})
 	if !client.LoadConfig().Debug {
 		t.Fatal("debug not on for the active env after --debug")
 	}
@@ -92,7 +92,7 @@ func TestConfigSet_LegacyFlatConfig(t *testing.T) {
 	isolateConfigSet(t)
 	saveFileConfig(t, &client.FileConfig{APIKey: "sk_flat", Debug: true})
 
-	runConfigSet(t, map[string]string{"debug": "false"})
+	runConfigSet(t, map[string]string{"debug-mode": "false"})
 	cfg := client.LoadConfig()
 	if cfg.Debug {
 		t.Fatal("debug still on after --debug=false with flat config")

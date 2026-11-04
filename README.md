@@ -498,7 +498,7 @@ promptconduit config set --api-key-stdin < key.txt
 promptconduit config set --api-url=http://localhost:8787
 
 # Enable debug mode
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Show config file path
 promptconduit config path
@@ -513,7 +513,7 @@ Create environments for local, dev, and prod:
 promptconduit config env add local \
   --api-key=sk_local_key \
   --api-url=http://localhost:8787 \
-  --debug
+  --debug-mode
 
 # Create dev environment
 promptconduit config env add dev \
@@ -570,7 +570,7 @@ Enable debug mode to log hook activity:
 
 ```bash
 # Via config
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Via environment variable
 export PROMPTCONDUIT_DEBUG=1

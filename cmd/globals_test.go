@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -23,6 +24,7 @@ func runCLI(t *testing.T, args ...string) (string, string, error) {
 	t.Setenv("PROMPTCONDUIT_AUTO_UPDATE", "0")
 	t.Setenv("DO_NOT_TRACK", "1")
 	t.Setenv("NO_COLOR", "")
+	t.Setenv("PROMPTCONDUIT_DEBUG", "")
 	t.Setenv(envNoInput, "")
 	t.Setenv(envQuiet, "")
 
@@ -232,5 +234,41 @@ func TestStatusReadyWhenHooksInstalled(t *testing.T) {
 	}
 	if got := tools[0].describe(); got != "Installed (1 hooks)" {
 		t.Fatalf("describe = %q", got)
+	}
+}
+
+// A global --debug on `config set` must not persist debug mode (it used to be
+// shadowed by config set's own --debug flag); saving it is --debug-mode.
+func TestGlobalDebugDoesNotPersistDebugMode(t *testing.T) {
+	t.Cleanup(func() { logger.SetEcho(nil); logger.SetDebug(false); flagDebug = false })
+	_, _, err := runCLI(t, "--debug", "config", "set", "--api-url=http://localhost:8787")
+	if err != nil {
+		t.Fatalf("config set: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "promptconduit", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"debug": true`) || strings.Contains(string(data), `"debug":true`) {
+		t.Fatalf("global --debug saved debug mode: %s", data)
+	}
+}
+
+func TestGlobalDebugAloneOnConfigSetHints(t *testing.T) {
+	t.Cleanup(func() { logger.SetEcho(nil); logger.SetDebug(false); flagDebug = false })
+	_, errOut, err := runCLI(t, "config", "set", "--debug")
+	if err == nil || !strings.Contains(errOut, "--debug-mode") {
+		t.Fatalf("want a --debug-mode hint, got err=%v stderr=%q", err, errOut)
+	}
+}
+
+// Global flags must not leak into child processes (resume execs the AI tool).
+func TestGlobalFlagsDoNotExportEnv(t *testing.T) {
+	t.Cleanup(func() { logger.SetEcho(nil); logger.SetDebug(false) })
+	_, _, _ = runCLI(t, "--debug", "--no-color", "--no-input", "-q", "version")
+	for _, name := range []string{"PROMPTCONDUIT_DEBUG", "NO_COLOR", envNoInput, envQuiet} {
+		if v := os.Getenv(name); v != "" {
+			t.Errorf("%s=%q exported by a global flag", name, v)
+		}
 	}
 }

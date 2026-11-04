@@ -5,8 +5,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptconduit/cli/internal/logger"
@@ -87,17 +89,40 @@ func (m *Mirror) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // debugLog writes one line per request at debug level (shown on stderr with
-// the global --debug flag). Host and path only: query strings and headers
-// can carry credentials.
+// the global --debug flag). Never the query string or headers, and invite
+// tokens in the path are masked: all can carry credentials.
 func debugLog(req *http.Request, resp *http.Response, elapsed time.Duration, err error) {
 	outcome := "no response"
 	switch {
 	case err != nil:
+		// *url.Error repeats the full URL; keep only the underlying cause.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
 		outcome = "error: " + err.Error()
 	case resp != nil:
 		outcome = resp.Status
 	}
-	logger.Debug("http %s %s%s → %s (%s)", req.Method, req.URL.Host, req.URL.Path, outcome, elapsed.Round(time.Millisecond))
+	logger.Debug("http %s %s%s → %s (%s)", req.Method, req.URL.Host, maskPathSecrets(req.URL.Path), outcome, elapsed.Round(time.Millisecond))
+}
+
+// maskPathSecrets replaces the path segment after /invites/ (an invite
+// token) with "***".
+func maskPathSecrets(p string) string {
+	const marker = "/invites/"
+	i := strings.Index(p, marker)
+	if i < 0 {
+		return p
+	}
+	rest := p[i+len(marker):]
+	if j := strings.IndexByte(rest, '/'); j >= 0 {
+		return p[:i+len(marker)] + "***" + rest[j:]
+	}
+	if rest == "" {
+		return p
+	}
+	return p[:i+len(marker)] + "***"
 }
 
 func (m *Mirror) maxBody() int {
