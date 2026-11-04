@@ -105,7 +105,7 @@ func firstSentence(s string) string {
 
 func runMCPServe(cmd *cobra.Command, args []string) error {
 	srv := buildMCPServer()
-	if os.Getenv("PROMPTCONDUIT_DEBUG") != "" {
+	if flagDebug || os.Getenv("PROMPTCONDUIT_DEBUG") != "" {
 		srv.Logf = func(format string, a ...interface{}) {
 			_, _ = fmt.Fprintf(os.Stderr, format+"\n", a...)
 		}

@@ -348,6 +348,9 @@ Examples:
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		envName := args[0]
+		if flagDebug && !cmd.Flags().Changed("debug-mode") {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "note: --debug only prints debug output for this run; to save debug mode for this environment, add --debug-mode")
+		}
 
 		if envAPIKey == "" {
 			return fmt.Errorf("an API key is required: pass --api-key-stdin (recommended) or --api-key")
