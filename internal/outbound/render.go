@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 // RenderSummary formats one mirror entry for the `watch` command.
@@ -76,6 +77,21 @@ func IsTerminal(f *os.File) bool {
 		return false
 	}
 	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+var colorDisabled atomic.Bool
+
+// DisableColor turns color off for this process (the --no-color flag).
+func DisableColor() { colorDisabled.Store(true) }
+
+// ColorEnabled reports whether ANSI color should be written to f: f is a
+// terminal, NO_COLOR is unset or empty (https://no-color.org), and TERM is
+// not "dumb", and DisableColor (the global --no-color flag) wasn't called.
+func ColorEnabled(f *os.File) bool {
+	if colorDisabled.Load() || os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	return IsTerminal(f)
 }
 
 // pathOnly strips scheme/host from a URL for the summary line; full URL

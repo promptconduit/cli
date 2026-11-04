@@ -18,7 +18,7 @@ This config file is used by hooks when environment variables are not set,
 making it ideal for use with tools like Claude Code that spawn subprocesses.
 
 Quick start:
-  promptconduit config set --api-key=sk_xxx
+  promptconduit login
 
 Priority order: environment variables > config file > defaults`,
 }
@@ -117,18 +117,18 @@ var configSetCmd = &cobra.Command{
 (or $XDG_CONFIG_HOME/promptconduit/config.json when XDG_CONFIG_HOME is set).
 
 When an environment is active (see "config env use"), --api-key, --api-url and
---debug apply to that environment's profile. The other flags are global and
+--debug-mode apply to that environment's profile. The other flags are global and
 replace any value set inside an individual environment.
 
 Examples:
   # Basic setup (most users)
-  promptconduit config set --api-key=sk_xxx
+  pbpaste | promptconduit config set --api-key-stdin
 
   # With custom API URL
-  promptconduit config set --api-key=sk_xxx --api-url=http://localhost:8787
+  promptconduit config set --api-key-stdin --api-url=http://localhost:8787 < key.txt
 
   # Enable debug mode
-  promptconduit config set --debug
+  promptconduit config set --debug-mode
 
   # Opt out of automatic background upgrades
   promptconduit config set --disable-auto-update=true
@@ -183,7 +183,7 @@ Examples:
 			conn.APIURL = setAPIURL
 			changed = true
 		}
-		if cmd.Flags().Changed("debug") {
+		if cmd.Flags().Changed("debug-mode") {
 			conn.Debug = setDebug
 			changed = true
 		}
@@ -221,7 +221,12 @@ Examples:
 		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
+			if flagDebug {
+				// --debug is the global "debug output for this run" flag;
+				// saving debug mode moved to --debug-mode.
+				return usageError{fmt.Errorf("--debug only prints debug output for this run. To save debug mode, use: promptconduit config set --debug-mode")}
+			}
+			return fmt.Errorf("no values provided. Use --api-key-stdin, --api-key, --api-url, --debug-mode, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -238,7 +243,7 @@ Examples:
 		if conn.APIURL != "" {
 			cmd.Printf("  API URL:     %s\n", conn.APIURL)
 		}
-		if cmd.Flags().Changed("debug") || conn.Debug {
+		if cmd.Flags().Changed("debug-mode") || conn.Debug {
 			cmd.Printf("  Debug:       %v\n", conn.Debug)
 		}
 		if cmd.Flags().Changed("disable-auto-update") {
@@ -296,7 +301,7 @@ var configEnvCmd = &cobra.Command{
 	Long: `Manage multiple environment configurations for switching between
 local development, staging, and production.
 
-Most users don't need this - just use 'promptconduit config set --api-key=...'`,
+Most users don't need this - just use 'promptconduit login'`,
 }
 
 var configEnvListCmd = &cobra.Command{
@@ -310,7 +315,7 @@ var configEnvListCmd = &cobra.Command{
 
 		if fc == nil || len(fc.Environments) == 0 {
 			cmd.Println("No environments configured.")
-			cmd.Println("Add one with: promptconduit config env add <name> --api-key=...")
+			cmd.Println("Add one with: promptconduit config env add <name> --api-key-stdin")
 			return nil
 		}
 
@@ -338,14 +343,17 @@ var configEnvAddCmd = &cobra.Command{
 	Long: `Add or update a named environment configuration.
 
 Examples:
-  promptconduit config env add local --api-key=sk_xxx --api-url=http://localhost:8787
-  promptconduit config env add prod --api-key=sk_xxx`,
+  promptconduit config env add local --api-key-stdin --api-url=http://localhost:8787 < key.txt
+  pbpaste | promptconduit config env add prod --api-key-stdin`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		envName := args[0]
+		if flagDebug && !cmd.Flags().Changed("debug-mode") {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "note: --debug only prints debug output for this run; to save debug mode for this environment, add --debug-mode")
+		}
 
 		if envAPIKey == "" {
-			return fmt.Errorf("--api-key is required")
+			return fmt.Errorf("an API key is required: pass --api-key-stdin (recommended) or --api-key")
 		}
 
 		fc, err := client.LoadFileConfig()
@@ -492,9 +500,10 @@ func init() {
 	configCmd.AddCommand(configSetEnvCmd) // Shortcut for env use
 
 	// config set flags
-	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "API key")
+	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", apiKeyFlagHelp)
+	addAPIKeyStdinFlag(configSetCmd, &setAPIKey)
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
-	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
+	configSetCmd.Flags().BoolVar(&setDebug, "debug-mode", false, "Save debug mode: hooks write debug lines to the CLI log")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
 	configSetCmd.Flags().BoolVar(&setDisableTelemetry, "disable-telemetry", false, "Disable the anonymous daily usage ping")
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
@@ -508,7 +517,8 @@ func init() {
 	configEnvCmd.AddCommand(configEnvRemoveCmd)
 
 	// config env add flags
-	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", "API key (required)")
+	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", apiKeyFlagHelp+" (this or --api-key-stdin is required)")
+	addAPIKeyStdinFlag(configEnvAddCmd, &envAPIKey)
 	configEnvAddCmd.Flags().StringVar(&envAPIURL, "api-url", "", "API URL")
-	configEnvAddCmd.Flags().BoolVar(&envDebug, "debug", false, "Enable debug mode")
+	configEnvAddCmd.Flags().BoolVar(&envDebug, "debug-mode", false, "Save debug mode for this environment")
 }

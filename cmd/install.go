@@ -12,7 +12,6 @@ import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/extension"
-	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 )
 
@@ -250,7 +249,7 @@ func installToolHooks(name, exePath string) error {
 // every supported tool.
 func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 	if len(args) == 0 {
-		if !outbound.IsTerminal(os.Stdin) {
+		if !canPrompt() {
 			return nil, fmt.Errorf("name one or more tools (e.g. `install cursor claude-code` or `install all`), or run in a terminal to choose interactively.\nSupported: %s", strings.Join(toolNames(), ", "))
 		}
 		return selectToolsInteractive(cmd)

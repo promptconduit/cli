@@ -192,6 +192,36 @@ promptconduit watch --lines 20   # backfill the last 20 entries before going liv
 promptconduit team [subcommand]
 ```
 
+Every command has examples under `promptconduit <command> --help`.
+
+### Scripting and global flags
+
+These flags work on every command:
+
+| Flag | Environment | Effect |
+|------|-------------|--------|
+| `--no-input` | `PROMPTCONDUIT_NO_INPUT=1` | Never prompt; fail with a hint naming the flag to pass instead |
+| `--no-color` | `NO_COLOR=1` | No ANSI color (also off when output isn't a terminal or `TERM=dumb`) |
+| `-q`, `--quiet` | `PROMPTCONDUIT_QUIET=1` | Hide update and telemetry notices |
+| `--debug` | — | Print debug logging, such as each HTTP request, to stderr |
+| `-v`, `--version` | — | Print the version |
+
+Output goes to stdout and errors to stderr. The exit status is 0 on success and
+1 on failure. `status` exits 1 when no AI tool has PromptConduit hooks installed:
+
+```bash
+promptconduit status >/dev/null || promptconduit install claude-code
+promptconduit status --json | jq '.tools[] | select(.installed) | .tool'
+```
+
+Pass API keys on stdin rather than as a flag, which leaks into shell history
+and the process list:
+
+```bash
+promptconduit config set --api-key-stdin < key.txt
+promptconduit init --api-key-stdin --yes < key.txt
+```
+
 ### Team spend from your terminal (or your agent)
 
 Everything on the web team page is also a command, so you can ask your
@@ -461,14 +491,14 @@ The config file supports multiple environments, making it easy to switch between
 # Show current configuration
 promptconduit config show
 
-# Set API key for current environment
-promptconduit config set --api-key=sk_your_key_here
+# Set API key for current environment (read from stdin, not a flag)
+promptconduit config set --api-key-stdin < key.txt
 
 # Set API URL (for local development)
 promptconduit config set --api-url=http://localhost:8787
 
 # Enable debug mode
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Show config file path
 promptconduit config path
@@ -483,7 +513,7 @@ Create environments for local, dev, and prod:
 promptconduit config env add local \
   --api-key=sk_local_key \
   --api-url=http://localhost:8787 \
-  --debug
+  --debug-mode
 
 # Create dev environment
 promptconduit config env add dev \
@@ -528,6 +558,9 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
 | `PROMPTCONDUIT_TELEMETRY` | No | on | `0`/`false`/`off` disables the [anonymous usage ping](#anonymous-usage-ping) |
 | `DO_NOT_TRACK` | No | unset | `1` disables the [anonymous usage ping](#anonymous-usage-ping) |
+| `PROMPTCONDUIT_NO_INPUT` | No | unset | `1` never prompts (same as `--no-input`) |
+| `PROMPTCONDUIT_QUIET` | No | unset | `1` hides update and telemetry notices (same as `--quiet`) |
+| `NO_COLOR` | No | unset | Any value disables color (same as `--no-color`) |
 
 > **Warning**: If using multi-environment config, avoid setting `PROMPTCONDUIT_API_KEY` in your shell profile. The env var will override the config file's environment-specific key, which can cause mismatches (e.g., prod API key with local URL). Use the config file exclusively or env vars exclusively, but not both.
 
@@ -537,13 +570,17 @@ Enable debug mode to log hook activity:
 
 ```bash
 # Via config
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Via environment variable
 export PROMPTCONDUIT_DEBUG=1
+
+# For one command, printed to stderr as well
+promptconduit test --debug
 ```
 
-Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typically `/var/folders/.../promptconduit-hook.log`).
+Debug logs are written to the CLI log (`promptconduit logs --path` prints where;
+usually `~/.config/promptconduit/logs/promptconduit.log`).
 
 ## Architecture
 

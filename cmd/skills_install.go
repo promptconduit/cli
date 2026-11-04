@@ -142,7 +142,7 @@ func runSkillsDelete(cmd *cobra.Command, args []string) error {
 		if !stdinIsTerminal() {
 			return fmt.Errorf("refusing to delete %s without --yes (non-interactive stdin)", name)
 		}
-		if !confirm(fmt.Sprintf("Soft-delete skill %s (%s)?", name, id)) {
+		if !confirmDefaultNo(fmt.Sprintf("Soft-delete skill %s (%s)?", name, id)) {
 			cmd.Println("Aborted.")
 			return nil
 		}
@@ -618,30 +618,37 @@ func removeEmptyDir(dir string) error {
 // input) it returns false so the install/uninstall is treated as
 // "needs --force" rather than silently overwriting.
 func confirm(prompt string) bool {
+	return ask(prompt, true)
+}
+
+// confirmDefaultNo is confirm for destructive actions: Enter means no.
+func confirmDefaultNo(prompt string) bool {
+	return ask(prompt, false)
+}
+
+func ask(prompt string, defaultYes bool) bool {
 	if !stdinIsTerminal() {
 		return false
 	}
-	fmt.Printf("%s [Y/n] ", prompt)
+	choices := "[y/N]"
+	if defaultYes {
+		choices = "[Y/n]"
+	}
+	// The question goes to stderr so stdout stays clean when piped.
+	fmt.Fprintf(os.Stderr, "%s %s ", prompt, choices)
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return false
-		}
+	if err != nil && !errors.Is(err, io.EOF) {
 		return false
 	}
 	answer := strings.TrimSpace(strings.ToLower(line))
-	return answer == "" || answer == "y" || answer == "yes"
+	if answer == "" {
+		return defaultYes && err == nil
+	}
+	return answer == "y" || answer == "yes"
 }
 
-// stdinIsTerminal reports whether stdin is a character device (e.g. a tty).
-// Stdlib-only check that avoids dragging in golang.org/x/term and its
-// Go-toolchain floor. Declared as a var so tests can override the result
-// without trying to fake a real terminal handle.
-var stdinIsTerminal = func() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
+// stdinIsTerminal reports whether we may prompt: stdin is a terminal and
+// --no-input is not set (see canPrompt). Declared as a var so tests can
+// override the result without trying to fake a real terminal handle.
+var stdinIsTerminal = canPrompt
