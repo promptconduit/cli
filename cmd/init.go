@@ -34,6 +34,7 @@ func init() {
 	initCmd.Flags().StringVar(&initAPIKey, "api-key", "", "Set API key directly (skips login)")
 	initCmd.Flags().BoolVar(&initYes, "yes", false, "Non-interactive: install all detected tools")
 	initCmd.Flags().StringVar(&initTools, "tools", "", "Comma-separated tools to install (skips picker)")
+	initCmd.Flags().BoolVar(&allowExperimental, "experimental", false, experimentalFlagHelp)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
@@ -95,7 +96,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Step 3: Detect and select tools
-	detected := detectInstalledTools()
+	detected, skipped := splitExperimental(detectInstalledTools())
+	if len(skipped) > 0 {
+		_, _ = fmt.Fprintf(out, "Also found %s on this machine. Support for it is experimental; add --experimental to set it up too.\n\n", strings.Join(skipped, ", "))
+	}
 	var tools []string
 	var err error
 
@@ -195,7 +199,7 @@ func selectToolsForInit(cmd *cobra.Command, detected []string) ([]string, error)
 
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
-	for i, t := range installableTools {
+	for i, t := range offeredTools() {
 		marker := " "
 		for _, d := range detected {
 			if d == t.name {
@@ -203,7 +207,7 @@ func selectToolsForInit(cmd *cobra.Command, detected []string) ([]string, error)
 				break
 			}
 		}
-		_, _ = fmt.Fprintf(out, "  %s %d) %s\n", marker, i+1, t.label)
+		_, _ = fmt.Fprintf(out, "  %s %d) %s\n", marker, i+1, toolLabel(t))
 	}
 	if len(detected) > 0 {
 		_, _ = fmt.Fprintf(out, "\n  * = detected on this machine (%s)\n", strings.Join(detected, ", "))
@@ -264,6 +268,19 @@ func detectInstalledTools() []string {
 		}
 	}
 	return detected
+}
+
+// splitExperimental keeps the detected tools init may pick by default and
+// returns the experimental ones it left out (empty with --experimental).
+func splitExperimental(detected []string) (offered, skipped []string) {
+	for _, d := range detected {
+		if isExperimentalTool(d) && !allowExperimental {
+			skipped = append(skipped, d)
+			continue
+		}
+		offered = append(offered, d)
+	}
+	return offered, skipped
 }
 
 func printInitSummary(cmd *cobra.Command, tools []string, cloudMode bool) {
