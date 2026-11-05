@@ -93,7 +93,7 @@ func checkSyncAllowed(cfg *client.Config) error {
 		return fmt.Errorf("sync is disabled in local-only mode: transcripts stay on this machine\n\nTo enable cloud sync, run: promptconduit config set --local-only=false")
 	}
 	if cfg.APIKey == "" {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 	return nil
 }

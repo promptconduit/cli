@@ -374,6 +374,11 @@ func printEventLogStatus(cfg *client.Config) {
 	}
 	if st.LastError != "" {
 		fmt.Printf("  Last error:   %s — %s\n", localTime(st.LastErrorAt), st.LastError)
+		if cfg.ShouldSend() {
+			if hint := authFailureHint(st.LastError, st.LastErrorAt, st.LastSuccessAt); hint != "" {
+				fmt.Printf("  %s\n", hint)
+			}
+		}
 	}
 	// Captured events: the send-independent local stream (events.jsonl), written
 	// for every event even in Free / local-only mode.

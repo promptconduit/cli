@@ -124,7 +124,7 @@ Examples:
 func runSkillsDelete(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 	apiClient := client.NewClient(cfg, Version)
 
@@ -170,7 +170,7 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -432,7 +432,7 @@ func uninstallOne(cmd *cobra.Command, manifest *skillspkg.Manifest, name string)
 func runApproveOrReject(identifier string, approve bool) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 	apiClient := client.NewClient(cfg, Version)
 	skill, err := resolveSkill(apiClient, identifier)

@@ -45,9 +45,9 @@ your agent can answer cost and budget questions itself (skip with --no-mcp).
 
 The hooks capture events locally and realtime cost tracking works immediately.
 This is the Free tier: 100% local — every event is captured to
-~/.promptconduit/events.jsonl and nothing is sent anywhere. Set an API key
-(promptconduit config set --api-key=...) only if you also want to sync events to
-the PromptConduit platform. To stay local-only even after setting a key, pass
+~/.promptconduit/events.jsonl and nothing is sent anywhere. Sign in
+(promptconduit login) only if you also want to sync events to
+the PromptConduit platform. To stay local-only even after signing in, pass
 --local-only.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runInstall,
@@ -408,7 +408,7 @@ func installClaudeCode(exePath string) error {
 	fmt.Println("  Live spend:    the editor extension (https://promptconduit.dev/docs/editor-extension)")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -544,7 +544,7 @@ func installCursor(exePath string) error {
 	fmt.Println("  Live spend:    the PromptConduit status bar in Cursor")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -646,7 +646,7 @@ func installGemini(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -760,7 +760,7 @@ func installCodex(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -861,7 +861,7 @@ func installCopilot(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -970,7 +970,7 @@ func installGrok(exePath string) error {
 	fmt.Println("are skipped so only this native hook is captured.")
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
