@@ -11,8 +11,8 @@ import (
 // the single cross-repo contract sample. It is the source of truth mirrored
 // (byte-for-byte, additive-only) into:
 //
-//	platform/app/api/src/test/envelope.golden.json      (validated in envelope.golden.test.ts)
-//	editor-extension/src/test/envelope.golden.json      (parsed in envelope.golden.test.ts)
+//	platform/app/api/src/types/envelope.golden.json     (validated in envelope.golden.test.ts)
+//	editor-extension/test/fixtures/envelope.golden.json (parsed in test/unit/envelope.golden.test.ts)
 //
 // When you change the envelope wire shape, update this file AND both mirrors in
 // the same coordinated change. These three tests are the guard: they fail if a
