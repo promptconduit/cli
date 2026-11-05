@@ -121,7 +121,44 @@ func (sm *StateManager) MarkSynced(path string, info SyncedFileInfo) {
 			return
 		}
 		s.SyncedFiles[path] = info
+		// A successful upload settles any earlier failure of this file. A
+		// failure recorded after this upload (a newer version that failed in
+		// another process) is kept so it is still retried.
+		clearFailedSyncsForFile(s, path, info.SyncedAt)
 	})
+}
+
+// ClearFailedSyncsForFile drops every failed-sync record for path. Used when
+// there is nothing left to retry: the file is already synced at its current
+// content, or it no longer exists.
+func (sm *StateManager) ClearFailedSyncsForFile(path string) {
+	sm.apply(func(s *SyncState) { clearFailedSyncsForFile(s, path, "") })
+}
+
+// HasFailedSyncForFile reports whether a failed-sync record exists for path.
+func (sm *StateManager) HasFailedSyncForFile(path string) bool {
+	for _, f := range sm.state.FailedSyncs {
+		if f.FilePath == path {
+			return true
+		}
+	}
+	return false
+}
+
+// clearFailedSyncsForFile removes failed-sync records for path. Records are
+// keyed by session id, and code paths have used different keys for the same
+// file (session id vs. file name), so match on the file path. With a
+// non-empty before, records whose failed_at is after it are kept.
+func clearFailedSyncsForFile(s *SyncState, path, before string) {
+	for key, f := range s.FailedSyncs {
+		if f.FilePath != path {
+			continue
+		}
+		if before != "" && syncedAfter(f.FailedAt, before) {
+			continue
+		}
+		delete(s.FailedSyncs, key)
+	}
 }
 
 // syncedAfter reports whether timestamp a is strictly after b. Unparseable
