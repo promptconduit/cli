@@ -70,7 +70,7 @@ func init() {
 func runInsights(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -90,7 +90,7 @@ func runInsights(cmd *cobra.Command, args []string) error {
 func runInsightsTools(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -110,7 +110,7 @@ func runInsightsTools(cmd *cobra.Command, args []string) error {
 func runInsightsErrors(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -130,7 +130,7 @@ func runInsightsErrors(cmd *cobra.Command, args []string) error {
 func runInsightsSessions(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)

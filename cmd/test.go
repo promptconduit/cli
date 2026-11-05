@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/promptconduit/cli/internal/client"
@@ -46,5 +47,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	return fmt.Errorf("API test failed: %s", response.Error)
+	return testFailure(response, cfg.APIURL)
+}
+
+// testFailure turns a failed test send into an error that says what went
+// wrong in one line and what to do about it.
+func testFailure(response *client.APIResponse, apiURL string) error {
+	msg := "API test failed: " + apiErrorMessage(response)
+	if hint := connectionHint(response.StatusCode, apiURL); hint != "" {
+		msg += "\n\n" + hint
+	}
+	return errors.New(msg)
 }

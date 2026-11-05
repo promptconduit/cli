@@ -154,7 +154,7 @@ func init() {
 func runSkillsList(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// --filter mirrors the web UI tabs and takes precedence over --approved.
@@ -231,7 +231,7 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Auto-detect repo from working directory only when --repo was not explicitly set.
@@ -271,7 +271,7 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 func runSkillsSync(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Determine the global commands directory (~/.claude/commands/ or --dir override)
@@ -399,7 +399,7 @@ func detectGitRoot(dir string) string {
 func runSkillsPatterns(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Auto-detect repo from working directory only when --repo was not explicitly set.
