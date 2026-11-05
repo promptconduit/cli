@@ -31,8 +31,8 @@ type ModelPrice struct {
 
 // fastSuffix marks a table row that holds a model's Anthropic fast-mode rate
 // (usage.speed == "fast" in a Claude Code transcript). It is not a dash
-// segment, so prefix-trim never lands on it: Cursor's own "-fast" display ids
-// keep their separate rows.
+// segment, so prefix-trim never lands on it. Cursor's own "-fast" ids are
+// separate exact rows (claude-opus-5-5-fast etc.) at the same fast-mode rates.
 const fastSuffix = "@fast"
 
 // SpeedFast is the usage.speed value Claude Code records for fast-mode
@@ -79,6 +79,13 @@ var modelAliases = map[string]string{
 	"claude-fable-5.1":  "claude-fable-5-1",
 	"claude-mythos-5.1": "claude-mythos-5-1",
 	"claude-opus-5.5":   "claude-opus-5-5",
+	"claude-sonnet-5.5": "claude-sonnet-5-5",
+	"claude-haiku-5.5":  "claude-haiku-5-5",
+	// Cursor's GPT-5 Fast ids carry an effort segment; prefix-trim would land
+	// them on gpt-5, half the Fast rate.
+	"gpt-5-low-fast":    "gpt-5-fast",
+	"gpt-5-medium-fast": "gpt-5-fast",
+	"gpt-5-high-fast":   "gpt-5-fast",
 	// Cursor Grok fast slugs include effort + speed suffixes; suffix-trim would
 	// land on the cheaper standard rate without these aliases. Short grok-*
 	// payloads (grok-4.6-high-fast) reach these via the cursor- prefix retry
