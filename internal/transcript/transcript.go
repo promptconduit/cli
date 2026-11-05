@@ -72,6 +72,37 @@ func isActualUserPrompt(content []json.RawMessage) bool {
 	return false
 }
 
+// stringContent returns a user message's content when it is a plain JSON
+// string (how Claude Code records a text-only prompt), from either the nested
+// message object or a top-level content field.
+func stringContent(msg TranscriptMessage) (string, bool) {
+	raw := msg.Content
+	if msg.Message != nil {
+		var inner struct {
+			Content json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(msg.Message, &inner) != nil {
+			return "", false
+		}
+		raw = inner.Content
+	}
+	var s string
+	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// promptMatches reports whether transcript text is the hook's prompt. Either
+// may contain the other, to tolerate small differences between the two. An
+// empty text never matches (every string contains "").
+func promptMatches(text, expectedPrompt string) bool {
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, expectedPrompt) || strings.Contains(expectedPrompt, text)
+}
+
 // isAttachmentType returns true if the content type represents a file attachment
 func isAttachmentType(contentType string) bool {
 	switch contentType {
@@ -197,6 +228,18 @@ func extractAttachmentsForPrompt(transcriptPath, expectedPrompt string) (bool, [
 				}
 			}
 
+			// Claude Code records a plain-text prompt (no image or file) with
+			// content as a JSON string, not an array. Such a prompt has no
+			// attachments, but it must still count as found: otherwise the
+			// caller polls until its timeout on every text-only prompt, and the
+			// UserPromptSubmit hook holds up the user's prompt that long.
+			if rawContent == nil {
+				if text, ok := stringContent(msg); ok && promptMatches(text, expectedPrompt) {
+					matchingMessage = &MessageWithContent{Role: "user"}
+				}
+				continue
+			}
+
 			// Only consider actual user prompts (not tool_result messages)
 			if !isActualUserPrompt(rawContent) {
 				continue
@@ -209,9 +252,7 @@ func extractAttachmentsForPrompt(transcriptPath, expectedPrompt string) (bool, [
 					Text string `json:"text"`
 				}
 				if err := json.Unmarshal(item, &textContent); err == nil && textContent.Type == "text" {
-					// Check if this text matches (or contains) the expected prompt
-					// Use contains to handle cases where the prompt might be slightly different
-					if strings.Contains(textContent.Text, expectedPrompt) || strings.Contains(expectedPrompt, textContent.Text) {
+					if promptMatches(textContent.Text, expectedPrompt) {
 						matchingMessage = &content
 						break
 					}
@@ -304,7 +345,13 @@ func extractAttachmentsFromFile(transcriptPath string) ([]Attachment, error) {
 		if msg.Type == "user" || msg.Type == "human" || msg.Role == "user" {
 			// Try to parse as MessageWithContent from the message field
 			var content MessageWithContent
-			if msg.Message != nil {
+			if text, ok := stringContent(msg); ok && text != "" {
+				// A text-only prompt (string content): the latest prompt has
+				// no attachments. Without this, an image from an EARLIER
+				// prompt was re-extracted and re-sent with every later
+				// text-only prompt.
+				lastUserMessage = &MessageWithContent{Role: "user"}
+			} else if msg.Message != nil {
 				if err := json.Unmarshal(msg.Message, &content); err == nil && len(content.Content) > 0 {
 					// Only consider actual user prompts (not tool_result messages)
 					if isActualUserPrompt(content.Content) {
