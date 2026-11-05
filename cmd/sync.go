@@ -555,6 +555,12 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string) error {
 	// Verify file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		// Nothing left to retry: drop any failed-sync record for it, or every
+		// later Stop hook would respawn a sync of a file that is gone.
+		if stateManager.HasFailedSyncForFile(filePath) {
+			stateManager.ClearFailedSyncsForFile(filePath)
+			_ = stateManager.Save()
+		}
 		return fmt.Errorf("transcript file not found: %s", filePath)
 	}
 
@@ -563,7 +569,14 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 	if !syncForce {
 		currentHash, err := sync.CalculateFileHash(filePath)
 		if err == nil && stateManager.IsSynced(filePath, currentHash) {
-			// File hasn't changed since last sync, nothing to do
+			// Unchanged since its last upload: nothing to send. A failed-sync
+			// record left from before that upload (e.g. a full `promptconduit
+			// sync` succeeded later) is stale; without clearing it here every
+			// Stop hook keeps respawning this retry.
+			if stateManager.HasFailedSyncForFile(filePath) {
+				stateManager.ClearFailedSyncsForFile(filePath)
+				_ = stateManager.Save()
+			}
 			return nil
 		}
 	}

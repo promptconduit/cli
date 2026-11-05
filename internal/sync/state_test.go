@@ -36,6 +36,61 @@ func TestStateSaveMergesConcurrentManagers(t *testing.T) {
 	}
 }
 
+// TestMarkSyncedClearsEarlierFailure: a successful upload of a file settles a
+// failure recorded for it earlier, whatever key the failure was stored under,
+// so retryFailedSyncs stops respawning syncs for it.
+func TestMarkSyncedClearsEarlierFailure(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sync_state.json")
+	a := newStateManagerAt(p)
+	a.AddFailedSync("sess-1", "/t/sess-1.jsonl", "API error: 500")
+	a.AddFailedSync("sess-1.jsonl", "/t/sess-1.jsonl", "parse error") // file-name key
+	a.AddFailedSync("other", "/t/other.jsonl", "API error: 500")
+	if err := a.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	b := newStateManagerAt(p)
+	b.MarkSynced("/t/sess-1.jsonl", SyncedFileInfo{Hash: "h"})
+	if err := b.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	fs := newStateManagerAt(p).GetFailedSyncs()
+	if len(fs) != 1 || fs[0].FilePath != "/t/other.jsonl" {
+		t.Fatalf("failed syncs = %+v, want only /t/other.jsonl left", fs)
+	}
+}
+
+// TestMarkSyncedKeepsLaterFailure: a failure recorded after the upload (a newer
+// version of the file failed in another process) must survive, so it is still
+// retried.
+func TestMarkSyncedKeepsLaterFailure(t *testing.T) {
+	sm := newStateManagerAt(filepath.Join(t.TempDir(), "sync_state.json"))
+	sm.state.FailedSyncs["s"] = FailedSyncInfo{SessionID: "s", FilePath: "/t/s.jsonl", FailedAt: "2026-10-10T12:00:10Z"}
+	sm.MarkSynced("/t/s.jsonl", SyncedFileInfo{Hash: "h", SyncedAt: "2026-10-10T12:00:00Z"})
+	if !sm.HasFailedSyncForFile("/t/s.jsonl") {
+		t.Fatal("a failure newer than the upload was cleared")
+	}
+}
+
+func TestClearFailedSyncsForFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sync_state.json")
+	sm := newStateManagerAt(p)
+	sm.AddFailedSync("a", "/t/a.jsonl", "boom")
+	sm.AddFailedSync("b", "/t/b.jsonl", "boom")
+	if !sm.HasFailedSyncForFile("/t/a.jsonl") {
+		t.Fatal("HasFailedSyncForFile = false, want true")
+	}
+	sm.ClearFailedSyncsForFile("/t/a.jsonl")
+	if err := sm.Save(); err != nil {
+		t.Fatal(err)
+	}
+	got := newStateManagerAt(p)
+	if got.HasFailedSyncForFile("/t/a.jsonl") || !got.HasFailedSyncForFile("/t/b.jsonl") {
+		t.Fatalf("failed syncs = %+v, want only b", got.GetFailedSyncs())
+	}
+}
+
 func TestStateSaveReplaysRelativeOps(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "sync_state.json")
 	a := newStateManagerAt(p)
