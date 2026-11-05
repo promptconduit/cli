@@ -1,7 +1,7 @@
 {
   "_source": "promptconduit",
-  "_updated": "2026-11-02",
-  "_comment": "Curated USD per-token price snapshot (2026-11-02), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 and Sonnet 5.5 cache reads are 0.05x. Claude Haiku 5.5 has a second rate card (5x) for prompts above 100K tokens, stored as long_context with long_context_threshold_tokens. Keys ending in @fast hold Anthropic fast-mode rates, used only when a Claude Code transcript records usage.speed=fast; the @ keeps prefix-trim from reaching them. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
+  "_updated": "2026-11-05",
+  "_comment": "Curated USD per-token price snapshot (2026-11-05), LiteLLM-compatible shape (github.com/BerriAI/litellm model_prices_and_context_window.json) with an added cache_creation_input_token_cost_1h field for Anthropic's 1-hour cache TTL. Default cache multipliers: 5m write = 1.25x input, 1h write = 2x input, read = 0.1x input. Exceptions are stored explicitly: Fable 5.1 and Mythos 5.1 cache reads are 0.025x; Opus 5.5 and Sonnet 5.5 cache reads are 0.05x. Claude Haiku 5.5 has a second rate card (5x) for prompts above 100K tokens, stored as long_context with long_context_threshold_tokens. Keys ending in @fast hold Anthropic fast-mode rates, used only when a Claude Code transcript records usage.speed=fast; the @ keeps prefix-trim from reaching them. Cursor's own fast-mode ids (claude-opus-5-5-fast, claude-opus-5-fast, claude-opus-4-8-fast, claude-opus-4-7-fast) are exact keys at the same fast-mode rates, because prefix-trim would otherwise land them on the standard rate. Gemini 3.6/3.7/3.8 use Google's current standard paid rates (introductory through 2026-12-31). To refresh, replace this file or fetch the upstream table; the resolver tolerates missing fields.",
   "claude-fable-5": {
     "input_cost_per_token": 0.00001,
     "output_cost_per_token": 0.00005,
@@ -94,6 +94,13 @@
     "cache_creation_input_token_cost_1h": 0.00002,
     "cache_read_input_token_cost": 0.000001
   },
+  "claude-opus-5-5-fast": {
+    "input_cost_per_token": 0.000008,
+    "output_cost_per_token": 0.00004,
+    "cache_creation_input_token_cost": 0.00001,
+    "cache_creation_input_token_cost_1h": 0.000016,
+    "cache_read_input_token_cost": 0.0000004
+  },
   "claude-opus-5-fast": {
     "input_cost_per_token": 0.00001,
     "output_cost_per_token": 0.00005,
@@ -107,6 +114,13 @@
     "cache_creation_input_token_cost": 0.0000125,
     "cache_creation_input_token_cost_1h": 0.00002,
     "cache_read_input_token_cost": 0.000001
+  },
+  "claude-opus-4-7-fast": {
+    "input_cost_per_token": 0.00003,
+    "output_cost_per_token": 0.00015,
+    "cache_creation_input_token_cost": 0.0000375,
+    "cache_creation_input_token_cost_1h": 0.00006,
+    "cache_read_input_token_cost": 0.000003
   },
   "claude-opus-4-8": {
     "input_cost_per_token": 0.000005,
@@ -255,7 +269,7 @@
     "output_cost_per_token": 0.000015,
     "cache_read_input_token_cost": 0.00000025
   },
-  "_cursor_third_party_comment": "Third-party models offered in Cursor's picker, at the API list prices on cursor.com/docs/models (2026-11-02). Exact keys matter: prefix-trim would otherwise price gpt-5.4-mini as gpt-5.4 (3x) and gemini-3.5-flash-lite as gemini-3.5-flash (5x). gemini-4-argon is Google's introductory rate, which doubles on 2026-12-01.",
+  "_cursor_third_party_comment": "Third-party models offered in Cursor's picker, at the API list prices on cursor.com/docs/models (2026-11-02). Exact keys matter: prefix-trim would otherwise price gpt-5.4-mini as gpt-5.4 (3x), gemini-3.5-flash-lite as gemini-3.5-flash (5x), and GPT-5 Fast (gpt-5-high-fast, aliased to gpt-5-fast in pricing.go) as gpt-5 (half its rate). gemini-4-argon is Google's introductory rate, which doubles on 2026-12-01.",
   "gpt-5.4-mini": {
     "input_cost_per_token": 0.00000075,
     "output_cost_per_token": 0.0000045,
@@ -295,6 +309,11 @@
     "input_cost_per_token": 0.00000125,
     "output_cost_per_token": 0.00001,
     "cache_read_input_token_cost": 0.000000125
+  },
+  "gpt-5-fast": {
+    "input_cost_per_token": 0.0000025,
+    "output_cost_per_token": 0.00002,
+    "cache_read_input_token_cost": 0.00000025
   },
   "gpt-5-codex": {
     "input_cost_per_token": 0.00000125,

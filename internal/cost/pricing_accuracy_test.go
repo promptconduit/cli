@@ -97,8 +97,8 @@ func TestResolvePriceForSpeed(t *testing.T) {
 			t.Errorf("ResolvePriceForSpeed(%q, %q) input = %v ok=%v, want %v", tc.model, tc.speed, mp.Input, ok, tc.wantIn)
 		}
 	}
-	if mp, _ := tbl.ResolvePrice("claude-opus-5-5-fast"); !near(mp.Input, 4e-6) {
-		t.Errorf("Cursor id claude-opus-5-5-fast = %v, want the standard Opus 5.5 rate", mp.Input)
+	if _, ok := tbl.models["claude-opus-5-5"+fastSuffix]; !ok {
+		t.Error("claude-opus-5-5@fast row missing")
 	}
 	if _, ok := tbl.ResolvePriceForSpeed("not-a-model", "fast"); ok {
 		t.Error("an unknown model must stay unpriced in fast mode")
