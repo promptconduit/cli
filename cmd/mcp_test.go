@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/promptconduit/cli/internal/eventlog"
 )
 
 // isolatedHome points HOME and the config dir at a temp dir and clears any
@@ -98,7 +100,7 @@ func TestMCPToolDefinitions(t *testing.T) {
 	destructive := map[string]bool{"team_remove_budget": true, "team_set_member_role": true,
 		"team_remove_member": true, "team_disconnect_slack": true, "skills_delete": true}
 	tools := buildMCPServer().Tools()
-	if len(tools) != 33 {
+	if len(tools) != 35 {
 		t.Errorf("tool count = %d", len(tools))
 	}
 	for _, tool := range tools {
@@ -592,5 +594,60 @@ func TestMCPInstallToolsSelection(t *testing.T) {
 	}
 	if _, err := mcpInstallTools([]string{"codex"}, home); err == nil {
 		t.Error("codex should be rejected")
+	}
+}
+
+func TestMCPPromptLoop(t *testing.T) {
+	home := isolatedHome(t)
+	dir := filepath.Join(home, ".promptconduit")
+	eventlog.SetDirForTest(dir)
+	t.Cleanup(func() { eventlog.SetDirForTest("") })
+
+	// No event log yet: a friendly message, not an error.
+	r := callTool(t, "prompt_loop", `{}`)
+	if r["isError"] == true || !strings.Contains(toolText(r), "no local event log") {
+		t.Errorf("prompt_loop without a log = %v", r)
+	}
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	req := `{"request_id":"r1","model":"claude-opus-5-5","ts":"2026-11-08T10:00:05Z","tokens":{"input":2,"output":100,"cache_read":200000,"cache_write":500},"usd":{"input":0.000008,"output":0.002,"cache_read":0.04,"cache_write":0.004,"total":0.046008},"tools":{"total":1,"by_name":{"Bash":1}}}`
+	log := `{"schema":2,"session_id":"s1","prompt_id":"p1","tool":"claude-code","hook_event":"UserPromptSubmit","captured_at":"2026-11-08T10:00:00Z","enrichments":{"prompt":{"count":1,"task_kind":"ship"}}}
+{"schema":2,"session_id":"s1","prompt_id":"p1","tool":"claude-code","hook_event":"Stop","captured_at":"2026-11-08T10:01:00Z","enrichments":{"cost":{"requests":[` + req + `]}}}
+`
+	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = callTool(t, "prompt_loop", `{}`)
+	sc, _ := r["structuredContent"].(map[string]interface{})
+	ledger, _ := sc["ledger"].(map[string]interface{})
+	if r["isError"] == true || ledger["promptId"] != "p1" || ledger["taskKind"] != "ship" || ledger["roundTrips"] != float64(1) {
+		t.Errorf("prompt_loop = %v", r)
+	}
+	if _, ok := sc["advice"].([]interface{}); !ok {
+		t.Errorf("advice missing: %v", sc)
+	}
+	if r := callTool(t, "prompt_loop", `{"prompt_id":"nope"}`); r["isError"] == true || !strings.Contains(toolText(r), "no prompt nope") {
+		t.Errorf("unknown prompt = %v", r)
+	}
+}
+
+func TestMCPTeamLoopCompare(t *testing.T) {
+	isolatedHome(t)
+	srv, calls := fakeTeamAPI(t)
+	t.Setenv("PROMPTCONDUIT_API_URL", srv.URL)
+	t.Setenv("PROMPTCONDUIT_API_KEY", "k")
+
+	// The fake API has no compare endpoint yet: 404 becomes a friendly note.
+	r := callTool(t, "team_loop_compare", `{"task_kind":"ship","period":"7d"}`)
+	if r["isError"] == true || !strings.Contains(toolText(r), "isn't available") {
+		t.Errorf("404 = %v", r)
+	}
+	if !strings.Contains(strings.Join(*calls, "\n"), "/v1/organizations/o1/loop/compare?period=7d&task_kind=ship") {
+		t.Errorf("calls = %v", *calls)
+	}
+	if r := callTool(t, "team_loop_compare", `{"task_kind":"nap"}`); r["isError"] != true {
+		t.Errorf("bad task_kind accepted: %v", r)
 	}
 }

@@ -32,6 +32,7 @@ cli/
 │   ├── envelope/     # v2 event envelope types + per-tool id extraction
 │   ├── extension/    # Bundled cost editor extension (.vsix go:embed) + sideload into Cursor
 │   ├── git/          # Git context extraction
+│   ├── loop/         # The Loop: per-prompt ledger (round-trips) + advice, built from events.jsonl (MCP prompt_loop)
 │   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
 │   ├── sync/         # Transcript + plan sync and parsing (Claude Code + Cursor parsers, state management)
 │   ├── transcript/   # Transcript parsing and attachment extraction
@@ -82,7 +83,17 @@ The cost enrichment (`enrich/cost.go`) replaced the old `cost watch --json`
 feed: Claude Code Stop events price the transcript lines appended since the
 last Stop (per-session offset state under `~/.config/promptconduit/enrich/`),
 Cursor stop/afterAgentResponse events price their own payload. The editor
-extension reads it from events.jsonl.
+extension reads it from events.jsonl. At Stop, Claude Code may not have
+flushed the turn's final assistant message yet, so the enricher first polls
+(≤ 1.5 s, 50 ms steps) until the transcript's last assistant line is newer than
+the turn start and didn't end in `tool_use`. Lines sharing a `requestId` (one
+per content block) are folded into one request, tools included.
+
+`prompt.task_kind` (`internal/enrich/taskkind.go`) classifies the prompt text
+locally with keyword rules (text never stored); short follow-ups inherit the
+session's previous kind. The rules are mirrored byte-for-byte in the editor
+extension's `src/loop/taskKind.ts`, and the `internal/loop` ledger/advice in
+its `src/loop/ledger.ts` (field names camelCase). Keep them in sync.
 
 ## Auto-update
 

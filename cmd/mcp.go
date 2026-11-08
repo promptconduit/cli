@@ -29,7 +29,7 @@ To manage the registration yourself:
   promptconduit mcp tools                 # list the tools agents see
   promptconduit mcp status [--json]       # where it is registered
 
-Local tools (session_cost, cost_history, recent_sessions, setup_status) work on
+Local tools (session_cost, prompt_loop, cost_history, recent_sessions, setup_status) work on
 the Free tier and read only files on this machine. team_* tools need
 'promptconduit login' and a team.`,
 	Args:         cobra.NoArgs,
