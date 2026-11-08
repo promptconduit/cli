@@ -240,6 +240,7 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	renderSessionHuman(out, summary)
+	maybeTeamNudge(out)
 	return nil
 }
 

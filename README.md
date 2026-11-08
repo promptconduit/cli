@@ -202,7 +202,7 @@ These flags work on every command:
 |------|-------------|--------|
 | `--no-input` | `PROMPTCONDUIT_NO_INPUT=1` | Never prompt; fail with a hint naming the flag to pass instead |
 | `--no-color` | `NO_COLOR=1` | No ANSI color (also off when output isn't a terminal or `TERM=dumb`) |
-| `-q`, `--quiet` | `PROMPTCONDUIT_QUIET=1` | Hide update and telemetry notices |
+| `-q`, `--quiet` | `PROMPTCONDUIT_QUIET=1` | Hide update and telemetry notices, and tips |
 | `--debug` | — | Print debug logging, such as each HTTP request, to stderr |
 | `-v`, `--version` | — | Print the version |
 
@@ -559,7 +559,8 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_TELEMETRY` | No | on | `0`/`false`/`off` disables the [anonymous usage ping](#anonymous-usage-ping) |
 | `DO_NOT_TRACK` | No | unset | `1` disables the [anonymous usage ping](#anonymous-usage-ping) |
 | `PROMPTCONDUIT_NO_INPUT` | No | unset | `1` never prompts (same as `--no-input`) |
-| `PROMPTCONDUIT_QUIET` | No | unset | `1` hides update and telemetry notices (same as `--quiet`) |
+| `PROMPTCONDUIT_QUIET` | No | unset | `1` hides update and telemetry notices and tips (same as `--quiet`) |
+| `PROMPTCONDUIT_NO_TIPS` | No | unset | `1` hides the occasional tip under `cost` output (shown at most weekly, never once you've used `team`) |
 | `NO_COLOR` | No | unset | Any value disables color (same as `--no-color`) |
 
 > **Warning**: If using multi-environment config, avoid setting `PROMPTCONDUIT_API_KEY` in your shell profile. The env var will override the config file's environment-specific key, which can cause mismatches (e.g., prod API key with local URL). Use the config file exclusively or env vars exclusively, but not both.
