@@ -349,5 +349,6 @@ func runCostHistory(cmd *cobra.Command, args []string) error {
 		_, _ = fmt.Fprintf(out, "%d request(s) used a model not in the rate table (%s): tokens are counted, cost is not.\n",
 			unpriced, formatModelCounts(mergeModelCounts(days)))
 	}
+	maybeTeamNudge(out)
 	return nil
 }

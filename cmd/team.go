@@ -63,6 +63,8 @@ Examples:
 	// silently running the team list.
 	Args: cobra.NoArgs,
 	RunE: runTeamList,
+	// Any successful team command retires the team tip under `cost` output.
+	PersistentPostRun: func(cmd *cobra.Command, args []string) { markTeamSeen() },
 }
 
 var teamListCmd = &cobra.Command{

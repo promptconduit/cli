@@ -20,7 +20,7 @@ var (
 	// flagNoColor turns off ANSI color. NO_COLOR and TERM=dumb do the same.
 	flagNoColor bool
 	// flagQuiet hides the extras a command prints on its own initiative:
-	// update and upgrade notices, and the first-run telemetry notice.
+	// update and upgrade notices, the first-run telemetry notice, and tips.
 	flagQuiet bool
 	// flagDebug turns on debug logging for this run and echoes log lines to
 	// stderr, in addition to the log file (`promptconduit logs`).
@@ -37,7 +37,7 @@ func registerGlobalFlags(root *cobra.Command) {
 	pf := root.PersistentFlags()
 	pf.BoolVar(&flagNoInput, "no-input", false, "Never prompt; fail with a hint instead (also $"+envNoInput+"=1)")
 	pf.BoolVar(&flagNoColor, "no-color", false, "Disable color output (also $NO_COLOR)")
-	pf.BoolVarP(&flagQuiet, "quiet", "q", false, "Hide update and telemetry notices (also $"+envQuiet+"=1)")
+	pf.BoolVarP(&flagQuiet, "quiet", "q", false, "Hide update and telemetry notices and tips (also $"+envQuiet+"=1)")
 	pf.BoolVar(&flagDebug, "debug", false, "Print debug logging (e.g. each HTTP request) to stderr")
 }
 
