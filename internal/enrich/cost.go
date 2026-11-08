@@ -2,6 +2,8 @@ package enrich
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"os"
 	"time"
 
@@ -123,6 +125,12 @@ func claudeCodeCost(ctx *Context, table *cost.PriceTable) (any, error) {
 		requests []CostRequest
 		err      error
 	)
+	if ctx.SessionID != "" {
+		// Read-only peek (no lock held while polling): where the last Stop
+		// left off and when this turn opened.
+		st := loadState(ctx.SessionID)
+		waitForTurnFlush(ctx.TranscriptPath, st.TranscriptOffset, st.TurnStartedAt)
+	}
 	if ctx.SessionID == "" {
 		requests, _, err = priceTranscriptFrom(ctx, table, 0)
 	} else if !updateState(ctx.SessionID, func(st *sessionState) bool {
@@ -166,26 +174,179 @@ func priceTranscriptFrom(ctx *Context, table *cost.PriceTable, offset int64) ([]
 	}
 
 	var requests []CostRequest
-	seen := map[string]bool{}
+	index := map[string]int{} // dedup key -> position in requests
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	for scanner.Scan() {
 		lineLen := int64(len(scanner.Bytes())) + 1 // + newline
 		ev, dedupKey, ok := cost.ParseTranscriptLine(scanner.Bytes(), table, ctx.SessionID)
 		offset += lineLen
-		if !ok || seen[dedupKey] {
+		if !ok {
 			continue
 		}
-		seen[dedupKey] = true
+		if i, dup := index[dedupKey]; dup {
+			// Claude Code writes one transcript line per content block of a
+			// response, all with the same requestId. Later lines carry the
+			// fuller usage (output_tokens grows as the response streams) and
+			// the tool_use blocks, so fold each line into the request.
+			mergeLine(&requests[i], ev, table)
+			continue
+		}
 		requests = append(requests, toRequest(ev))
+		index[dedupKey] = len(requests) - 1
 		if len(requests) > maxRequestsPerEvent {
 			requests = requests[1:] // keep the newest; oldest backfill drops
+			for k, i := range index {
+				if i == 0 {
+					delete(index, k)
+				} else {
+					index[k] = i - 1
+				}
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
 	}
 	return requests, offset, nil
+}
+
+// mergeLine folds a later transcript line of the same request into req: the
+// request is re-priced from that line's usage block, with output tokens the
+// largest seen across the request's lines (a line's count is the running total
+// at the time it was written), and the line's tool calls are added.
+func mergeLine(req *CostRequest, ev cost.CostEvent, table *cost.PriceTable) {
+	tools, maxOutput := req.Tools, req.Tokens.Output
+	*req = toRequest(ev)
+	req.Tools = tools
+	if maxOutput > req.Tokens.Output {
+		// Re-price the larger output count at this request's own rate.
+		if ev.Tokens.Output > 0 {
+			req.USD.Output = ev.Cost.Output / float64(ev.Tokens.Output) * float64(maxOutput)
+		} else if mp, ok := table.ResolvePrice(ev.Model); ok {
+			req.USD.Output = float64(maxOutput) * mp.Output
+		}
+		req.Tokens.Output = maxOutput
+		req.USD.Total = req.USD.Input + req.USD.Output + req.USD.CacheRead + req.USD.CacheWrite
+	}
+	mergeTools(req, ev.Tools)
+	req.Signals.ToolCalls = 0
+	if req.Tools != nil {
+		req.Signals.ToolCalls = req.Tools.Total
+	}
+}
+
+// mergeTools adds another transcript line's tool calls to req's summary.
+func mergeTools(req *CostRequest, more cost.ToolSummary) {
+	if more.Total == 0 {
+		return
+	}
+	if req.Tools == nil {
+		req.Tools = &cost.ToolSummary{}
+	}
+	req.Tools.Total += more.Total
+	for name, n := range more.ByName {
+		if req.Tools.ByName == nil {
+			req.Tools.ByName = map[string]int{}
+		}
+		req.Tools.ByName[name] += n
+	}
+	req.Signals.ToolCalls = req.Tools.Total
+}
+
+// Turn-flush wait bounds. At Stop, Claude Code may not have written the
+// turn's final assistant message yet; pricing right away would miss it (and
+// attribute it to the next Stop instead). Vars so tests can shorten them.
+var (
+	flushWaitMax  = 1500 * time.Millisecond
+	flushWaitStep = 50 * time.Millisecond
+)
+
+// waitForTurnFlush polls the transcript (≤ flushWaitMax, every
+// flushWaitStep) until its last assistant line is newer than the turn start
+// and did not end in tool_use, i.e. the turn's final response is on disk. It
+// never blocks past the cap; on timeout the caller prices what exists and the
+// offset picks up the rest at the next Stop. Only bytes after offset (where
+// the previous Stop stopped pricing) are read, incrementally.
+func waitForTurnFlush(path string, offset int64, turnStartedAt string) {
+	var turnStart time.Time
+	if turnStartedAt != "" {
+		turnStart, _ = time.Parse(time.RFC3339Nano, turnStartedAt)
+	}
+	pos := offset
+	var last lastAssistant
+	deadline := time.Now().Add(flushWaitMax)
+	for {
+		pos = scanLastAssistant(path, pos, &last)
+		if turnFlushed(last, turnStart) {
+			return
+		}
+		if time.Now().Add(flushWaitStep).After(deadline) {
+			return
+		}
+		time.Sleep(flushWaitStep)
+	}
+}
+
+// lastAssistant is the newest assistant transcript line seen so far.
+type lastAssistant struct {
+	seen       bool
+	ts         time.Time
+	stopReason string
+}
+
+// turnFlushed reports whether the newest assistant line closes this turn.
+// With no turn start on record (no open turn), only the stop reason is
+// checked, and nothing new since the last Stop means there is nothing to wait
+// for.
+func turnFlushed(last lastAssistant, turnStart time.Time) bool {
+	if !last.seen {
+		return turnStart.IsZero()
+	}
+	if last.stopReason == "tool_use" {
+		return false
+	}
+	return turnStart.IsZero() || last.ts.After(turnStart)
+}
+
+// scanLastAssistant reads the complete lines after pos, updates last with any
+// assistant line among them, and returns the position after the last complete
+// line (a partially written line is re-read next time).
+func scanLastAssistant(path string, pos int64, last *lastAssistant) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return pos
+	}
+	defer func() { _ = f.Close() }()
+	if info, err := f.Stat(); err != nil || pos > info.Size() {
+		pos = 0 // replaced/truncated
+	}
+	if _, err := f.Seek(pos, 0); err != nil {
+		return pos
+	}
+	r := bufio.NewReaderSize(f, 64*1024)
+	for {
+		line, err := r.ReadBytes('\n')
+		if err != nil {
+			return pos // EOF: a partial line (if any) is left for the next poll
+		}
+		pos += int64(len(line))
+		if !bytes.Contains(line, []byte(`"assistant"`)) {
+			continue
+		}
+		var l struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				StopReason string `json:"stop_reason"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(line, &l) != nil || l.Type != "assistant" {
+			continue
+		}
+		ts, _ := time.Parse(time.RFC3339Nano, l.Timestamp)
+		*last = lastAssistant{seen: true, ts: ts, stopReason: l.Message.StopReason}
+	}
 }
 
 func toRequest(ev cost.CostEvent) CostRequest {

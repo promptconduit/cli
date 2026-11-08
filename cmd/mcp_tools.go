@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +13,9 @@ import (
 
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/cost"
+	"github.com/promptconduit/cli/internal/enrich"
 	"github.com/promptconduit/cli/internal/eventlog"
+	"github.com/promptconduit/cli/internal/loop"
 	"github.com/promptconduit/cli/internal/mcp"
 	"github.com/promptconduit/cli/internal/sessions"
 )
@@ -148,6 +151,21 @@ func mcpTools() []*mcp.Tool {
 			Handler:     toolRecentSessions,
 		},
 		{
+			Name:  "prompt_loop",
+			Title: "Why a prompt cost what it did",
+			Description: "The Loop for one prompt: each model round-trip with its context size, cost and the tools it ran, " +
+				"totals split into re-reading history, new context and output, and advice that re-prices the same steps another way " +
+				"(fewer round-trips, a fresh session or subagent, switching models, cache expiry, background wake-ups). " +
+				"Agent cost is roughly context size × round-trips. Defaults to the latest finished prompt of the most recent session. " +
+				"Built from the local event log; no account needed.",
+			InputSchema: objectSchema(schemaProps{
+				"session_id": strProp("Session id (from recent_sessions). Default: the most recent session, or the session of prompt_id."),
+				"prompt_id":  strProp("Prompt id. Default: the session's latest prompt with priced calls."),
+			}),
+			Annotations: readOnly("Prompt loop"),
+			Handler:     toolPromptLoop,
+		},
+		{
 			Name:        "setup_status",
 			Title:       "PromptConduit setup status",
 			Description: "Which AI tools have PromptConduit hooks and the MCP server installed, whether you are signed in, and whether events sync or stay local.",
@@ -196,6 +214,19 @@ func mcpTools() []*mcp.Tool {
 			InputSchema: objectSchema(schemaProps{"org": orgProp}),
 			Annotations: readOnly("Team budgets"),
 			Handler:     toolTeamBudgets,
+		},
+		{
+			Name:  "team_loop_compare",
+			Title: "Compare prompt loops across the team",
+			Description: "How each teammate's prompts of one task kind (ship, debug, build, ...) typically run: median cost, round-trips and context per task, " +
+				"task count, and the habits that keep the cheapest runs cheap. Members are shown once at least two have 3 or more tasks of that kind.",
+			InputSchema: objectSchema(schemaProps{
+				"org":       orgProp,
+				"period":    periodProp,
+				"task_kind": strProp("Task kind to compare.", enrich.TaskKinds...),
+			}, "task_kind"),
+			Annotations: readOnly("Team loop comparison"),
+			Handler:     toolTeamLoopCompare,
 		},
 		{
 			Name:        "team_export_csv",
@@ -418,6 +449,29 @@ func toolRecentSessions(_ context.Context, raw json.RawMessage) (interface{}, er
 	return map[string]interface{}{"sessions": list}, nil
 }
 
+func toolPromptLoop(_ context.Context, raw json.RawMessage) (interface{}, error) {
+	var a struct {
+		SessionID string `json:"session_id"`
+		PromptID  string `json:"prompt_id"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	table, err := cost.LoadPriceTable()
+	if err != nil {
+		return nil, err
+	}
+	res, err := loop.FromEventLogFile(eventlog.EventsJSONLPath(), strings.TrimSpace(a.SessionID), strings.TrimSpace(a.PromptID), table)
+	var nf loop.ErrNotFound
+	if errors.As(err, &nf) {
+		return nf.Error() + ".", nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
 func toolSetupStatus(_ context.Context, raw json.RawMessage) (interface{}, error) {
 	if err := decodeArgs(raw, &struct{}{}); err != nil {
 		return nil, err
@@ -565,6 +619,41 @@ func toolTeamBudgets(_ context.Context, raw json.RawMessage) (interface{}, error
 	return teamCall(a.Org, func(c *client.Client, o teamOrgInfo) (interface{}, error) {
 		return teamData("failed to list budgets", c.ListBudgets(o.ID), o)
 	})
+}
+
+func toolTeamLoopCompare(_ context.Context, raw json.RawMessage) (interface{}, error) {
+	var a struct {
+		Org      string `json:"org"`
+		Period   string `json:"period"`
+		TaskKind string `json:"task_kind"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	period, err := checkPeriod(a.Period)
+	if err != nil {
+		return nil, err
+	}
+	if !validTaskKind(a.TaskKind) {
+		return nil, fmt.Errorf("task_kind must be one of %s", strings.Join(enrich.TaskKinds, ", "))
+	}
+	return teamCall(a.Org, func(c *client.Client, o teamOrgInfo) (interface{}, error) {
+		resp := c.GetLoopCompare(o.ID, a.TaskKind, period)
+		if resp.StatusCode == 404 {
+			return "Team loop comparison isn't available on this PromptConduit server yet. " +
+				"prompt_loop shows the loop for your own prompts in the meantime.", nil
+		}
+		return teamData("failed to compare team loops", resp, o)
+	})
+}
+
+func validTaskKind(k string) bool {
+	for _, v := range enrich.TaskKinds {
+		if k == v {
+			return true
+		}
+	}
+	return false
 }
 
 func toolTeamExport(_ context.Context, raw json.RawMessage) (interface{}, error) {

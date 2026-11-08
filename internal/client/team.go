@@ -63,6 +63,12 @@ func (c *Client) GetTeamSavings(orgID, period string) *APIResponse {
 	return c.Get(orgPath(orgID, "/analytics/savings"), map[string]string{"period": period})
 }
 
+// GetLoopCompare returns each member's typical prompt loop (median cost,
+// round-trips, context, habits) for one task kind over a period.
+func (c *Client) GetLoopCompare(orgID, taskKind, period string) *APIResponse {
+	return c.Get(orgPath(orgID, "/loop/compare"), map[string]string{"task_kind": taskKind, "period": period})
+}
+
 // ListBudgets returns the organization's monthly budgets with month-to-date spend.
 func (c *Client) ListBudgets(orgID string) *APIResponse {
 	return c.Get(orgPath(orgID, "/budgets"), nil)

@@ -1,15 +1,16 @@
-name: Refresh graph bundle
+name: Refresh Loop bundle
 
-# Rebuilds the embedded Session Graph page (internal/graph/ui/graph.html) from
-# promptconduit/editor-extension main and opens a PR when it changed — so the
-# page `promptconduit graph` serves doesn't drift from the extension repo's
-# portable graph core without anyone running `make refresh-graph` by hand.
+# Rebuilds the embedded Loop page (internal/loopui/ui/loop.html) from
+# promptconduit/editor-extension main and opens a PR when it changed, so the
+# page `promptconduit loop` serves doesn't drift from the extension's Loop panel
+# without anyone running `make refresh-loop` by hand. The build is the
+# extension's `node dev/build-cli-bundle.mjs --out <path>`.
 #
 # Triggers:
 #   - workflow_dispatch  : run it on demand from the Actions tab.
 #   - schedule (weekly)  : safety net so drift is caught even if nobody dispatches.
 #   - repository_dispatch: optional auto-trigger; have editor-extension POST a
-#     `graph-updated` (or `extension-released`) dispatch on release.
+#     `loop-updated` (or `extension-released`) dispatch on release.
 #
 # Unlike the .vsix refresh, esbuild output is DETERMINISTIC, so change detection
 # is a plain byte diff of the rebuilt file — no version bookkeeping needed.
@@ -22,7 +23,7 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   repository_dispatch:
-    types: [graph-updated, extension-released]
+    types: [loop-updated, graph-updated, extension-released]
 
 permissions:
   contents: write
@@ -52,16 +53,16 @@ jobs:
         with:
           go-version: "1.21"
 
-      - name: Rebuild embedded graph page
-        run: make refresh-graph EXTENSION_DIR=editor-extension
+      - name: Rebuild embedded Loop page
+        run: make refresh-loop EXTENSION_DIR=editor-extension
 
       - name: Detect change
         id: check
         run: |
           set -euo pipefail
-          if git diff --quiet -- internal/graph/ui/graph.html; then
+          if git diff --quiet -- internal/loopui/ui/loop.html; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Embedded graph page is already up to date — nothing to do."
+            echo "Embedded Loop page is already up to date — nothing to do."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
@@ -70,7 +71,7 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           make build
-          go test ./internal/graph/...
+          go test ./internal/loopui/...
 
       - name: Open refresh PR
         if: steps.check.outputs.changed == 'true'
@@ -78,17 +79,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          page="internal/graph/ui/graph.html"
-          branch="chore/refresh-graph-bundle-${GITHUB_RUN_ID}"
+          page="internal/loopui/ui/loop.html"
+          branch="chore/refresh-loop-bundle-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
           git add "$page"
-          git commit -m "chore(graph): refresh embedded session graph page"
+          git commit -m "chore(loop): refresh embedded Loop page"
           git push origin "$branch"
           if gh pr create --base main --head "$branch" \
-              --title "chore(graph): refresh embedded session graph page" \
-              --body "Automated refresh of the embedded Session Graph page (\`$page\`) from \`promptconduit/editor-extension\` main's portable graph core, opened by the **Refresh graph bundle** workflow. CLI build + graph tests passed on this artifact."; then
+              --title "chore(loop): refresh embedded Loop page" \
+              --body "Automated refresh of the embedded Loop page (\`$page\`) from \`promptconduit/editor-extension\` main's Loop panel client, opened by the **Refresh Loop bundle** workflow. CLI build + loopui tests passed on this artifact."; then
             echo "Opened refresh PR."
           else
             echo "::warning::Could not open the PR automatically (enable 'Allow GitHub Actions to create and approve pull requests', or open one from branch ${branch})."

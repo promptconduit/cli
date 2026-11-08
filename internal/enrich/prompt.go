@@ -19,6 +19,11 @@ type PromptEnrichment struct {
 	// still open (no Stop yet) — the same turn-open rule the platform and the
 	// extension coaching apply, computed once at the source.
 	IsInterrupt bool `json:"is_interrupt,omitempty"`
+	// TaskKind is what kind of task the prompt asks for (ship, debug, build,
+	// …; see taskkind.go), classified locally from the text, which is never
+	// stored. Short follow-ups ("yes please") inherit the session's previous
+	// kind.
+	TaskKind string `json:"task_kind"`
 }
 
 type promptEnricher struct{}
@@ -36,6 +41,7 @@ func (promptEnricher) Enrich(ctx *Context) (any, error) {
 
 	count := 1
 	isInterrupt := false
+	taskKind := taskKindFor(prompt, "")
 	if ctx.SessionID != "" {
 		updated := updateState(ctx.SessionID, func(st *sessionState) bool {
 			st.PromptCount++
@@ -43,7 +49,11 @@ func (promptEnricher) Enrich(ctx *Context) (any, error) {
 			// A still-open turn (no Stop since the last prompt) means this
 			// prompt interrupted it. Read before opening the new turn.
 			isInterrupt = st.TurnStartedAt != ""
-			st.TurnStartedAt = time.Now().UTC().Format(time.RFC3339)
+			// Sub-second precision: the cost enricher compares transcript
+			// timestamps (milliseconds) against the turn start.
+			st.TurnStartedAt = time.Now().UTC().Format(time.RFC3339Nano)
+			taskKind = taskKindFor(prompt, st.LastTaskKind)
+			st.LastTaskKind = taskKind
 			return true
 		})
 		if !updated {
@@ -51,6 +61,7 @@ func (promptEnricher) Enrich(ctx *Context) (any, error) {
 			st := loadState(ctx.SessionID)
 			count = st.PromptCount + 1
 			isInterrupt = st.TurnStartedAt != ""
+			taskKind = taskKindFor(prompt, st.LastTaskKind)
 		}
 	}
 
@@ -65,5 +76,6 @@ func (promptEnricher) Enrich(ctx *Context) (any, error) {
 		Words:          len(strings.Fields(prompt)),
 		HasAttachments: hasAttachments,
 		IsInterrupt:    isInterrupt,
+		TaskKind:       taskKind,
 	}, nil
 }

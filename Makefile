@@ -1,4 +1,4 @@
-.PHONY: build test clean install release snapshot lint refresh-extension refresh-graph
+.PHONY: build test clean install release snapshot lint refresh-extension refresh-loop
 
 # Build configuration
 BINARY_NAME := promptconduit
@@ -76,14 +76,14 @@ refresh-extension:
 		npx --yes @vscode/vsce package --out "$(CURDIR)/$(EXTENSION_VSIX)"
 	@echo "Refreshed $(EXTENSION_VSIX)"
 
-# The self-contained Session Graph page `promptconduit graph` serves, built from
-# the editor-extension's PORTABLE graph core (same code the extension renders).
-GRAPH_HTML := internal/graph/ui/graph.html
+# The self-contained page `promptconduit loop` serves, built from the
+# editor-extension's Loop panel client (same store, view model and renderer).
+LOOP_HTML := internal/loopui/ui/loop.html
 
-# Rebuild the embedded graph page from the editor-extension repo. esbuild output
+# Rebuild the embedded Loop page from the editor-extension repo. esbuild output
 # is deterministic, so this is byte-stable — the refresh workflow can diff it.
-# Run after the graph's TypeScript (sessionTree/render/mount/styles) changes.
-refresh-graph:
+# Run after the Loop panel's TypeScript changes.
+refresh-loop:
 	cd $(EXTENSION_DIR) && npm ci && \
-		node dev/build-cli-bundle.mjs --out "$(CURDIR)/$(GRAPH_HTML)"
-	@echo "Refreshed $(GRAPH_HTML)"
+		node dev/build-cli-bundle.mjs --out "$(CURDIR)/$(LOOP_HTML)"
+	@echo "Refreshed $(LOOP_HTML)"
