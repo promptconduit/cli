@@ -40,7 +40,7 @@ func TestTeamNudgeText(t *testing.T) {
 }
 
 func TestTipsStateRoundTripAndTeamSeen(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateTipsConfig(t)
 	path := tipsPath()
 	if path == "" {
 		t.Fatal("no tips path")
@@ -58,7 +58,7 @@ func TestTipsStateRoundTripAndTeamSeen(t *testing.T) {
 }
 
 func TestMaybeTeamNudgeSilentOffTerminal(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
+	isolateTipsConfig(t)
 	var buf bytes.Buffer // not a terminal: scripts and pipes never see the tip
 	maybeTeamNudge(&buf)
 	if buf.Len() != 0 {
@@ -67,4 +67,13 @@ func TestMaybeTeamNudgeSilentOffTerminal(t *testing.T) {
 	if s := loadTips(tipsPath()); !s.TeamNudgeShownAt.IsZero() {
 		t.Fatal("an unshown tip must not be recorded as shown")
 	}
+}
+
+// isolateTipsConfig points the config dir at a fresh temp dir. XDG_CONFIG_HOME
+// wins over HOME (and is set on CI runners), so both are overridden.
+func isolateTipsConfig(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", dir)
 }
