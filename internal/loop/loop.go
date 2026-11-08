@@ -410,39 +410,20 @@ func detectTTL(calls []Call, table *cost.PriceTable) string {
 
 // ---- advice ----------------------------------------------------------------
 
-// readOnlyTools are tools that only look things up or check status, so a
-// run of calls issuing nothing else could have been one call. The CLI never
-// reads tool inputs, so Bash can't be split into status checks (gh, curl, git
-// status, ls) and real work; it counts as a status call.
-var readOnlyTools = map[string]bool{
-	"Bash": true, "BashOutput": true, "Read": true, "Grep": true, "Glob": true, "LS": true,
-	"ToolSearch": true, "WebFetch": true, "WebSearch": true, "NotebookRead": true,
-	"TodoRead": true, "TaskList": true, "TaskGet": true, "TaskOutput": true,
-}
-
-func readOnlyCall(c Call) bool {
-	if len(c.Tools) == 0 {
-		return false
-	}
-	for _, t := range c.Tools {
-		if !readOnlyTools[t.Name] {
-			return false
-		}
-	}
-	return true
-}
-
 // CollapsedRoundTrips is the round-trip count after collapsing each run of
-// ≥ 2 consecutive calls that issued only read-only/status tools into one call.
+// consecutive calls that each issued exactly one tool (a status check, a
+// lookup, a ToolSearch) into one call: those steps could have gone in one
+// command or script. No judgement of what the tool did (the CLI never reads
+// tool inputs).
 func CollapsedRoundTrips(calls []Call) int {
 	kept, inRun := 0, false
 	for _, c := range calls {
-		ro := readOnlyCall(c)
-		if ro && inRun {
+		single := len(c.Tools) == 1
+		if single && inRun {
 			continue
 		}
 		kept++
-		inRun = ro
+		inRun = single
 	}
 	return kept
 }
@@ -559,7 +540,7 @@ func BuildAdvice(l Ledger, table *cost.PriceTable, open *SessionOpening) []Advic
 		option(Advice{
 			ID:    AdviceFewerRoundTrips,
 			Title: "Fewer round-trips",
-			Detail: fmt.Sprintf("%d of the %d round-trips only looked things up or checked status, back to back. Batching those into one call (or one script) gets this down to %d round-trips, and every round-trip skipped saves a full re-read of ~%s tokens.",
+			Detail: fmt.Sprintf("%d of the %d round-trips each ran a single tool, back to back. Doing those steps in one command or script gets this down to %d round-trips, and every round-trip skipped saves a full re-read of ~%s tokens.",
 				len(calls)-kept, len(calls), kept, tokensK(l.AvgContext)),
 			USDIfApplied: scripted,
 			GuideSlug:    "batch-tool-calls",

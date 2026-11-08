@@ -70,9 +70,9 @@ func TestGolden_PublishBlogPost(t *testing.T) {
 		{4, 294, 389517, 8}, {2, 316, 389525, 348}, {2, 364, 389873, 509}, {2, 353, 390382, 1087},
 		{2, 245, 391469, 533}, {2, 174, 392002, 305}, {4, 121, 392307, 353}, {2, 464, 392660, 213},
 	}
-	// Status/lookups back to back, one edit, more lookups, then the answer:
-	// three runs collapse, 8 -> 4 round-trips.
-	tools := [][]string{{"ToolSearch"}, {"Bash"}, {"Bash"}, {"Edit"}, {"Bash"}, {"Read"}, {"Bash"}, nil}
+	// The real tool sequence: single-tool calls back to back collapse
+	// ([1,2], [4..7]); call 3 ran two tools and call 8 none: 8 -> 4.
+	tools := [][]string{{"Bash"}, {"Bash"}, {"TaskStop", "Bash"}, {"Bash"}, {"Bash"}, {"ToolSearch"}, {"mcp__bing-webmaster__submit_url"}, nil}
 
 	start := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
 	ts := start.Add(2 * time.Second)
@@ -260,10 +260,11 @@ func TestCollapsedRoundTrips(t *testing.T) {
 		want  int
 	}{
 		{[]Call{mk("Read"), mk("Grep"), mk("Read")}, 1},
-		{[]Call{mk("Read"), mk("Edit"), mk("Read")}, 3},
+		{[]Call{mk("Read"), mk("Edit"), mk("Read")}, 1}, // any single tool, no read-only judgement
 		{[]Call{mk("Read", "Edit"), mk("Read")}, 2},
+		{[]Call{mk("Read"), mk("Read", "Edit"), mk("Read")}, 3},
 		{[]Call{mk(), mk(), mk()}, 3},
-		{[]Call{mk("Bash"), mk("ToolSearch"), mk("Write"), mk("Bash"), mk("Bash"), mk()}, 4},
+		{[]Call{mk("Bash"), mk("ToolSearch"), mk("Write"), mk("Bash"), mk("Bash"), mk()}, 2},
 	}
 	for i, c := range cases {
 		if got := CollapsedRoundTrips(c.calls); got != c.want {

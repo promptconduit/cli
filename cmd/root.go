@@ -90,6 +90,7 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(eventsCmd)
 	rootCmd.AddCommand(costCmd)
+	rootCmd.AddCommand(loopCmd)
 	rootCmd.AddCommand(graphCmd)
 	rootCmd.AddCommand(feedbackCmd)
 	rootCmd.AddCommand(pruneCmd)
@@ -109,7 +110,7 @@ var versionCmd = &cobra.Command{
 // `promptconduit upgrade` subprocess so the swap happens in the background.
 //
 // The release check is skipped for hook, upgrade, watch, collect, cost,
-// graph, sessions, and resume, for a spawned child, and for dev builds.
+// loop (and its graph alias), sessions, and resume, for a spawned child, and for dev builds.
 // The public rate-card refresh uses that same command skip list, including
 // dev builds, and still honors DisableAutoUpdate. The hook never fetches.
 func maybeBackgroundUpdateCheck(cmd *cobra.Command) {
@@ -304,7 +305,7 @@ func skipUpdateCheckFor(cmd *cobra.Command) bool {
 	}
 	name := commandPathRoot(cmd)
 	switch name {
-	case "hook", "prune-auto", "telemetry-ping", "upgrade", "watch", "collect", "cost", "graph", "sessions", "resume", "mcp":
+	case "hook", "prune-auto", "telemetry-ping", "upgrade", "watch", "collect", "cost", "loop", "graph", "sessions", "resume", "mcp":
 		// sessions/resume are called programmatically (the editor extension's
 		// auto-restore) and resume execs straight into claude — keep them quiet
 		// and fast, no update banner.

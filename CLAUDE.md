@@ -33,6 +33,7 @@ cli/
 │   ├── extension/    # Bundled cost editor extension (.vsix go:embed) + sideload into Cursor
 │   ├── git/          # Git context extraction
 │   ├── loop/         # The Loop: per-prompt ledger (round-trips) + advice, built from events.jsonl (MCP prompt_loop)
+│   ├── loopui/       # `promptconduit loop`: local server for the embedded Loop page (ui/loop.html) + /api/events
 │   ├── outbound/     # http.RoundTripper that mirrors every outbound request to a local ndjson file (drives `promptconduit watch`)
 │   ├── sync/         # Transcript + plan sync and parsing (Claude Code + Cursor parsers, state management)
 │   ├── transcript/   # Transcript parsing and attachment extraction
@@ -179,34 +180,35 @@ the one it's running, offers a one-click **Reload Window** — a reload (not a r
 pty host survives and terminals running Claude Code keep their sessions. Keep the JSON field names in
 sync with `editor-extension/src/updatePrompt.ts`.
 
-## Live session graph (`promptconduit graph`)
+## The Loop in the browser (`promptconduit loop`)
 
-`promptconduit graph` serves a live, "breathing" Session Graph in the browser —
-one AI coding session as a tree of session → turns → subagents, updating in
-place as your agent works. Free-tier and editor-independent: it reads
+`promptconduit loop` serves The Loop in the browser: each prompt as its model
+round-trips (context re-read, cost, tools per call) plus what would have been
+cheaper, updating live. Free-tier and editor-independent: it reads
 `~/.promptconduit/events.jsonl` locally, nothing is sent anywhere.
+`promptconduit graph` (the old Session Graph) is a hidden deprecated alias that
+prints one line and runs `loop`.
 
-**Decoupled by design — the graph LOGIC lives in exactly one place.** The
-rendering + state-building code is the editor-extension's *portable* TypeScript
-core (`src/graphPanel/sessionTree.ts` + `webview/graphPanel/{render,mount,…}` —
-zero vscode imports). Both the editor extension and this CLI consume it; neither
-owns it. `internal/graph/` is a thin **tail-and-serve** shell:
+**Decoupled by design — the UI LOGIC lives in exactly one place:** the
+editor-extension's Loop panel client (`webview/loopPanel/cliClient.ts`, built by
+its `dev/build-cli-bundle.mjs`). `internal/loopui/` is a thin
+**tail-and-serve** shell:
 
-- `internal/graph/server.go` — one `http.Server`: `GET /` serves the embedded
-  page, `GET /api/events?after=<n>&limit=<m>` returns new raw envelope lines.
-- `internal/graph/hub.go` — tails `events.jsonl` once (`outbound.Tail`) into an
-  in-memory ring; the browser polls `/api/events` and builds the graph itself.
-- `internal/graph/ui/graph.html` — the embedded page (`go:embed`), a
-  self-contained build of the portable core. Committed artifact (like the
-  `.vsix`); **not** in `dist/` (which `.gitignore` excludes).
+- `internal/loopui/server.go` — one `http.Server`: `GET /` serves the embedded
+  page, `GET /api/events?after=<n>&limit=<m>` returns new raw envelope lines as
+  `{lines, cursor, more}`. The page depends on this contract; keep it identical.
+- `internal/loopui/hub.go` — tails `events.jsonl` once (`outbound.Tail`) into an
+  in-memory ring; the browser polls `/api/events` and builds The Loop itself.
+- `internal/loopui/ui/loop.html` — the embedded page (`go:embed`).
+  Committed artifact (like the `.vsix`); **not** in `dist/` (which `.gitignore` excludes).
 
-Refresh the embedded page after the graph's TypeScript changes:
+Refresh the embedded page after the Loop panel's TypeScript changes:
 ```bash
-make refresh-graph                       # uses ../editor-extension by default
-make refresh-graph EXTENSION_DIR=/path   # or point at a checkout
+make refresh-loop                       # uses ../editor-extension by default
+make refresh-loop EXTENSION_DIR=/path   # or point at a checkout
 ```
-esbuild output is deterministic, so the **Refresh graph bundle** workflow
-(`.github/workflows/refresh-graph.yml`) byte-diffs the rebuilt page and opens a
+esbuild output is deterministic, so the **Refresh Loop bundle** workflow
+(`.github/workflows/refresh-loop.yml`) byte-diffs the rebuilt page and opens a
 PR when it changed — no version bookkeeping needed (unlike the `.vsix` refresh).
 
 ## Agent surfaces: `team` and the MCP server (`promptconduit mcp`)

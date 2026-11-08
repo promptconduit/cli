@@ -2,6 +2,7 @@ package enrich
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -243,5 +244,58 @@ func TestCostEnricher_MergesToolsAcrossContentBlockLines(t *testing.T) {
 	}
 	if ce.Requests[0].Signals.ToolCalls != 3 {
 		t.Errorf("signals.tool_calls = %d, want 3", ce.Requests[0].Signals.ToolCalls)
+	}
+}
+
+func usageLine(reqID string, output int64, tool string) string {
+	content := `[{"type":"thinking"}]`
+	if tool != "" {
+		content = fmt.Sprintf(`[{"type":"tool_use","name":%q}]`, tool)
+	}
+	return fmt.Sprintf(`{"type":"assistant","requestId":%q,"sessionId":"s1","timestamp":"2026-11-08T10:00:00Z","message":{"model":"claude-opus-5-5","stop_reason":"end_turn","content":%s,"usage":{"input_tokens":2,"output_tokens":%d,"cache_read_input_tokens":1000,"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":10}}}}`,
+		reqID, content, output)
+}
+
+// TestCostEnricher_PricesMergedUsage: a request's first transcript line holds
+// a partial output count (242); a later line holds the full one (893). The
+// request is priced at 893, and never below the largest count seen.
+func TestCostEnricher_PricesMergedUsage(t *testing.T) {
+	withStateDir(t)
+	transcript := filepath.Join(t.TempDir(), "s1.jsonl")
+	appendLines(t, transcript,
+		usageLine("req-1", 242, ""),
+		usageLine("req-1", 893, "Bash"),
+		usageLine("req-2", 422, ""),
+		usageLine("req-2", 301, "Read"), // later line with a smaller count: keep the max
+	)
+	payload, err := costEnricher{}.Enrich(&Context{
+		Tool: "claude-code", HookEvent: "Stop", SessionID: "s1", TranscriptPath: transcript,
+		RawEvent: map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ce := payload.(*CostEnrichment)
+	if len(ce.Requests) != 2 {
+		t.Fatalf("got %d requests, want 2", len(ce.Requests))
+	}
+	const outRate = 20.0 / 1_000_000 // claude-opus-5-5 output
+	for i, want := range []int64{893, 422} {
+		r := ce.Requests[i]
+		if r.Tokens.Output != want {
+			t.Errorf("%s output tokens = %d, want %d", r.RequestID, r.Tokens.Output, want)
+		}
+		if got, exp := r.USD.Output, float64(want)*outRate; math.Abs(got-exp) > 1e-9 {
+			t.Errorf("%s usd.output = %g, want %g", r.RequestID, got, exp)
+		}
+		if sum := r.USD.Input + r.USD.Output + r.USD.CacheRead + r.USD.CacheWrite; math.Abs(sum-r.USD.Total) > 1e-12 {
+			t.Errorf("%s total %g != parts %g", r.RequestID, r.USD.Total, sum)
+		}
+		if r.Tools == nil || r.Tools.Total != 1 || r.Signals.ToolCalls != 1 {
+			t.Errorf("%s tools = %+v signals.tool_calls = %d", r.RequestID, r.Tools, r.Signals.ToolCalls)
+		}
+	}
+	if ce.Totals.Tokens.Output != 893+422 {
+		t.Errorf("totals output = %d", ce.Totals.Tokens.Output)
 	}
 }

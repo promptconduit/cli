@@ -186,10 +186,10 @@ func priceTranscriptFrom(ctx *Context, table *cost.PriceTable, offset int64) ([]
 		}
 		if i, dup := index[dedupKey]; dup {
 			// Claude Code writes one transcript line per content block of a
-			// response, all with the same requestId. The tool_use blocks
-			// usually come after the first (thinking/text) line, so fold
-			// their tool names into the request instead of dropping them.
-			mergeTools(&requests[i], ev.Tools)
+			// response, all with the same requestId. Later lines carry the
+			// fuller usage (output_tokens grows as the response streams) and
+			// the tool_use blocks, so fold each line into the request.
+			mergeLine(&requests[i], ev, table)
 			continue
 		}
 		requests = append(requests, toRequest(ev))
@@ -209,6 +209,31 @@ func priceTranscriptFrom(ctx *Context, table *cost.PriceTable, offset int64) ([]
 		return nil, 0, err
 	}
 	return requests, offset, nil
+}
+
+// mergeLine folds a later transcript line of the same request into req: the
+// request is re-priced from that line's usage block, with output tokens the
+// largest seen across the request's lines (a line's count is the running total
+// at the time it was written), and the line's tool calls are added.
+func mergeLine(req *CostRequest, ev cost.CostEvent, table *cost.PriceTable) {
+	tools, maxOutput := req.Tools, req.Tokens.Output
+	*req = toRequest(ev)
+	req.Tools = tools
+	if maxOutput > req.Tokens.Output {
+		// Re-price the larger output count at this request's own rate.
+		if ev.Tokens.Output > 0 {
+			req.USD.Output = ev.Cost.Output / float64(ev.Tokens.Output) * float64(maxOutput)
+		} else if mp, ok := table.ResolvePrice(ev.Model); ok {
+			req.USD.Output = float64(maxOutput) * mp.Output
+		}
+		req.Tokens.Output = maxOutput
+		req.USD.Total = req.USD.Input + req.USD.Output + req.USD.CacheRead + req.USD.CacheWrite
+	}
+	mergeTools(req, ev.Tools)
+	req.Signals.ToolCalls = 0
+	if req.Tools != nil {
+		req.Signals.ToolCalls = req.Tools.Total
+	}
 }
 
 // mergeTools adds another transcript line's tool calls to req's summary.

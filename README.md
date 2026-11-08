@@ -292,6 +292,12 @@ context, because the new model has to cache everything again), cache expiry
 during long waits, and background tasks that woke the agent after the prompt
 finished. Pass `session_id` / `prompt_id` to pick another prompt.
 
+To see the same view yourself, run `promptconduit loop`. It opens The Loop in
+your browser, served locally from `~/.promptconduit/events.jsonl` and updating
+live as your agent works (`--no-open` just prints the URL, `--addr` picks the
+port). No account or editor needed. The old `promptconduit graph` name still
+works and runs `loop`.
+
 Each prompt also carries a `task_kind` (`ship`, `debug`, `build`, `refactor`,
 `test`, `docs`, `review`, `explore`, `chore` or `other`) on its `prompt`
 enrichment, classified on your machine from the prompt text with keyword
