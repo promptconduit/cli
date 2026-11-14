@@ -227,7 +227,16 @@ the same data plus local cost/sessions as MCP tools and prompts over stdio.
 
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
 - **Config file over env vars**: Prefer `~/.config/promptconduit/config.json` for multi-environment setups
-- **Async sending**: Events are sent asynchronously to avoid blocking the AI tool
+- **Async, batched sending**: the hook appends each envelope to a per-target
+  upload spool (`eventlog.AppendSpool` → `~/.promptconduit/spool-<hash>.jsonl`)
+  and a detached `hook --flush-spool` process ships it to
+  `POST /v1/events/raw/batch` (≤100 events / ~900 KB per request) once it's due
+  (20 events or 5s old) or at Stop/SessionEnd (`internal/client/batch.go`,
+  `internal/eventlog/spool.go`). Entries are removed only after accept/permanent
+  reject; 404/405 falls back to `/v1/events/raw` for 1h (state in
+  `.spool-<hash>.state.json`). Attachments keep the multipart single path;
+  `batch_upload=false` / `PROMPTCONDUIT_BATCH_UPLOAD=0` or a disabled event log
+  restore the legacy per-event detached sender.
 - **Capture is decoupled from sending**: `processHookEvent` always builds the
   envelope and writes it to the local capture log (`eventlog.RecordCapture` →
   `~/.promptconduit/events.jsonl`) *before* deciding whether to send. The single
