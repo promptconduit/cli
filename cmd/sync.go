@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	gosync "sync"
 	"syscall"
 	"time"
 
@@ -116,9 +117,12 @@ func runSync(cmd *cobra.Command, args []string) error {
 	// processes at once. Wait for an in-flight upload of this file to finish,
 	// then proceed — the state is loaded only after, so the hash check below
 	// sees what that upload recorded and skips unchanged content.
+	releaseMain := func() {}
 	if syncFile != "" {
 		release, ok := sync.LockTranscript(client.ConfigDir(), syncFile, transcriptLockWait)
-		defer release()
+		var once gosync.Once
+		releaseMain = func() { once.Do(release) }
+		defer releaseMain()
 		if !ok {
 			err := fmt.Errorf("another sync of %s is still running; gave up after %s", syncFile, transcriptLockWait)
 			// Don't drop it silently: record a failed sync so the next hook's
@@ -138,7 +142,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// Handle single-file sync (used by auto-sync from SessionEnd hook)
 	if syncFile != "" {
-		return runSingleFileSync(config, stateManager, syncFile)
+		return runSingleFileSync(config, stateManager, syncFile, releaseMain)
 	}
 
 	// Determine which tools to sync
@@ -560,20 +564,45 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 // manual `promptconduit sync`. The parent session's auto-sync carries them.
 // A subagent failure is recorded for retry, but the result reflects the main
 // transcript.
-func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string) error {
+//
+// releaseMain drops the main transcript's upload lock once the main file is
+// done, so the next Stop's sync isn't held up behind a long run of subagent
+// uploads. Each subagent upload takes that subagent file's own lock instead.
+func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string, releaseMain func()) error {
 	err := syncOneTranscript(config, stateManager, filePath)
-	if isSubagentTranscript(filePath) {
-		return err
+	releaseMain()
+	if !isSubagentTranscript(filePath) {
+		syncSubagentTranscripts(config, stateManager, filePath)
 	}
-	for _, sub := range cost.SubagentTranscripts(filePath) {
+	return err
+}
+
+// syncSubagentTranscripts uploads the changed subagent transcripts of a
+// session. Each upload holds that file's own upload lock, the same lock a
+// full `promptconduit sync` or a retry of that file takes, so two processes
+// never upload one file at once. A file another process is uploading right now
+// is skipped; that process covers it. After taking the lock, the sync state is
+// re-read so the hash check sees what that other process recorded.
+func syncSubagentTranscripts(config *client.Config, stateManager *sync.StateManager, sessionPath string) {
+	for _, sub := range cost.SubagentTranscripts(sessionPath) {
 		if unchangedSinceSync(stateManager, sub) {
 			continue
 		}
-		if subErr := syncOneTranscript(config, stateManager, sub); subErr != nil {
-			logger.Debug("Auto-sync: subagent transcript %s: %v", sub, subErr)
+		release, ok := sync.LockTranscript(client.ConfigDir(), sub, 0)
+		if !ok {
+			release()
+			logger.Debug("Auto-sync: subagent transcript %s is being synced elsewhere; skipping", sub)
+			continue
+		}
+		subState, err := sync.NewStateManager()
+		if err == nil {
+			err = syncOneTranscript(config, subState, sub)
+		}
+		release()
+		if err != nil {
+			logger.Debug("Auto-sync: subagent transcript %s: %v", sub, err)
 		}
 	}
-	return err
 }
 
 // isSubagentTranscript reports whether path lives under a session's
@@ -629,9 +658,12 @@ func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, f
 				stateManager.ClearFailedSyncsForFile(filePath)
 				save = true
 			}
-			// Backfill the fingerprint on records written before it existed,
-			// so the next auto-sync can skip this file without hashing it.
-			if info, ok := stateManager.GetSyncedInfo(filePath); ok && statErr == nil && info.SourceModTime == 0 {
+			// Refresh the fingerprint when it is missing (a record from before
+			// it existed) or stale (a write landed between the stat and the
+			// hash of the last upload), so the next auto-sync can skip this
+			// file without hashing it.
+			if info, ok := stateManager.GetSyncedInfo(filePath); ok && statErr == nil &&
+				(info.SourceModTime != pre.ModTime().UnixNano() || info.SourceSize != pre.Size()) {
 				info.SourceModTime, info.SourceSize = pre.ModTime().UnixNano(), pre.Size()
 				stateManager.MarkSynced(filePath, info)
 				save = true

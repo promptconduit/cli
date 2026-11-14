@@ -57,20 +57,23 @@ func TestSingleFileSyncCarriesSubagents(t *testing.T) {
 	cfg := &client.Config{APIKey: "k", APIURL: srv.URL, TimeoutSeconds: 5}
 	sm, _ := sync.NewStateManager()
 
-	if err := runSingleFileSync(cfg, sm, main); err != nil {
+	if err := runSingleFileSync(cfg, sm, main, func() {}); err != nil {
 		t.Fatalf("first sync: %v", err)
 	}
 	if got := count(); got != 3 {
 		t.Fatalf("first sync uploaded %d transcripts, want 3 (main, subagent, workflow agent): %v", got, uploads)
 	}
+	// Subagent uploads record through their own (re-read) state manager, so
+	// check what reached disk.
+	onDisk, _ := sync.NewStateManager()
 	for _, p := range []string{main, sub, wf} {
-		if _, ok := sm.GetSyncedInfo(p); !ok {
-			t.Errorf("%s not marked synced", p)
+		if info, ok := onDisk.GetSyncedInfo(p); !ok || info.SourceModTime == 0 || info.SourceSize == 0 {
+			t.Errorf("%s not marked synced with a fingerprint: %+v", p, info)
 		}
 	}
 
 	// Nothing changed: nothing is uploaded again.
-	if err := runSingleFileSync(cfg, sm, main); err != nil {
+	if err := runSingleFileSync(cfg, sm, main, func() {}); err != nil {
 		t.Fatalf("second sync: %v", err)
 	}
 	if got := count(); got != 3 {
@@ -81,11 +84,38 @@ func TestSingleFileSyncCarriesSubagents(t *testing.T) {
 	if err := os.WriteFile(sub, append(line("a"), line("b")...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runSingleFileSync(cfg, sm, main); err != nil {
+	if err := runSingleFileSync(cfg, sm, main, func() {}); err != nil {
 		t.Fatalf("third sync: %v", err)
 	}
 	if got := count(); got != 4 {
 		t.Fatalf("after a subagent change: %d uploads, want 4", got)
+	}
+
+	// A subagent file another process is uploading (its lock is held) is
+	// skipped, not uploaded twice; the main lock is released before subagents.
+	if err := os.WriteFile(wf, append(line("c"), line("d")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	release, ok := sync.LockTranscript(client.ConfigDir(), wf, 0)
+	if !ok {
+		t.Fatal("setup: could not take the workflow agent's lock")
+	}
+	mainReleased := false
+	if err := runSingleFileSync(cfg, sm, main, func() { mainReleased = true }); err != nil {
+		t.Fatalf("locked sync: %v", err)
+	}
+	release()
+	if got := count(); got != 4 {
+		t.Fatalf("a locked subagent was uploaded anyway: %d uploads, want 4", got)
+	}
+	if !mainReleased {
+		t.Fatal("the main transcript's lock must be released before syncing subagents")
+	}
+	if err := runSingleFileSync(cfg, sm, main, func() {}); err != nil {
+		t.Fatalf("unlocked sync: %v", err)
+	}
+	if got := count(); got != 5 {
+		t.Fatalf("after the lock is free: %d uploads, want 5", got)
 	}
 
 	// Syncing a subagent file directly never walks for nested subagents.
