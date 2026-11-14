@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/cost"
+	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/spf13/cobra"
 )
@@ -551,8 +553,56 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 	return resp, nil
 }
 
-// runSingleFileSync syncs a single transcript file (used by auto-sync)
+// runSingleFileSync syncs a single transcript file (used by auto-sync), plus
+// the subagent transcripts of a Claude Code session. Subagents (and workflow
+// agents) write their own transcripts under <session>/subagents/ and never
+// fire a Stop hook of their own, so before this they were only uploaded by a
+// manual `promptconduit sync`. The parent session's auto-sync carries them.
+// A subagent failure is recorded for retry, but the result reflects the main
+// transcript.
 func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string) error {
+	err := syncOneTranscript(config, stateManager, filePath)
+	if isSubagentTranscript(filePath) {
+		return err
+	}
+	for _, sub := range cost.SubagentTranscripts(filePath) {
+		if unchangedSinceSync(stateManager, sub) {
+			continue
+		}
+		if subErr := syncOneTranscript(config, stateManager, sub); subErr != nil {
+			logger.Debug("Auto-sync: subagent transcript %s: %v", sub, subErr)
+		}
+	}
+	return err
+}
+
+// isSubagentTranscript reports whether path lives under a session's
+// subagents/ directory (and so has no subagents of its own to carry).
+func isSubagentTranscript(path string) bool {
+	return strings.Contains(filepath.ToSlash(path), "/subagents/")
+}
+
+// unchangedSinceSync is a cheap pre-check for subagent transcripts: a file
+// not modified since its last successful upload is skipped without hashing.
+// Workflow-heavy sessions hold hundreds of them, and auto-sync runs on every
+// Stop (debounced to once a minute). Anything uncertain falls through to the
+// hash check in syncOneTranscript.
+func unchangedSinceSync(stateManager *sync.StateManager, path string) bool {
+	info, ok := stateManager.GetSyncedInfo(path)
+	if !ok || info.SyncedAt == "" || syncForce {
+		return false
+	}
+	syncedAt, err := time.Parse(time.RFC3339Nano, info.SyncedAt)
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(path)
+	return err == nil && !st.ModTime().After(syncedAt)
+}
+
+// syncOneTranscript uploads one transcript file if it changed since its last
+// sync (or always, with --force).
+func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, filePath string) error {
 	// Verify file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		// Nothing left to retry: drop any failed-sync record for it, or every
