@@ -40,7 +40,7 @@ func TestSingleFileSyncClearsStaleFailure(t *testing.T) {
 
 	// Nothing listens on this URL: an upload attempt would fail.
 	cfg := &client.Config{APIKey: "k", APIURL: "http://127.0.0.1:1", TimeoutSeconds: 1}
-	if err := runSingleFileSync(cfg, sm, path); err != nil {
+	if err := runSingleFileSync(cfg, sm, path, func() {}); err != nil {
 		t.Fatalf("runSingleFileSync: %v", err)
 	}
 	if reloaded, _ := sync.NewStateManager(); reloaded.HasFailedSyncForFile(path) {
@@ -61,7 +61,7 @@ func TestSingleFileSyncClearsFailureForMissingFile(t *testing.T) {
 	if err := sm.Save(); err != nil {
 		t.Fatal(err)
 	}
-	if err := runSingleFileSync(&client.Config{APIKey: "k"}, sm, path); err == nil {
+	if err := runSingleFileSync(&client.Config{APIKey: "k"}, sm, path, func() {}); err == nil {
 		t.Fatal("want a not-found error")
 	}
 	if reloaded, _ := sync.NewStateManager(); reloaded.HasFailedSyncForFile(path) {
