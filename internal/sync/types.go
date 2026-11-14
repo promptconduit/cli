@@ -81,6 +81,12 @@ type SyncedFileInfo struct {
 	SyncedAt       string `json:"synced_at"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	MessageCount   int    `json:"message_count"`
+	// Source file's mtime (unix nanos) and size, read just before it was
+	// hashed for this upload. When both still match, the file is unchanged
+	// and auto-sync skips it without re-hashing. Zero when unknown (older
+	// state, or a sync path that doesn't record them).
+	SourceModTime int64 `json:"source_mtime,omitempty"`
+	SourceSize    int64 `json:"source_size,omitempty"`
 }
 
 // SyncResult holds the result of syncing a single file

@@ -93,3 +93,40 @@ func TestSingleFileSyncCarriesSubagents(t *testing.T) {
 		t.Fatal("isSubagentTranscript misclassified a path")
 	}
 }
+
+// TestUnchangedSinceSyncFingerprint: the skip needs an exact mtime+size match
+// with the fingerprint taken before hashing. An append (even one landing in
+// the same coarse mtime tick) changes the size, so it is never skipped.
+func TestUnchangedSinceSyncFingerprint(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+
+	path := filepath.Join(t.TempDir(), "agent-a.jsonl")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := os.Stat(path)
+	sm, _ := sync.NewStateManager()
+
+	sm.MarkSynced(path, sync.SyncedFileInfo{Hash: "h"})
+	if unchangedSinceSync(sm, path) {
+		t.Fatal("a record without a fingerprint must fall through to the hash check")
+	}
+
+	sm.MarkSynced(path, sync.SyncedFileInfo{Hash: "h", SourceModTime: st.ModTime().UnixNano(), SourceSize: st.Size()})
+	if !unchangedSinceSync(sm, path) {
+		t.Fatal("matching mtime+size should skip")
+	}
+
+	// Append, then force the old mtime back: same tick, bigger file.
+	if err := os.WriteFile(path, []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, st.ModTime(), st.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if unchangedSinceSync(sm, path) {
+		t.Fatal("a size change with the same mtime must not be skipped")
+	}
+}

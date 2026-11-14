@@ -583,28 +583,29 @@ func isSubagentTranscript(path string) bool {
 }
 
 // unchangedSinceSync is a cheap pre-check for subagent transcripts: a file
-// not modified since its last successful upload is skipped without hashing.
-// Workflow-heavy sessions hold hundreds of them, and auto-sync runs on every
-// Stop (debounced to once a minute). Anything uncertain falls through to the
-// hash check in syncOneTranscript.
+// whose mtime and size both still match the fingerprint recorded when it was
+// last hashed is skipped without re-hashing. Workflow-heavy sessions hold
+// hundreds of them, and auto-sync runs on every Stop (debounced to once a
+// minute). The fingerprint is read BEFORE hashing, so an append during a slow
+// upload changes the size and is never mistaken for "unchanged". Comparing to
+// synced_at instead would be wrong for exactly that case. Anything uncertain
+// falls through to the hash check in syncOneTranscript.
 func unchangedSinceSync(stateManager *sync.StateManager, path string) bool {
 	info, ok := stateManager.GetSyncedInfo(path)
-	if !ok || info.SyncedAt == "" || syncForce {
-		return false
-	}
-	syncedAt, err := time.Parse(time.RFC3339Nano, info.SyncedAt)
-	if err != nil {
+	if !ok || syncForce || info.SourceModTime == 0 {
 		return false
 	}
 	st, err := os.Stat(path)
-	return err == nil && !st.ModTime().After(syncedAt)
+	return err == nil && st.ModTime().UnixNano() == info.SourceModTime && st.Size() == info.SourceSize
 }
 
 // syncOneTranscript uploads one transcript file if it changed since its last
 // sync (or always, with --force).
 func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, filePath string) error {
-	// Verify file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	// Verify file exists. The stat doubles as the fingerprint recorded with a
+	// successful sync (see unchangedSinceSync); it is read before hashing.
+	pre, statErr := os.Stat(filePath)
+	if os.IsNotExist(statErr) {
 		// Nothing left to retry: drop any failed-sync record for it, or every
 		// later Stop hook would respawn a sync of a file that is gone.
 		if stateManager.HasFailedSyncForFile(filePath) {
@@ -623,8 +624,19 @@ func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, f
 			// record left from before that upload (e.g. a full `promptconduit
 			// sync` succeeded later) is stale; without clearing it here every
 			// Stop hook keeps respawning this retry.
+			save := false
 			if stateManager.HasFailedSyncForFile(filePath) {
 				stateManager.ClearFailedSyncsForFile(filePath)
+				save = true
+			}
+			// Backfill the fingerprint on records written before it existed,
+			// so the next auto-sync can skip this file without hashing it.
+			if info, ok := stateManager.GetSyncedInfo(filePath); ok && statErr == nil && info.SourceModTime == 0 {
+				info.SourceModTime, info.SourceSize = pre.ModTime().UnixNano(), pre.Size()
+				stateManager.MarkSynced(filePath, info)
+				save = true
+			}
+			if save {
 				_ = stateManager.Save()
 			}
 			return nil
@@ -678,11 +690,15 @@ func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, f
 	}
 
 	// Success - mark as synced and clear any previous failure
-	stateManager.MarkSynced(filePath, sync.SyncedFileInfo{
+	synced := sync.SyncedFileInfo{
 		Hash:           conversation.SourceFileHash,
 		ConversationID: resp.ConversationID,
 		MessageCount:   resp.MessageCount,
-	})
+	}
+	if statErr == nil {
+		synced.SourceModTime, synced.SourceSize = pre.ModTime().UnixNano(), pre.Size()
+	}
+	stateManager.MarkSynced(filePath, synced)
 	stateManager.ClearFailedSync(conversation.SessionID)
 
 	// Ride-along: upload any new plan this session's transcript references.
