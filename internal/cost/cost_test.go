@@ -724,6 +724,34 @@ func TestLatestSummary(t *testing.T) {
 	}
 }
 
+// TestSummaryTimesAreMinMax: a session is seeded file by file (main
+// transcript, then subagent transcripts), so events arrive out of time order.
+// StartedAt/UpdatedAt must be the earliest/latest event, not first/last
+// applied. Otherwise a long session reports the end of its last subagent as
+// its last activity, and LatestSummary can pick the wrong session.
+func TestSummaryTimesAreMinMax(t *testing.T) {
+	w := NewWatcher(nil, nil, nil, false)
+	ev := func(session, req, ts string) CostEvent {
+		return CostEvent{Kind: "cost_event", Tool: ToolClaudeCode, SessionID: session, RequestID: req, Timestamp: ts, Model: "m", ModelPriced: true, Cost: Cost{Total: 1}}
+	}
+	// Main transcript of "long": spans 10:00 to 18:00.
+	w.apply(ev("long", "a1", "2026-11-13T10:00:00Z"))
+	w.apply(ev("long", "a2", "2026-11-13T18:00:00Z"))
+	// "other" was active at 12:00, after long's subagent below.
+	w.apply(ev("other", "b1", "2026-11-13T12:00:00Z"))
+	// long's subagent transcript, seeded last, ran 09:59 to 11:00.
+	w.apply(ev("long", "s1", "2026-11-13T09:59:00Z"))
+	w.apply(ev("long", "s2", "2026-11-13T11:00:00Z"))
+
+	s, ok := w.LatestSummary()
+	if !ok || s.SessionID != "long" {
+		t.Fatalf("latest session = %q, want \"long\" (last active 18:00)", s.SessionID)
+	}
+	if s.StartedAt != "2026-11-13T09:59:00Z" || s.UpdatedAt != "2026-11-13T18:00:00Z" {
+		t.Fatalf("started/updated = %s / %s, want 09:59 / 18:00", s.StartedAt, s.UpdatedAt)
+	}
+}
+
 func TestEncodeProjectPath(t *testing.T) {
 	got := encodeProjectPath("/Users/scotthavird/Documents/GitHub/scotthavird/tolken")
 	want := "-Users-scotthavird-Documents-GitHub-scotthavird-tolken"
