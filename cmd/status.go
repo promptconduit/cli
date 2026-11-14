@@ -58,6 +58,41 @@ type eventLogReport struct {
 	Queued         int             `json:"queued"`
 	CapturedPath   string          `json:"captured_path"`
 	CapturedEvents *int            `json:"captured_events,omitempty"`
+	Upload         *uploadReport   `json:"upload,omitempty"`
+}
+
+// uploadReport describes the batched-upload spool (events captured but not
+// yet sent) and the last background flush.
+type uploadReport struct {
+	Batched     bool   `json:"batched"`
+	Pending     int    `json:"pending"`
+	LastFlushAt string `json:"last_flush_at,omitempty"`
+	LastResult  string `json:"last_result,omitempty"` // ok, partial, error
+	LastError   string `json:"last_error,omitempty"`
+	RetryAfter  string `json:"retry_after,omitempty"`
+	// SingleEndpointUntil: the server lacked the batch endpoint, so events
+	// go one per request until then.
+	SingleEndpointUntil string `json:"single_endpoint_until,omitempty"`
+}
+
+func buildUploadReport(cfg *client.Config) *uploadReport {
+	st := eventlog.LoadSpoolState(cfg.APIURL)
+	u := &uploadReport{
+		Batched:    cfg.BatchUploadEnabled(),
+		Pending:    eventlog.SpoolCount(cfg.APIURL),
+		LastResult: st.LastResult,
+		LastError:  st.LastError,
+	}
+	if !st.LastFlushAt.IsZero() {
+		u.LastFlushAt = st.LastFlushAt.UTC().Format(time.RFC3339)
+	}
+	if st.NextAttemptAt.After(time.Now()) {
+		u.RetryAfter = st.NextAttemptAt.UTC().Format(time.RFC3339)
+	}
+	if st.BatchUnsupportedUntil.After(time.Now()) {
+		u.SingleEndpointUntil = st.BatchUnsupportedUntil.UTC().Format(time.RFC3339)
+	}
+	return u
 }
 
 func buildStatusReport() statusReport {
@@ -82,6 +117,7 @@ func buildStatusReport() statusReport {
 	if r.EventLog.Enabled {
 		r.EventLog.Counters = eventlog.LoadStatus()
 		r.EventLog.Queued = eventlog.OutboxCount(cfg.APIURL)
+		r.EventLog.Upload = buildUploadReport(cfg)
 		if n, ok := eventlog.CountCaptured(); ok {
 			r.EventLog.CapturedEvents = &n
 		}
@@ -380,6 +416,7 @@ func printEventLogStatus(cfg *client.Config) {
 			}
 		}
 	}
+	printUploadStatus(cfg)
 	// Captured events: the send-independent local stream (events.jsonl), written
 	// for every event even in Free / local-only mode.
 	fmt.Printf("  Captured:     %s", eventlog.EventsJSONLPath())
@@ -389,6 +426,34 @@ func printEventLogStatus(cfg *client.Config) {
 	fmt.Println()
 	fmt.Println("  Inspect with: promptconduit events")
 	fmt.Println()
+}
+
+// printUploadStatus shows the batched-upload spool: how many captured events
+// are waiting to be sent and how the last flush went. When events are waiting
+// it also starts a background flush (cheap; a no-op if one is running).
+func printUploadStatus(cfg *client.Config) {
+	u := buildUploadReport(cfg)
+	if !cfg.ShouldSend() || (u.Pending == 0 && u.LastFlushAt == "") {
+		return
+	}
+	mode := "batched"
+	if !u.Batched {
+		mode = "per event"
+	}
+	fmt.Printf("  Upload:       %s · %d waiting to send", mode, u.Pending)
+	if u.LastFlushAt != "" {
+		fmt.Printf(" · last flush %s (%s)", localTime(u.LastFlushAt), u.LastResult)
+	}
+	fmt.Println()
+	if u.LastResult == "error" && u.LastError != "" {
+		fmt.Printf("  Last flush error: %s\n", u.LastError)
+	}
+	if u.SingleEndpointUntil != "" {
+		fmt.Printf("  Server has no batch endpoint; sending one event per request until %s\n", localTime(u.SingleEndpointUntil))
+	}
+	if u.Pending > 0 && client.NewClient(cfg, Version).MaybeTriggerFlush(true) {
+		fmt.Println("  Flushing waiting events in the background.")
+	}
 }
 
 // localTime renders an RFC3339 timestamp in the local zone, falling back to the

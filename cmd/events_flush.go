@@ -18,10 +18,14 @@ var eventsFlushDryRun bool
 
 var eventsFlushCmd = &cobra.Command{
 	Use:          "flush",
-	Short:        "Replay events queued after failed sends, now",
+	Short:        "Send waiting and failed events now",
 	SilenceUsage: true,
 	Args:         cobra.NoArgs,
-	Long: `Send everything waiting in the replay queue (outbox) right now.
+	Long: `Send everything waiting in the upload spool and the replay queue (outbox)
+right now.
+
+With batched upload (the default) hooks spool each event locally and a
+background flusher sends them in groups; this sends whatever is waiting.
 
 Events whose send failed for a reason that may clear (no connection, rate
 limiting, a server error) are queued and normally replayed in the background
@@ -74,6 +78,10 @@ func flushOutboxNow(ctx context.Context, w io.Writer, cfg *client.Config, dryRun
 		return nil
 	}
 	eventlog.SetEnabled(true)
+
+	if err := flushSpoolNow(ctx, w, cfg, dryRun); err != nil {
+		return err
+	}
 
 	queued := eventlog.OutboxCount(cfg.APIURL)
 	if queued == 0 {
@@ -134,6 +142,38 @@ func flushOutboxNow(ctx context.Context, w io.Writer, cfg *client.Config, dryRun
 		return fmt.Errorf("stopped early, %d event(s) still queued", res.Remaining)
 	case res.Remaining > 0:
 		_, _ = fmt.Fprintln(w, "  Events that failed (or arrived during the flush) stay queued and will be retried later.")
+	}
+	return nil
+}
+
+// flushSpoolNow uploads everything waiting in the batched-upload spool (events
+// captured but not yet sent) before the outbox replay. Silent when the spool
+// is empty or sending is off.
+func flushSpoolNow(ctx context.Context, w io.Writer, cfg *client.Config, dryRun bool) error {
+	pending := eventlog.SpoolCount(cfg.APIURL)
+	if pending == 0 || !cfg.ShouldSend() {
+		return nil
+	}
+	if dryRun {
+		_, _ = fmt.Fprintf(w, "[dry-run] %d captured event(s) waiting for batched upload to %s\n", pending, cfg.APIURL)
+		return nil
+	}
+	_, _ = fmt.Fprintf(w, "Uploading %d waiting event(s) to %s...\n", pending, cfg.APIURL)
+	rep := client.NewClient(cfg, Version).FlushSpool(ctx)
+	switch {
+	case rep.Busy:
+		_, _ = fmt.Fprintln(w, "  A background upload is already running; it will send them.")
+		return nil
+	case rep.Err != nil:
+		return fmt.Errorf("uploaded %d event(s) but couldn't update the upload spool: %w; "+
+			"they stay spooled and will be resent (the server ignores duplicates)", rep.Delivered, rep.Err)
+	}
+	_, _ = fmt.Fprintf(w, "Upload complete: %d delivered · %d rejected · %d remaining\n", rep.Delivered, rep.Rejected, rep.Remaining)
+	if rep.Stopped && rep.Remaining > 0 {
+		if rep.StopErr != nil {
+			return fmt.Errorf("upload stopped early, %d event(s) still waiting: %w", rep.Remaining, rep.StopErr)
+		}
+		return fmt.Errorf("upload stopped early, %d event(s) still waiting", rep.Remaining)
 	}
 	return nil
 }

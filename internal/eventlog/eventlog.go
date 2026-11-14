@@ -123,12 +123,18 @@ func StatusPath() string { return filepath.Join(Dir(), "status.json") }
 // path, rotating first if it has grown past rotateAt. Best-effort: any error
 // drops the line rather than disturbing the caller's hot path.
 func appendLine(path string, line []byte, rotateAt int64) {
+	_ = appendLineErr(path, line, rotateAt)
+}
+
+// appendLineErr is appendLine for callers that must know whether the line
+// landed (the upload spool falls back to a direct send when it didn't).
+func appendLineErr(path string, line []byte, rotateAt int64) error {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return
+		return err
 	}
 
 	rotateIfNeeded(path, rotateAt)
@@ -140,9 +146,8 @@ func appendLine(path string, line []byte, rotateAt int64) {
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return err
 	}
-	defer func() { _ = f.Close() }()
 
 	// Emit the line and its terminator in ONE write. O_APPEND makes an
 	// individual write atomic with respect to the file offset, but that
@@ -160,7 +165,11 @@ func appendLine(path string, line []byte, rotateAt int64) {
 	buf := make([]byte, 0, len(line)+1)
 	buf = append(buf, line...)
 	buf = append(buf, '\n')
-	_, _ = f.Write(buf)
+	if _, err := f.Write(buf); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // rotateIfNeeded renames path -> path+".1" once it reaches rotateAt bytes. Any

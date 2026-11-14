@@ -67,6 +67,11 @@ var configShowCmd = &cobra.Command{
 			mode = "local-only (Free)"
 		}
 		cmd.Printf("Mode:        %s\n", mode)
+		batch := "batched (spooled, sent in groups)"
+		if !cfg.BatchUploadEnabled() {
+			batch = "one request per event"
+		}
+		cmd.Printf("Upload:      %s\n", batch)
 		if cfg.LocalOnly {
 			cmd.Printf("Local-only:  on\n")
 		}
@@ -99,6 +104,7 @@ var (
 	setDisableEventLog       bool
 	setLocalOnly             bool
 	setEventLogRetentionDays int
+	setBatchUpload           bool
 )
 
 // forEachEnv applies fn to every stored environment profile.
@@ -152,7 +158,10 @@ Examples:
   promptconduit config set --event-log-retention-days=90
 
   # Never prune local hook history
-  promptconduit config set --event-log-retention-days=-1`,
+  promptconduit config set --event-log-retention-days=-1
+
+  # Send each event in its own request instead of batching (default: batched)
+  promptconduit config set --batch-upload=false`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -219,6 +228,12 @@ Examples:
 			forEachEnv(fc, func(c *client.Config) { c.EventLogRetentionDays = 0 })
 			changed = true
 		}
+		if cmd.Flags().Changed("batch-upload") {
+			v := setBatchUpload
+			fc.BatchUpload = &v
+			forEachEnv(fc, func(c *client.Config) { c.BatchUpload = nil })
+			changed = true
+		}
 
 		if !changed {
 			if flagDebug {
@@ -226,7 +241,7 @@ Examples:
 				// saving debug mode moved to --debug-mode.
 				return usageError{fmt.Errorf("--debug only prints debug output for this run. To save debug mode, use: promptconduit config set --debug-mode")}
 			}
-			return fmt.Errorf("no values provided. Use --api-key-stdin, --api-key, --api-url, --debug-mode, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, or --event-log-retention-days")
+			return fmt.Errorf("no values provided. Use --api-key-stdin, --api-key, --api-url, --debug-mode, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, --event-log-retention-days, or --batch-upload")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -279,6 +294,13 @@ Examples:
 				cmd.Printf("  Retention:   keep forever (local hook history never pruned)\n")
 			} else {
 				cmd.Printf("  Retention:   %d days of local hook history\n", (&client.Config{EventLogRetentionDays: fc.EventLogRetentionDays}).RetentionDays())
+			}
+		}
+		if cmd.Flags().Changed("batch-upload") {
+			if setBatchUpload {
+				cmd.Printf("  Upload:      batched (spooled, sent in groups)\n")
+			} else {
+				cmd.Printf("  Upload:      one request per event\n")
 			}
 		}
 
@@ -509,6 +531,7 @@ func init() {
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
 	configSetCmd.Flags().BoolVar(&setLocalOnly, "local-only", false, "Free / local-only mode: capture events locally, never send to the cloud")
 	configSetCmd.Flags().IntVar(&setEventLogRetentionDays, "event-log-retention-days", 0, "Days of local hook history to keep (default 30; -1 = keep forever)")
+	configSetCmd.Flags().BoolVar(&setBatchUpload, "batch-upload", true, "Upload events in batches (default true); false sends one request per event")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)

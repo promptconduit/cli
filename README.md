@@ -556,6 +556,7 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_DEBUG` | No | `false` | Enable debug logging |
 | `PROMPTCONDUIT_TIMEOUT` | No | `30` | HTTP timeout in seconds |
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
+| `PROMPTCONDUIT_BATCH_UPLOAD` | No | on | `0`/`false` sends one request per event instead of [batching](#how-events-are-uploaded) |
 | `PROMPTCONDUIT_TELEMETRY` | No | on | `0`/`false`/`off` disables the [anonymous usage ping](#anonymous-usage-ping) |
 | `DO_NOT_TRACK` | No | unset | `1` disables the [anonymous usage ping](#anonymous-usage-ping) |
 | `PROMPTCONDUIT_NO_INPUT` | No | unset | `1` never prompts (same as `--no-input`) |
@@ -605,9 +606,14 @@ usually `~/.config/promptconduit/logs/promptconduit.log`).
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │    Async Send       │  ← Non-blocking POST to
-              │  (subprocess)       │    /v1/events/raw
+              │   Upload spool      │  ← Appended locally; hook
+              │  (spool-*.jsonl)    │    returns immediately
               └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │  Batch flusher      │  ← Detached; POSTs up to 100
+              │  (subprocess)       │    events per request to
+              └──────────┬──────────┘    /v1/events/raw/batch
                          │
               ┌──────────▼──────────┐
               │  PromptConduit API  │  ← Server-side adapters
@@ -619,11 +625,47 @@ usually `~/.config/promptconduit/logs/promptconduit.log`).
 
 - **Thin client**: The CLI wraps raw events in an envelope — all normalization happens server-side
 - **Never blocks tools**: Hook always returns immediately with success
-- **Async sending**: Events are sent in a detached subprocess
+- **Batched, async sending**: Events are spooled locally and sent in groups by a detached subprocess (see [How events are uploaded](#how-events-are-uploaded))
 - **Rich context**: Captures git state (branch, commit, dirty files, etc.)
 - **Attachment extraction**: Parses transcripts to extract images and documents
 - **Multipart uploads**: Attachments sent efficiently via multipart form data
 - **Graceful degradation**: Unknown events are silently skipped
+
+### How events are uploaded
+
+Every hook invocation is its own short-lived process, and an active session
+fires one per tool call. Rather than making one HTTP request per event, the
+hook appends the envelope to a local upload spool,
+`~/.promptconduit/spool-<target>.jsonl` (one file per API URL), and returns.
+A detached `promptconduit hook --flush-spool` process sends the spool to
+`POST /v1/events/raw/batch`, up to 100 events (about 900 KB) per request:
+
+- **When**: once 20 events are waiting or the oldest is 5 seconds old, and
+  right away at the end of a turn or session (Claude Code `Stop` /
+  `StopFailure` / `SessionEnd`, Cursor `stop` / `sessionEnd`).
+  `promptconduit status`, `promptconduit events flush` and `promptconduit sync`
+  also send anything waiting.
+- **One flusher at a time**: a lock file serializes flushers; a lock left by a
+  killed flusher is broken after 2 minutes.
+- **Nothing lost**: entries leave the spool only after the server accepted or
+  permanently rejected them. Network errors, 401/403, 408, 429 and 5xx keep them
+  for the next flush (with exponential backoff up to 5 minutes). A crash
+  mid-flush can resend a batch; the server ignores duplicate event IDs.
+- **Older servers**: if the batch endpoint answers 404 or 405, the flusher sends
+  each event to `/v1/events/raw` instead and remembers that for an hour.
+- **Exceptions**: events with image/document attachments go straight to
+  `/v1/events/raw` as multipart. With the event log disabled
+  (`disable_event_log`) nothing can be written under `~/.promptconduit`, so
+  events are sent one per request.
+
+To go back to one request per event:
+
+```bash
+promptconduit config set --batch-upload=false   # or PROMPTCONDUIT_BATCH_UPLOAD=0
+```
+
+`promptconduit status` shows how many events are waiting and how the last
+flush went (`status --json` has it under `event_log.upload`).
 
 ## Wire format
 

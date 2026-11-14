@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +26,8 @@ import (
 
 var (
 	sendEvent bool
+	// flushSpool runs the detached batch flusher (see client.FlushSpool).
+	flushSpool bool
 	// toolOverride is set by the install command (`--tool codex`,
 	// `--tool copilot`) when the host AI tool's hook payload can't be
 	// reliably distinguished from other tools by inspecting fields
@@ -42,12 +46,16 @@ var hookCmd = &cobra.Command{
 
 func init() {
 	hookCmd.Flags().BoolVar(&sendEvent, "send-event", false, "Send event data from stdin (internal use)")
+	hookCmd.Flags().BoolVar(&flushSpool, "flush-spool", false, "Upload spooled events in batches (internal use)")
 	hookCmd.Flags().StringVar(&toolOverride, "tool", "", "Override tool name (codex, copilot, etc.); set by the install command")
 }
 
 func runHook(cmd *cobra.Command, args []string) error {
 	if sendEvent {
 		return sendEnvelopeFromStdin()
+	}
+	if flushSpool {
+		return flushSpoolDetached()
 	}
 	return processHookEvent()
 }
@@ -238,13 +246,58 @@ func processHookEvent() error {
 		return nil
 	}
 
-	// Send async
-	if err := client.NewClient(cfg, Version).SendEnvelopeAsync(env); err != nil {
+	apiClient := client.NewClient(cfg, Version)
+	if cfg.BatchUploadEnabled() {
+		// Batched path: spool the envelope; a detached flusher uploads the
+		// spool in groups once it's due, or right away at the end of a turn
+		// or session so nothing lingers after the agent goes quiet.
+		if err := apiClient.QueueEnvelope(env, isFlushPointEvent(hookEvent)); err != nil {
+			debugLog("Failed to queue envelope: %v", err)
+			logger.Error("Failed to queue envelope (event=%s, tool=%s): %v", hookEvent, tool, err)
+		}
+		logger.Debug("Envelope spooled for batched upload")
+		return nil
+	}
+
+	// Legacy per-event path (batch_upload=false).
+	if err := apiClient.SendEnvelopeAsync(env); err != nil {
 		debugLog("Failed to send envelope async: %v", err)
 		logger.Error("Failed to spawn async sender (event=%s, tool=%s): %v", hookEvent, tool, err)
 	}
+	// Envelopes spooled before batching was turned off still need sending.
+	apiClient.MaybeTriggerFlush(false)
 
 	logger.Debug("Envelope queued for async send")
+	return nil
+}
+
+// isFlushPointEvent reports whether hookEvent ends a turn or a session, so
+// the spool should be flushed now rather than waiting until it's due:
+// Claude Code / Codex / Gemini Stop, StopFailure and SessionEnd, Cursor
+// stop and sessionEnd, Grok stop / session_end.
+func isFlushPointEvent(hookEvent string) bool {
+	switch strings.ToLower(strings.ReplaceAll(hookEvent, "_", "")) {
+	case "stop", "stopfailure", "sessionend":
+		return true
+	}
+	return false
+}
+
+// flushSpoolDetached is the `hook --flush-spool` worker a hook spawns once
+// the upload spool is due. The flush lock collapses concurrent spawns into a
+// single flusher.
+func flushSpoolDetached() error {
+	cfg := client.LoadConfig()
+	logger.SetDebug(cfg.Debug)
+	eventlog.SetEnabled(cfg.EventLogEnabled())
+	if !cfg.ShouldSend() || !cfg.EventLogEnabled() {
+		return nil
+	}
+	rep := client.NewClient(cfg, Version).FlushSpool(context.Background())
+	if rep.Tried > 0 || rep.Expired > 0 {
+		logger.Debug("spool flush: %d batch(es), %d delivered, %d rejected, %d remaining, stopped=%v",
+			rep.Batches, rep.Delivered, rep.Rejected, rep.Remaining, rep.Stopped)
+	}
 	return nil
 }
 

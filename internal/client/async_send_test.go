@@ -178,6 +178,8 @@ func TestAsyncSendDeliversEnvelopeLargerThanPipeBuffer(t *testing.T) {
 	defer srv.Close()
 
 	home, env := asyncHookEnv(t, srv.URL)
+	// This exercises the legacy per-event detached sender, not the batch spool.
+	env = append(env, "PROMPTCONDUIT_BATCH_UPLOAD=0")
 
 	const filler = 1 << 20 // 1MB — 16x the 64KB pipe buffer
 	runHookWithPayload(t, bin, env, home, bigHookPayload(t, filler))
@@ -239,6 +241,8 @@ func TestAsyncSendSmallEnvelopeStillWorks(t *testing.T) {
 	defer srv.Close()
 
 	home, env := asyncHookEnv(t, srv.URL)
+	// This exercises the legacy per-event detached sender, not the batch spool.
+	env = append(env, "PROMPTCONDUIT_BATCH_UPLOAD=0")
 	runHookWithPayload(t, bin, env, home, bigHookPayload(t, 16))
 
 	select {
@@ -256,4 +260,71 @@ func tail(b []byte, n int) string {
 		return string(b)
 	}
 	return "..." + string(b[len(b)-n:])
+}
+
+// TestBatchedHookPathFlushesOnStop drives the real binary down the default
+// batched path: tool events are spooled without any request, and the Stop
+// event starts a detached flusher that ships them all in one batch.
+func TestBatchedHookPathFlushesOnStop(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("covered on unix")
+	}
+	bin := buildCLI(t)
+
+	type req struct {
+		path string
+		body []byte
+	}
+	reqs := make(chan req, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		reqs <- req{r.URL.Path, body}
+		if r.URL.Path == batchEventsEndpoint {
+			var b struct {
+				Events []json.RawMessage `json:"events"`
+			}
+			_ = json.Unmarshal(body, &b)
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"accepted":%d,"rejected":[]}`, len(b.Events))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	home, env := asyncHookEnv(t, srv.URL)
+	tool := func(event string) []byte {
+		b, _ := json.Marshal(map[string]interface{}{
+			"hook_event_name": event, "session_id": "batch-e2e", "cwd": home,
+		})
+		return b
+	}
+	runHookWithPayload(t, bin, env, home, tool("PreToolUse"))
+	runHookWithPayload(t, bin, env, home, tool("PostToolUse"))
+	select {
+	case r := <-reqs:
+		t.Fatalf("tool events should only be spooled, but %s was requested", r.path)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	runHookWithPayload(t, bin, env, home, tool("Stop"))
+	deadline := time.After(30 * time.Second)
+	got := 0
+	for got < 3 {
+		select {
+		case r := <-reqs:
+			if r.path != batchEventsEndpoint {
+				t.Fatalf("unexpected request to %s", r.path)
+			}
+			var b struct {
+				Events []json.RawMessage `json:"events"`
+			}
+			if err := json.Unmarshal(r.body, &b); err != nil {
+				t.Fatalf("batch body is not JSON: %v", err)
+			}
+			got += len(b.Events)
+		case <-deadline:
+			t.Fatalf("only %d of 3 events arrived within 30s", got)
+		}
+	}
 }

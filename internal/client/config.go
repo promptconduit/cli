@@ -22,6 +22,7 @@ const (
 	EnvEventLog                  = "PROMPTCONDUIT_EVENT_LOG"                // "0"/"false" disables the local ~/.promptconduit event log
 	EnvEventLogRetentionDays     = "PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS" // days of local hook history to keep; -1 keeps forever
 	EnvLocalOnly                 = "PROMPTCONDUIT_LOCAL_ONLY"               // "1"/"true" forces Free / local-only mode (never send to the cloud)
+	EnvBatchUpload               = "PROMPTCONDUIT_BATCH_UPLOAD"             // "0"/"false" sends each event on its own instead of in batches
 	EnvXDGConfigHome             = "XDG_CONFIG_HOME"
 	ConfigDirName                = "promptconduit" // ~/.config/promptconduit/
 	ConfigFileName               = "config.json"
@@ -52,6 +53,11 @@ type Config struct {
 	// (DefaultEventLogRetentionDays); a negative value keeps history forever
 	// (never prune). Resolve via RetentionDays(), not this field directly.
 	EventLogRetentionDays int `json:"event_log_retention_days,omitempty"`
+	// BatchUpload controls batched event upload: hooks spool envelopes
+	// locally and a background flusher sends them to /v1/events/raw/batch in
+	// groups. Unset (nil) means enabled; false restores the legacy
+	// one-request-per-event path. Resolve via BatchUploadEnabled().
+	BatchUpload *bool `json:"batch_upload,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -72,6 +78,7 @@ type FileConfig struct {
 	DisableEventLog       bool   `json:"disable_event_log,omitempty"`
 	LocalOnly             bool   `json:"local_only,omitempty"`
 	EventLogRetentionDays int    `json:"event_log_retention_days,omitempty"`
+	BatchUpload           *bool  `json:"batch_upload,omitempty"`
 }
 
 // EventLogEnabled reports whether the local ~/.promptconduit event log should
@@ -79,6 +86,12 @@ type FileConfig struct {
 // config (disable_event_log) or PROMPTCONDUIT_EVENT_LOG=0.
 func (c *Config) EventLogEnabled() bool {
 	return !c.DisableEventLog
+}
+
+// BatchUploadEnabled reports whether events are uploaded in batches (the
+// default) rather than one request per event.
+func (c *Config) BatchUploadEnabled() bool {
+	return c.BatchUpload == nil || *c.BatchUpload
 }
 
 // RetentionDays resolves the effective local hook-history retention window in
@@ -217,12 +230,15 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 			if merged.EventLogRetentionDays == 0 {
 				merged.EventLogRetentionDays = fc.EventLogRetentionDays
 			}
+			if merged.BatchUpload == nil {
+				merged.BatchUpload = fc.BatchUpload
+			}
 			return &merged
 		}
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableTelemetry || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableTelemetry || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 || fc.BatchUpload != nil {
 		return &Config{
 			APIKey:                fc.APIKey,
 			APIURL:                fc.APIURL,
@@ -233,6 +249,7 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 			DisableEventLog:       fc.DisableEventLog,
 			LocalOnly:             fc.LocalOnly,
 			EventLogRetentionDays: fc.EventLogRetentionDays,
+			BatchUpload:           fc.BatchUpload,
 		}
 	}
 
@@ -279,6 +296,7 @@ func LoadConfig() *Config {
 			if fileCfg.EventLogRetentionDays != 0 {
 				cfg.EventLogRetentionDays = fileCfg.EventLogRetentionDays
 			}
+			cfg.BatchUpload = fileCfg.BatchUpload
 		}
 	}
 
@@ -298,6 +316,17 @@ func LoadConfig() *Config {
 	// anything else (or unset) leaves whatever the file config decided.
 	if v := os.Getenv(EnvLocalOnly); v == "1" || v == "true" || v == "yes" {
 		cfg.LocalOnly = true
+	}
+
+	// PROMPTCONDUIT_BATCH_UPLOAD=0/false/no forces the per-event upload path,
+	// 1/true/yes forces batching; anything else leaves the file config.
+	switch os.Getenv(EnvBatchUpload) {
+	case "0", "false", "no":
+		off := false
+		cfg.BatchUpload = &off
+	case "1", "true", "yes":
+		on := true
+		cfg.BatchUpload = &on
 	}
 
 	// PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS overrides the local hook-history
