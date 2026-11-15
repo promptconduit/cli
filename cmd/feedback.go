@@ -29,7 +29,7 @@ If you're logged in (an API key is configured) the feedback is tied to your
 account so we can follow up; otherwise it's sent anonymously.
 
 Examples:
-  promptconduit feedback "the graph view is great, add filtering"
+  promptconduit feedback "The Loop is great, add filtering"
   promptconduit feedback --category bug "sync failed on a large repo"
   echo "loving the cache savings stat" | promptconduit feedback`,
 	RunE: runFeedback,

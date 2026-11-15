@@ -1,4 +1,4 @@
-package graph
+package loopui
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-//go:embed ui/graph.html
-var graphHTML []byte
+//go:embed ui/loop.html
+var loopHTML []byte
 
 // Options configures a Server.
 type Options struct {
@@ -23,7 +23,7 @@ type Options struct {
 	Backfill int
 }
 
-// Server serves the live Session Graph page plus the /api/events poll endpoint,
+// Server serves The Loop page plus the /api/events poll endpoint,
 // backed by a Hub tailing events.jsonl.
 type Server struct {
 	http *http.Server
@@ -44,7 +44,7 @@ func New(ctx context.Context, opts Options) (*Server, error) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(graphHTML)
+		_, _ = w.Write(loopHTML)
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		after := intParam(r, "after", -1)

@@ -1,4 +1,4 @@
-package graph
+package loopui
 
 import (
 	"context"
@@ -19,7 +19,7 @@ func testHandler(h *Hub) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(graphHTML)
+		_, _ = w.Write(loopHTML)
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		after := intParam(r, "after", -1)
@@ -40,8 +40,8 @@ func TestServesEmbeddedPage(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Fatalf("content-type = %q, want text/html", ct)
 	}
-	// The embedded bundle must actually be present and be the graph page.
-	if body := rec.Body.String(); !strings.Contains(body, "PromptConduit") || len(body) < 1000 {
+	// The embedded bundle must actually be present and be The Loop page.
+	if body := rec.Body.String(); !strings.Contains(body, "The Loop") || len(body) < 1000 {
 		t.Fatalf("embedded page looks wrong: %d bytes", len(body))
 	}
 }

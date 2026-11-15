@@ -272,11 +272,38 @@ promptconduit mcp status --json      # where it is registered (machine-readable)
 | Tool | Needs an account | What it does |
 |------|------------------|--------------|
 | `session_cost` | no | Cost of the current session (tokens, per-model USD) |
+| `prompt_loop` | no | The Loop for one prompt (default: the latest one): every model round-trip with its context size, cost and tools, and what would have been cheaper |
 | `cost_history` | no | Daily cost on this machine |
 | `recent_sessions` | no | Recent sessions with their resume ids |
 | `setup_status` | no | What's installed, signed in, local or syncing |
 | `team_spend`, `team_savings`, `team_budgets`, `team_export_csv`, `team_list` | yes | Team spend by member, repo, client, model, PR and day, savings levers, budgets, CSV |
+| `team_loop_compare` | yes | How each teammate's prompts of one task kind (ship, debug, …) typically run: median cost, round-trips, context, habits |
 | `team_set_budget`, `team_remove_budget`, `team_tag_repo`, `team_invite`, `team_create`, `team_join` | yes | Change team settings (marked as writes, so your agent asks first) |
+
+#### The Loop: why a prompt cost what it did
+
+Almost all agent cost is the model re-reading the conversation on every
+round-trip, so a prompt costs roughly *context size × round-trips*.
+`prompt_loop` shows that for one prompt: each call's context and cost, the
+total split into re-reading history, new context and output, and advice that
+re-prices the same steps another way: fewer round-trips, a fresh session or
+subagent, switching to a cheaper model (often more expensive with a long
+context, because the new model has to cache everything again), cache expiry
+during long waits, and background tasks that woke the agent after the prompt
+finished. Pass `session_id` / `prompt_id` to pick another prompt.
+
+To see the same view yourself, run `promptconduit loop`. It opens The Loop in
+your browser, served locally from `~/.promptconduit/events.jsonl` and updating
+live as your agent works (`--no-open` just prints the URL, `--addr` picks the
+port). No account or editor needed. The old `promptconduit graph` name still
+works and runs `loop`.
+
+Each prompt also carries a `task_kind` (`ship`, `debug`, `build`, `refactor`,
+`test`, `docs`, `review`, `explore`, `chore` or `other`) on its `prompt`
+enrichment, classified on your machine from the prompt text with keyword
+rules. Only the kind is recorded, never the text. Short follow-ups like "yes
+please" inherit the previous prompt's kind. `team_loop_compare` uses it to
+compare the same kind of task across your team.
 
 The local tools read only files on your machine. The server also ships three
 prompts that show up as slash commands in Claude Code: `spend_review`,
@@ -464,8 +491,10 @@ promptconduit install cursor   # wires hooks AND installs the cost status-bar ex
 The extension is embedded in the CLI binary (no marketplace, no separate
 download) and installed via Cursor's `cursor --install-extension` CLI, so its
 version is always locked to the CLI's cost-feed schema. It reads the same local
-cost feed `promptconduit cost` produces and shows live request/session cost — and
-the cost-reduction signals — right in the status bar.
+cost feed `promptconduit cost` produces and shows live session cost in the status
+bar, plus **The Loop**: a panel that breaks each prompt into its model
+round-trips and shows what would have made it cheaper (the same data the
+`prompt_loop` MCP tool returns).
 
 - **Skip it:** `promptconduit install cursor --no-extension`
 - **Cursor CLI not found?** The install step is skipped with a hint — open Cursor

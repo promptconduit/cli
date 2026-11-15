@@ -1,10 +1,10 @@
-// Package graph serves the live Session Graph as a local web page. It is a thin
-// tail-and-serve shell: it streams the raw v2 envelope lines from
-// ~/.promptconduit/events.jsonl to the browser, which builds and renders the
-// graph using the SAME portable code the editor extension uses (embedded here as
-// a prebuilt bundle in ui/graph.html). The graph LOGIC lives in one place —
-// coupled to neither the editor nor to Go.
-package graph
+// Package loopui serves The Loop (per-prompt cost, round-trip by round-trip)
+// as a local web page. It is a thin tail-and-serve shell: it streams the raw v2
+// envelope lines from ~/.promptconduit/events.jsonl to the browser, which builds
+// and renders The Loop using the SAME code as the editor extension's panel
+// (embedded here as a prebuilt bundle in ui/loop.html). The UI logic lives in
+// one place, coupled to neither the editor nor to Go.
+package loopui
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 
 // ringCap bounds the in-memory buffer of recent lines. events.jsonl is retention-
 // bounded (not size-bounded), so a live viewer keeps only the newest lines; the
-// client's graph builder tolerates starting mid-stream, and `backfill` seeds
+// client's ledger builder tolerates starting mid-stream, and `backfill` seeds
 // enough recent history to reconstruct current sessions.
 const ringCap = 100_000
 
