@@ -5,7 +5,82 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+const redPixelPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=="
+
+// TestExtractWithWait_StringContentPromptIsFoundImmediately: Claude Code
+// records a text-only prompt with content as a JSON string. It used to never
+// match, so the UserPromptSubmit hook polled for the full timeout (5s in
+// production) on every text prompt, holding up the user's prompt.
+func TestExtractWithWait_StringContentPromptIsFoundImmediately(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":"have we pulled the latest main"},"timestamp":"2026-11-05T15:20:00Z"}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	atts, found, err := ExtractLatestAttachmentsWithWait(path, "have we pulled the latest main", 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found {
+		t.Error("found = false, want the string-content prompt to match")
+	}
+	if len(atts) != 0 {
+		t.Errorf("attachments = %d, want 0", len(atts))
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %s, want an immediate match (no polling to the timeout)", elapsed)
+	}
+}
+
+// TestExtractWithWait_TextPromptAfterImageDoesNotResendOldImage: a text-only
+// prompt following an image prompt must not pick up the earlier image.
+func TestExtractWithWait_TextPromptAfterImageDoesNotResendOldImage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"look at this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + redPixelPNG + `"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}
+{"type":"user","message":{"role":"user","content":"thanks, now fix it"}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	atts, found, err := ExtractLatestAttachmentsWithWait(path, "thanks, now fix it", time.Second)
+	if err != nil || !found || len(atts) != 0 {
+		t.Fatalf("got %d attachment(s), found=%v, err=%v; want 0, true, nil", len(atts), found, err)
+	}
+
+	// The no-prompt / timeout fallback reads the LAST user message, which is
+	// the text-only one.
+	atts, err = ExtractLatestAttachments(path)
+	if err != nil || len(atts) != 0 {
+		t.Fatalf("fallback got %d attachment(s), err=%v; want 0 (the old image was re-extracted)", len(atts), err)
+	}
+}
+
+// TestExtractWithWait_EmptyTextDoesNotMatchEveryPrompt: an empty text block
+// in an older message is contained in every string and must not count as a
+// match for the current prompt.
+func TestExtractWithWait_EmptyTextDoesNotMatchEveryPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":""},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + redPixelPNG + `"}}]}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	found, _, err := extractAttachmentsForPrompt(path, "a brand new prompt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found {
+		t.Error("an empty text block matched an unrelated prompt")
+	}
+}
 
 func TestExtractLatestAttachments_Image(t *testing.T) {
 	// Create a temporary transcript file with test data
@@ -126,6 +201,42 @@ func TestClaudeCodeExtractor(t *testing.T) {
 
 	if promptText != "Test prompt" {
 		t.Errorf("Expected prompt 'Test prompt', got '%s'", promptText)
+	}
+}
+
+// TestClaudeCodeExtractor_DoesNotWaitForUnwrittenPrompt: when the current
+// prompt isn't in the transcript yet, the UserPromptSubmit hook must return at
+// once (it used to poll for 5s, delaying every prompt) and must not fall back
+// to the previous prompt's image.
+func TestClaudeCodeExtractor_DoesNotWaitForUnwrittenPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"an older prompt"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + redPixelPNG + `"}}]}}
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	atts, _, err := GetExtractor("claude-code").ExtractAttachments(map[string]interface{}{
+		"transcript_path": path,
+		"prompt":          "the prompt being submitted now",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(atts) != 0 {
+		t.Errorf("got %d attachment(s) from an earlier prompt, want 0", len(atts))
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("took %s, want no waiting in the hook", elapsed)
+	}
+
+	// A transcript that doesn't exist yet is not an error.
+	if _, _, err := GetExtractor("claude-code").ExtractAttachments(map[string]interface{}{
+		"transcript_path": filepath.Join(t.TempDir(), "missing.jsonl"),
+		"prompt":          "hi",
+	}); err != nil {
+		t.Errorf("missing transcript: %v", err)
 	}
 }
 

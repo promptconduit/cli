@@ -35,12 +35,21 @@ PromptConduit CLI captures prompts, tool executions, and session events from AI 
 
 | Tool | Events Captured |
 |------|-----------------|
-| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments |
-| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments |
+| [Claude Code](https://claude.ai/code) | Prompts, Tools, Sessions, Attachments, Cost |
+| [Cursor](https://cursor.com) | Prompts, Shell, MCP, Files, Attachments, Cost |
+
+**Experimental** (opt in with `--experimental`). The hooks install and capture events, but cost tracking and the dashboard aren't verified for these tools yet:
+
+| Tool | Events Captured |
+|------|-----------------|
 | [Gemini CLI](https://geminicli.com) | Prompts, Tools, Sessions |
 | [OpenAI Codex CLI](https://github.com/openai/codex) | Prompts, Tools, Permissions, Sessions |
 | [GitHub Copilot CLI](https://github.com/github/copilot-cli) | Prompts, Tools, Subagents, Errors, Sessions |
 | [Grok Build](https://docs.x.ai/build/features/hooks) | Prompts, Tools, Sessions, Subagents |
+
+```bash
+promptconduit install codex --experimental
+```
 
 **Local skill generation** (no account required):
 
@@ -132,7 +141,7 @@ promptconduit status
 
 ```bash
 promptconduit login                  # browser sign-in; saves your key to config
-promptconduit install claude-code    # or: cursor | gemini-cli | codex | copilot | grok
+promptconduit install claude-code    # or: cursor (experimental: gemini-cli | codex | copilot | grok, with --experimental)
 promptconduit status
 ```
 
@@ -178,7 +187,103 @@ promptconduit upgrade
 promptconduit watch
 promptconduit watch --verbose    # also pretty-print request/response bodies
 promptconduit watch --lines 20   # backfill the last 20 entries before going live
+
+# Team AI spend, savings, budgets and client tags (add --json for agents)
+promptconduit team [subcommand]
 ```
+
+Every command has examples under `promptconduit <command> --help`.
+
+### Scripting and global flags
+
+These flags work on every command:
+
+| Flag | Environment | Effect |
+|------|-------------|--------|
+| `--no-input` | `PROMPTCONDUIT_NO_INPUT=1` | Never prompt; fail with a hint naming the flag to pass instead |
+| `--no-color` | `NO_COLOR=1` | No ANSI color (also off when output isn't a terminal or `TERM=dumb`) |
+| `-q`, `--quiet` | `PROMPTCONDUIT_QUIET=1` | Hide update and telemetry notices, and tips |
+| `--debug` | — | Print debug logging, such as each HTTP request, to stderr |
+| `-v`, `--version` | — | Print the version |
+
+Output goes to stdout and errors to stderr. The exit status is 0 on success and
+1 on failure. `status` exits 1 when no AI tool has PromptConduit hooks installed:
+
+```bash
+promptconduit status >/dev/null || promptconduit install claude-code
+promptconduit status --json | jq '.tools[] | select(.installed) | .tool'
+```
+
+Pass API keys on stdin rather than as a flag, which leaks into shell history
+and the process list:
+
+```bash
+promptconduit config set --api-key-stdin < key.txt
+promptconduit init --api-key-stdin --yes < key.txt
+```
+
+### Team spend from your terminal (or your agent)
+
+Everything on the web team page is also a command, so you can ask your
+coding agent "what did we spend on AI this week, and are we over budget?"
+and it can answer, and act, without anyone opening a dashboard. Every
+subcommand takes `--json`.
+
+```bash
+promptconduit team                                   # teams you belong to
+promptconduit team create "Acme Eng"                 # start a team (free up to 3 people)
+promptconduit team invite dev@example.com            # prints an invite link
+promptconduit team join <invite-link>                # accept an invite
+
+promptconduit team spend --period 7d                 # totals + top members, repos, models
+promptconduit team spend --by client --json          # one breakdown: member|repo|client|model|branch|pr|day
+promptconduit team savings                           # cache savings, model mix, runaway sessions
+promptconduit team export --by member -o spend.csv   # CSV: client|repo|member|pr|day
+
+promptconduit team budgets                           # month-to-date and projected spend per budget
+promptconduit team budgets set --org-wide --monthly 2000
+promptconduit team budgets set --repo acme/api --monthly 500
+promptconduit team budgets set --member dev@example.com --monthly 150
+promptconduit team budgets rm <budget-id>
+
+promptconduit team tag acme/api "Acme Corp"          # roll a repo's spend up to a client
+promptconduit team tag acme/api --clear
+```
+
+If you belong to more than one team, pass `--org <id|slug|name>` or set
+`PROMPTCONDUIT_ORG`. Budgets, tags and invites need an owner or admin.
+
+### MCP server: ask your agent
+
+The CLI includes a [Model Context Protocol](https://modelcontextprotocol.io)
+server, so Claude Code, Cursor and Gemini CLI can answer cost questions
+themselves: "what has this session cost?", "what did we spend on AI this
+week?", "is any budget about to run over?". `promptconduit install` registers it
+for those three tools automatically (skip with `--no-mcp`).
+
+```bash
+promptconduit mcp install            # register with every tool that has hooks installed
+promptconduit mcp install cursor     # or name tools: claude-code, cursor, gemini-cli
+promptconduit mcp uninstall          # remove everywhere (and don't re-add after upgrades)
+promptconduit mcp tools              # list what agents see
+promptconduit mcp status --json      # where it is registered (machine-readable)
+```
+
+| Tool | Needs an account | What it does |
+|------|------------------|--------------|
+| `session_cost` | no | Cost of the current session (tokens, per-model USD) |
+| `cost_history` | no | Daily cost on this machine |
+| `recent_sessions` | no | Recent sessions with their resume ids |
+| `setup_status` | no | What's installed, signed in, local or syncing |
+| `team_spend`, `team_savings`, `team_budgets`, `team_export_csv`, `team_list` | yes | Team spend by member, repo, client, model, PR and day, savings levers, budgets, CSV |
+| `team_set_budget`, `team_remove_budget`, `team_tag_repo`, `team_invite`, `team_create`, `team_join` | yes | Change team settings (marked as writes, so your agent asks first) |
+
+The local tools read only files on your machine. The server also ships three
+prompts that show up as slash commands in Claude Code: `spend_review`,
+`budget_check` and `session_cost`.
+
+To register it with another MCP client, point it at `promptconduit mcp` (stdio).
+For Claude Code by hand: `claude mcp add --scope user promptconduit -- "$(which promptconduit)" mcp`.
 
 ### Tail outbound traffic
 
@@ -294,8 +399,11 @@ Detected 3 skills:
 ## Free Tier — Local-Only Mode
 
 PromptConduit has a **Free tier that is 100% local**: every event is captured to
-a file on your machine and **nothing is ever sent to the cloud**. You register
-for free, but no telemetry leaves your computer.
+a file on your machine and **none of your event data is ever sent to the cloud**.
+You register for free, and your prompts, sessions, and costs never leave your
+computer. The only network calls are the update check, the public rate-card
+refresh, and an anonymous daily usage ping you can turn off (see
+[Anonymous usage ping](#anonymous-usage-ping)).
 
 Local-only mode is the default whenever no API key is configured — installing
 hooks and capturing events works with no account at all. You can also opt in
@@ -383,14 +491,14 @@ The config file supports multiple environments, making it easy to switch between
 # Show current configuration
 promptconduit config show
 
-# Set API key for current environment
-promptconduit config set --api-key=sk_your_key_here
+# Set API key for current environment (read from stdin, not a flag)
+promptconduit config set --api-key-stdin < key.txt
 
 # Set API URL (for local development)
 promptconduit config set --api-url=http://localhost:8787
 
 # Enable debug mode
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Show config file path
 promptconduit config path
@@ -405,7 +513,7 @@ Create environments for local, dev, and prod:
 promptconduit config env add local \
   --api-key=sk_local_key \
   --api-url=http://localhost:8787 \
-  --debug
+  --debug-mode
 
 # Create dev environment
 promptconduit config env add dev \
@@ -448,6 +556,13 @@ Environment variables override config file settings:
 | `PROMPTCONDUIT_DEBUG` | No | `false` | Enable debug logging |
 | `PROMPTCONDUIT_TIMEOUT` | No | `30` | HTTP timeout in seconds |
 | `PROMPTCONDUIT_TOOL` | No | Auto-detect | Force specific adapter |
+| `PROMPTCONDUIT_BATCH_UPLOAD` | No | on | `0`/`false` sends one request per event instead of [batching](#how-events-are-uploaded) |
+| `PROMPTCONDUIT_TELEMETRY` | No | on | `0`/`false`/`off` disables the [anonymous usage ping](#anonymous-usage-ping) |
+| `DO_NOT_TRACK` | No | unset | `1` disables the [anonymous usage ping](#anonymous-usage-ping) |
+| `PROMPTCONDUIT_NO_INPUT` | No | unset | `1` never prompts (same as `--no-input`) |
+| `PROMPTCONDUIT_QUIET` | No | unset | `1` hides update and telemetry notices and tips (same as `--quiet`) |
+| `PROMPTCONDUIT_NO_TIPS` | No | unset | `1` hides the occasional tip under `cost` output (shown at most weekly, never once you've used `team`) |
+| `NO_COLOR` | No | unset | Any value disables color (same as `--no-color`) |
 
 > **Warning**: If using multi-environment config, avoid setting `PROMPTCONDUIT_API_KEY` in your shell profile. The env var will override the config file's environment-specific key, which can cause mismatches (e.g., prod API key with local URL). Use the config file exclusively or env vars exclusively, but not both.
 
@@ -457,13 +572,17 @@ Enable debug mode to log hook activity:
 
 ```bash
 # Via config
-promptconduit config set --debug=true
+promptconduit config set --debug-mode=true
 
 # Via environment variable
 export PROMPTCONDUIT_DEBUG=1
+
+# For one command, printed to stderr as well
+promptconduit test --debug
 ```
 
-Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typically `/var/folders/.../promptconduit-hook.log`).
+Debug logs are written to the CLI log (`promptconduit logs --path` prints where;
+usually `~/.config/promptconduit/logs/promptconduit.log`).
 
 ## Architecture
 
@@ -487,9 +606,14 @@ Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typ
               └──────────┬──────────┘
                          │
               ┌──────────▼──────────┐
-              │    Async Send       │  ← Non-blocking POST to
-              │  (subprocess)       │    /v1/events/raw
+              │   Upload spool      │  ← Appended locally; hook
+              │  (spool-*.jsonl)    │    returns immediately
               └──────────┬──────────┘
+                         │
+              ┌──────────▼──────────┐
+              │  Batch flusher      │  ← Detached; POSTs up to 100
+              │  (subprocess)       │    events per request to
+              └──────────┬──────────┘    /v1/events/raw/batch
                          │
               ┌──────────▼──────────┐
               │  PromptConduit API  │  ← Server-side adapters
@@ -501,11 +625,47 @@ Debug logs are written to `$TMPDIR/promptconduit-hook.log` (on macOS this is typ
 
 - **Thin client**: The CLI wraps raw events in an envelope — all normalization happens server-side
 - **Never blocks tools**: Hook always returns immediately with success
-- **Async sending**: Events are sent in a detached subprocess
+- **Batched, async sending**: Events are spooled locally and sent in groups by a detached subprocess (see [How events are uploaded](#how-events-are-uploaded))
 - **Rich context**: Captures git state (branch, commit, dirty files, etc.)
 - **Attachment extraction**: Parses transcripts to extract images and documents
 - **Multipart uploads**: Attachments sent efficiently via multipart form data
 - **Graceful degradation**: Unknown events are silently skipped
+
+### How events are uploaded
+
+Every hook invocation is its own short-lived process, and an active session
+fires one per tool call. Rather than making one HTTP request per event, the
+hook appends the envelope to a local upload spool,
+`~/.promptconduit/spool-<target>.jsonl` (one file per API URL), and returns.
+A detached `promptconduit hook --flush-spool` process sends the spool to
+`POST /v1/events/raw/batch`, up to 100 events (about 900 KB) per request:
+
+- **When**: once 20 events are waiting or the oldest is 5 seconds old, and
+  right away at the end of a turn or session (Claude Code `Stop` /
+  `StopFailure` / `SessionEnd`, Cursor `stop` / `sessionEnd`).
+  `promptconduit status`, `promptconduit events flush` and `promptconduit sync`
+  also send anything waiting.
+- **One flusher at a time**: a lock file serializes flushers; a lock left by a
+  killed flusher is broken after 2 minutes.
+- **Nothing lost**: entries leave the spool only after the server accepted or
+  permanently rejected them. Network errors, 401/403, 408, 429 and 5xx keep them
+  for the next flush (with exponential backoff up to 5 minutes). A crash
+  mid-flush can resend a batch; the server ignores duplicate event IDs.
+- **Older servers**: if the batch endpoint answers 404 or 405, the flusher sends
+  each event to `/v1/events/raw` instead and remembers that for an hour.
+- **Exceptions**: events with image/document attachments go straight to
+  `/v1/events/raw` as multipart. With the event log disabled
+  (`disable_event_log`) nothing can be written under `~/.promptconduit`, so
+  events are sent one per request.
+
+To go back to one request per event:
+
+```bash
+promptconduit config set --batch-upload=false   # or PROMPTCONDUIT_BATCH_UPLOAD=0
+```
+
+`promptconduit status` shows how many events are waiting and how the last
+flush went (`status --json` has it under `event_log.upload`).
 
 ## Wire format
 
@@ -622,6 +782,8 @@ make snapshot
 │   ├── upgrade.go          # `promptconduit upgrade` (self-replace)
 │   ├── watch.go            # `promptconduit watch` (tail outbound traffic)
 │   ├── insights.go         # Personal usage insights
+│   ├── team.go             # Team spend, savings, budgets, client tags, invites
+│   ├── mcp*.go             # MCP server command, tools/prompts, agent registration
 │   ├── skills.go           # Skill detection (platform)
 │   ├── skills_local.go     # Skill detection (local, no account)
 │   ├── correlation.go      # W3C trace_id/span_id helpers
@@ -669,6 +831,37 @@ make snapshot
   payload uploaded). Disable with
   `promptconduit config set --disable-auto-update=true` or
   `PROMPTCONDUIT_AUTO_UPDATE=0`.
+- **Anonymous usage ping**: see [below](#anonymous-usage-ping).
+
+### Anonymous usage ping
+
+To count active installs, the CLI sends **one anonymous ping per day** to
+`POST /v1/ping` on the configured API URL (`https://api.promptconduit.dev` by
+default). This is the complete payload:
+
+| Field | Example | What it is |
+|-------|---------|------------|
+| `install_id` | `3f2b8c1e-…` | Random UUID generated on your machine (stored in `~/.config/promptconduit/telemetry.json`) |
+| `cli_version` | `0.28.0` | CLI version |
+| `os`, `arch` | `darwin`, `arm64` | Operating system and CPU architecture |
+| `tools` | `["claude-code","cursor"]` | Which AI tools have PromptConduit hooks installed |
+| `extension_version` | `0.23.0` | Installed cost extension version, if any |
+| `logged_in` | `false` | Whether an API key is configured |
+
+It never includes your name, email, file paths, repository or branch names,
+prompts, or costs, and the server does not store your IP address with it. The
+request is mirrored to `outbound.ndjson` like every other request, so
+`promptconduit watch` shows it.
+
+- **Notice first.** Nothing is sent until an interactive command has printed a
+  one-time notice. Hooks never print, and never send before that.
+- **Never blocks.** The send runs in a detached background process.
+- **Opt out** with any of:
+  `promptconduit config set --disable-telemetry=true`, `DO_NOT_TRACK=1`, or
+  `PROMPTCONDUIT_TELEMETRY=0`. It is also off when `CI` is set, and only
+  tagged release builds send it (local `make` and snapshot builds never do).
+  If `config.json` can't be parsed, the ping stays off rather than guessing.
+  `promptconduit config show` reports the current state.
 
 ## License
 

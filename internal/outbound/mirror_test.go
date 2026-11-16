@@ -294,3 +294,17 @@ func waitLine(t *testing.T, ch <-chan []byte) []byte {
 	}
 	return nil
 }
+
+func TestMaskPathSecrets(t *testing.T) {
+	cases := map[string]string{
+		"/v1/organizations/invites/tok123/accept": "/v1/organizations/invites/***/accept",
+		"/v1/organizations/invites/tok123":        "/v1/organizations/invites/***",
+		"/v1/organizations/org1/invites":          "/v1/organizations/org1/invites",
+		"/v1/events/raw":                          "/v1/events/raw",
+	}
+	for in, want := range cases {
+		if got := maskPathSecrets(in); got != want {
+			t.Errorf("maskPathSecrets(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

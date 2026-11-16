@@ -28,6 +28,7 @@ No dev server and no e2e suite: this is a CLI.
 - `internal/sync/`, `internal/transcript/` transcript + plan sync and parsing
 - `internal/extension/` bundled editor-extension `.vsix` (`go:embed`) + sideload
 - `internal/graph/` tail-and-serve shell for `promptconduit graph`
+- `internal/mcp/` hand-rolled MCP server for `promptconduit mcp`; `cmd/team.go` team commands
 - `internal/updater/` release check + self-replace upgrade
 - `scripts/` install script; `main.go` entry point
 
@@ -51,5 +52,5 @@ No dev server and no e2e suite: this is a CLI.
 
 ## Docs
 
-- `docs/architecture.md`: envelope v2 + enrichments, auto-update, sync, bundled extension, live graph, free tier
+- `docs/architecture.md`: envelope v2 + enrichments, batched sending, MCP server/team, auto-update, sync, bundled extension, live graph, free tier
 - `README.md`: user-facing usage

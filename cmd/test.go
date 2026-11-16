@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/promptconduit/cli/internal/client"
@@ -13,7 +14,7 @@ var testCmd = &cobra.Command{
 	Long: `Send a test event to the PromptConduit API to verify connectivity and authentication.
 
 Prerequisites:
-  - PROMPTCONDUIT_API_KEY must be set`,
+  - An API key: run promptconduit login (or set $PROMPTCONDUIT_API_KEY)`,
 	RunE: runTest,
 }
 
@@ -30,7 +31,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	if !cfg.IsConfigured() {
 		fmt.Println("Local-only mode: no API key is set, so events are captured locally and nothing is sent.")
-		fmt.Println("Enable cloud sync with: promptconduit config set --api-key=\"your-api-key\"")
+		fmt.Println("Enable cloud sync with: promptconduit login")
 		return nil
 	}
 
@@ -46,5 +47,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	return fmt.Errorf("API test failed: %s", response.Error)
+	return testFailure(response, cfg.APIURL)
+}
+
+// testFailure turns a failed test send into an error that says what went
+// wrong in one line and what to do about it.
+func testFailure(response *client.APIResponse, apiURL string) error {
+	msg := "API test failed: " + apiErrorMessage(response)
+	if hint := connectionHint(response.StatusCode, apiURL); hint != "" {
+		msg += "\n\n" + hint
+	}
+	return errors.New(msg)
 }

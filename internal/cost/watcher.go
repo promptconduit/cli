@@ -180,8 +180,9 @@ func (w *Watcher) Run(ctx context.Context, dirs []string, cursorFeeds []string, 
 	}
 }
 
-// SeedNewest seeds the single newest transcript across the given directories
-// and emits its SessionSummary. Used by the one-shot `cost session` command.
+// SeedNewest seeds the single newest transcript across the given directories,
+// plus that session's subagent transcripts, and emits its SessionSummary. Used
+// by the one-shot `cost session` command.
 func (w *Watcher) SeedNewest(dirs []string) {
 	var newest string
 	var newestMod int64
@@ -197,7 +198,35 @@ func (w *Watcher) SeedNewest(dirs []string) {
 	}
 	if newest != "" {
 		w.seedFile(newest)
+		for _, sub := range SubagentTranscripts(newest) {
+			w.seedFile(sub)
+		}
 	}
+}
+
+// SubagentTranscripts lists a session's subagent transcripts. Claude Code
+// writes each subagent's turns to <session>/subagents/agent-*.jsonl next to
+// the session's own <session>.jsonl, and workflow agents one level deeper
+// (<session>/subagents/workflows/wf_*/agent-*.jsonl). Those lines carry the
+// parent sessionId, so seeding them folds subagent spend into the parent
+// session's summary. The main transcript never repeats those requests.
+//
+// It returns every *.jsonl under <session>/subagents/,
+// recursively, in a stable (lexical) order. Empty when there are none.
+func SubagentTranscripts(sessionPath string) []string {
+	root := filepath.Join(strings.TrimSuffix(sessionPath, ".jsonl"), "subagents")
+	var out []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // missing root or unreadable entry: skip, never fail
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".jsonl") {
+			out = append(out, path)
+		}
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
 
 // SeedCursorFeeds seeds each Cursor cost feed and emits its session summaries.
@@ -353,10 +382,18 @@ func (w *Watcher) apply(ev CostEvent) bool {
 	mt.Tokens.CacheWrite += ev.Tokens.CacheWrite
 	mt.CostTotal += ev.Cost.Total
 
-	if st.summary.StartedAt == "" {
-		st.summary.StartedAt = ev.Timestamp
+	// Min/max, not first/last: a session is seeded file by file (main
+	// transcript, then each subagent transcript), so the last event applied is
+	// often an older subagent turn. UpdatedAt also picks the newest session in
+	// LatestSummary, so it must be the session's real latest activity.
+	if ev.Timestamp != "" {
+		if st.summary.StartedAt == "" || ev.Timestamp < st.summary.StartedAt {
+			st.summary.StartedAt = ev.Timestamp
+		}
+		if ev.Timestamp > st.summary.UpdatedAt {
+			st.summary.UpdatedAt = ev.Timestamp
+		}
 	}
-	st.summary.UpdatedAt = ev.Timestamp
 	st.summary.Source = worstSource(st.summary.Source, ev.Source)
 	return true
 }

@@ -35,10 +35,10 @@ needs no editor: the same graph the Cursor/VS Code extension shows, in any
 browser.
 
 Examples:
-  promptconduit graph                 # open the live graph in your browser
-  promptconduit graph --port 4320     # pick the port
-  promptconduit graph --no-open       # just print the URL (e.g. over SSH)
-  promptconduit graph --backfill 5000 # seed fewer historical events`,
+  promptconduit graph                        # open the live graph in your browser
+  promptconduit graph --addr 127.0.0.1:4321  # pick the address/port
+  promptconduit graph --no-open              # just print the URL (e.g. over SSH)
+  promptconduit graph --backfill 5000        # seed fewer historical events`,
 	RunE: runGraph,
 }
 

@@ -3,11 +3,16 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	gosync "sync"
+	"syscall"
 	"time"
 
 	"github.com/promptconduit/cli/internal/client"
+	"github.com/promptconduit/cli/internal/cost"
+	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/spf13/cobra"
 )
@@ -68,6 +73,34 @@ func init() {
 	rootCmd.AddCommand(syncCmd)
 }
 
+// recordLockTimeout records a `sync --file` that gave up waiting for the
+// transcript lock as a failed sync, keyed by session id (the transcript's file
+// name without .jsonl — what a later successful sync clears), so
+// retryFailedSyncs retries it.
+func recordLockTimeout(sm *sync.StateManager, filePath string, cause error) error {
+	sessionID := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")
+	sm.AddFailedSync(sessionID, filePath, cause.Error())
+	return sm.Save()
+}
+
+// transcriptLockWait bounds how long a `sync --file` waits for another upload
+// of the same transcript (large transcripts upload in chunks).
+const transcriptLockWait = 10 * time.Minute
+
+// checkSyncAllowed refuses an upload when the config forbids one. Local-only
+// mode (config or PROMPTCONDUIT_LOCAL_ONLY) wins over an API key: the user
+// asked for nothing to leave the machine, so a manual sync must not upload
+// either — automatic sync is already gated the same way.
+func checkSyncAllowed(cfg *client.Config) error {
+	if cfg.LocalOnly {
+		return fmt.Errorf("sync is disabled in local-only mode: transcripts stay on this machine\n\nTo enable cloud sync, run: promptconduit config set --local-only=false")
+	}
+	if cfg.APIKey == "" {
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
+	}
+	return nil
+}
+
 func runSync(cmd *cobra.Command, args []string) error {
 	// Handle delay (used by auto-sync to wait for transcript file flush)
 	if syncDelay > 0 {
@@ -76,8 +109,29 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// Load config
 	config := client.LoadConfig()
-	if config.APIKey == "" {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+	if err := checkSyncAllowed(config); err != nil {
+		return err
+	}
+
+	// Single-file (auto-)sync: never upload the same transcript from two
+	// processes at once. Wait for an in-flight upload of this file to finish,
+	// then proceed — the state is loaded only after, so the hash check below
+	// sees what that upload recorded and skips unchanged content.
+	releaseMain := func() {}
+	if syncFile != "" {
+		release, ok := sync.LockTranscript(client.ConfigDir(), syncFile, transcriptLockWait)
+		var once gosync.Once
+		releaseMain = func() { once.Do(release) }
+		defer releaseMain()
+		if !ok {
+			err := fmt.Errorf("another sync of %s is still running; gave up after %s", syncFile, transcriptLockWait)
+			// Don't drop it silently: record a failed sync so the next hook's
+			// retryFailedSyncs picks this transcript up again.
+			if sm, smErr := sync.NewStateManager(); smErr == nil {
+				_ = recordLockTimeout(sm, syncFile, err)
+			}
+			return err
+		}
 	}
 
 	// Initialize state manager
@@ -88,7 +142,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 
 	// Handle single-file sync (used by auto-sync from SessionEnd hook)
 	if syncFile != "" {
-		return runSingleFileSync(config, stateManager, syncFile)
+		return runSingleFileSync(config, stateManager, syncFile, releaseMain)
 	}
 
 	// Determine which tools to sync
@@ -135,10 +189,27 @@ func runSync(cmd *cobra.Command, args []string) error {
 		fmt.Printf("📁 Found %d transcript(s) for %s\n", len(files), tool)
 
 		syncedThisRun := 0
+		// Per-transcript upload lock, held from parse through upload; released
+		// at the top of the next iteration (every `continue` path included).
+		releaseFile := func() {}
 		for _, filePath := range files {
+			releaseFile()
+			releaseFile = func() {}
+
 			// Apply limit
 			if syncLimit > 0 && totalSynced >= syncLimit {
 				break
+			}
+
+			// Never upload a transcript an auto-sync is uploading right now:
+			// skip it without waiting and let that sync handle it.
+			if !syncDryRun {
+				release, ok := sync.LockTranscript(client.ConfigDir(), filePath, 0)
+				if !ok {
+					totalSkipped++
+					continue
+				}
+				releaseFile = release
 			}
 
 			// Parse file first to get hash
@@ -244,6 +315,7 @@ func runSync(cmd *cobra.Command, args []string) error {
 			totalSynced++
 			syncedThisRun++
 		}
+		releaseFile()
 	}
 
 	// Plan files ride along with every full sync.
@@ -267,6 +339,17 @@ func runSync(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Println()
 	}
+
+	// Sync is the "push everything now" command: also replay any events
+	// queued after failed sends. Best-effort — never fails the sync. Quiet
+	// when there's nothing to do; Ctrl-C stops the drain cleanly so the
+	// outbox lock is released.
+	drainCtx, stopDrain := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	out := &blankLineBefore{w: os.Stdout}
+	if err := flushOutboxNow(drainCtx, out, config, syncDryRun, true); err != nil {
+		_, _ = fmt.Fprintf(out, "⚠️  Queued events not fully replayed: %v\n", err)
+	}
+	stopDrain()
 
 	return nil
 }
@@ -474,10 +557,90 @@ func syncChunked(apiClient *client.Client, conv *sync.ParsedConversation, stateM
 	return resp, nil
 }
 
-// runSingleFileSync syncs a single transcript file (used by auto-sync)
-func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string) error {
-	// Verify file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+// runSingleFileSync syncs a single transcript file (used by auto-sync), plus
+// the subagent transcripts of a Claude Code session. Subagents (and workflow
+// agents) write their own transcripts under <session>/subagents/ and never
+// fire a Stop hook of their own, so before this they were only uploaded by a
+// manual `promptconduit sync`. The parent session's auto-sync carries them.
+// A subagent failure is recorded for retry, but the result reflects the main
+// transcript.
+//
+// releaseMain drops the main transcript's upload lock once the main file is
+// done, so the next Stop's sync isn't held up behind a long run of subagent
+// uploads. Each subagent upload takes that subagent file's own lock instead.
+func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, filePath string, releaseMain func()) error {
+	err := syncOneTranscript(config, stateManager, filePath)
+	releaseMain()
+	if !isSubagentTranscript(filePath) {
+		syncSubagentTranscripts(config, stateManager, filePath)
+	}
+	return err
+}
+
+// syncSubagentTranscripts uploads the changed subagent transcripts of a
+// session. Each upload holds that file's own upload lock, the same lock a
+// full `promptconduit sync` or a retry of that file takes, so two processes
+// never upload one file at once. A file another process is uploading right now
+// is skipped; that process covers it. After taking the lock, the sync state is
+// re-read so the hash check sees what that other process recorded.
+func syncSubagentTranscripts(config *client.Config, stateManager *sync.StateManager, sessionPath string) {
+	for _, sub := range cost.SubagentTranscripts(sessionPath) {
+		if unchangedSinceSync(stateManager, sub) {
+			continue
+		}
+		release, ok := sync.LockTranscript(client.ConfigDir(), sub, 0)
+		if !ok {
+			release()
+			logger.Debug("Auto-sync: subagent transcript %s is being synced elsewhere; skipping", sub)
+			continue
+		}
+		subState, err := sync.NewStateManager()
+		if err == nil {
+			err = syncOneTranscript(config, subState, sub)
+		}
+		release()
+		if err != nil {
+			logger.Debug("Auto-sync: subagent transcript %s: %v", sub, err)
+		}
+	}
+}
+
+// isSubagentTranscript reports whether path lives under a session's
+// subagents/ directory (and so has no subagents of its own to carry).
+func isSubagentTranscript(path string) bool {
+	return strings.Contains(filepath.ToSlash(path), "/subagents/")
+}
+
+// unchangedSinceSync is a cheap pre-check for subagent transcripts: a file
+// whose mtime and size both still match the fingerprint recorded when it was
+// last hashed is skipped without re-hashing. Workflow-heavy sessions hold
+// hundreds of them, and auto-sync runs on every Stop (debounced to once a
+// minute). The fingerprint is read BEFORE hashing, so an append during a slow
+// upload changes the size and is never mistaken for "unchanged". Comparing to
+// synced_at instead would be wrong for exactly that case. Anything uncertain
+// falls through to the hash check in syncOneTranscript.
+func unchangedSinceSync(stateManager *sync.StateManager, path string) bool {
+	info, ok := stateManager.GetSyncedInfo(path)
+	if !ok || syncForce || info.SourceModTime == 0 {
+		return false
+	}
+	st, err := os.Stat(path)
+	return err == nil && st.ModTime().UnixNano() == info.SourceModTime && st.Size() == info.SourceSize
+}
+
+// syncOneTranscript uploads one transcript file if it changed since its last
+// sync (or always, with --force).
+func syncOneTranscript(config *client.Config, stateManager *sync.StateManager, filePath string) error {
+	// Verify file exists. The stat doubles as the fingerprint recorded with a
+	// successful sync (see unchangedSinceSync); it is read before hashing.
+	pre, statErr := os.Stat(filePath)
+	if os.IsNotExist(statErr) {
+		// Nothing left to retry: drop any failed-sync record for it, or every
+		// later Stop hook would respawn a sync of a file that is gone.
+		if stateManager.HasFailedSyncForFile(filePath) {
+			stateManager.ClearFailedSyncsForFile(filePath)
+			_ = stateManager.Save()
+		}
 		return fmt.Errorf("transcript file not found: %s", filePath)
 	}
 
@@ -486,7 +649,28 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 	if !syncForce {
 		currentHash, err := sync.CalculateFileHash(filePath)
 		if err == nil && stateManager.IsSynced(filePath, currentHash) {
-			// File hasn't changed since last sync, nothing to do
+			// Unchanged since its last upload: nothing to send. A failed-sync
+			// record left from before that upload (e.g. a full `promptconduit
+			// sync` succeeded later) is stale; without clearing it here every
+			// Stop hook keeps respawning this retry.
+			save := false
+			if stateManager.HasFailedSyncForFile(filePath) {
+				stateManager.ClearFailedSyncsForFile(filePath)
+				save = true
+			}
+			// Refresh the fingerprint when it is missing (a record from before
+			// it existed) or stale (a write landed between the stat and the
+			// hash of the last upload), so the next auto-sync can skip this
+			// file without hashing it.
+			if info, ok := stateManager.GetSyncedInfo(filePath); ok && statErr == nil &&
+				(info.SourceModTime != pre.ModTime().UnixNano() || info.SourceSize != pre.Size()) {
+				info.SourceModTime, info.SourceSize = pre.ModTime().UnixNano(), pre.Size()
+				stateManager.MarkSynced(filePath, info)
+				save = true
+			}
+			if save {
+				_ = stateManager.Save()
+			}
 			return nil
 		}
 	}
@@ -538,11 +722,15 @@ func runSingleFileSync(config *client.Config, stateManager *sync.StateManager, f
 	}
 
 	// Success - mark as synced and clear any previous failure
-	stateManager.MarkSynced(filePath, sync.SyncedFileInfo{
+	synced := sync.SyncedFileInfo{
 		Hash:           conversation.SourceFileHash,
 		ConversationID: resp.ConversationID,
 		MessageCount:   resp.MessageCount,
-	})
+	}
+	if statErr == nil {
+		synced.SourceModTime, synced.SourceSize = pre.ModTime().UnixNano(), pre.Size()
+	}
+	stateManager.MarkSynced(filePath, synced)
 	stateManager.ClearFailedSync(conversation.SessionID)
 
 	// Ride-along: upload any new plan this session's transcript references.

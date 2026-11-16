@@ -12,7 +12,6 @@ import (
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/envelope"
 	"github.com/promptconduit/cli/internal/extension"
-	"github.com/promptconduit/cli/internal/outbound"
 	"github.com/spf13/cobra"
 )
 
@@ -30,16 +29,25 @@ Run with no arguments to pick interactively, or name one or more tools:
 Supported tools:
   - claude-code: Claude Code CLI            (~/.claude/settings.json)
   - cursor:      Cursor IDE                 (~/.cursor/hooks.json)
+
+Experimental tools (need --experimental; hooks install and capture events,
+but cost tracking and the dashboard aren't verified for them yet):
   - gemini-cli:  Gemini CLI                 (~/.gemini/settings.json; also accepts "gemini")
   - codex:       OpenAI Codex CLI           (~/.codex/hooks.json)
   - copilot:     GitHub Copilot CLI         (~/.copilot/hooks/promptconduit.json)
   - grok:        Grok Build (xAI)           (~/.grok/hooks/promptconduit.json; also accepts "grok-build")
 
+  promptconduit install codex --experimental # one experimental tool
+  promptconduit install all --experimental   # supported + experimental
+
+Claude Code, Cursor and Gemini CLI also get the PromptConduit MCP server, so
+your agent can answer cost and budget questions itself (skip with --no-mcp).
+
 The hooks capture events locally and realtime cost tracking works immediately.
 This is the Free tier: 100% local — every event is captured to
-~/.promptconduit/events.jsonl and nothing is sent anywhere. Set an API key
-(promptconduit config set --api-key=...) only if you also want to sync events to
-the PromptConduit platform. To stay local-only even after setting a key, pass
+~/.promptconduit/events.jsonl and nothing is sent anywhere. Sign in
+(promptconduit login) only if you also want to sync events to
+the PromptConduit platform. To stay local-only even after signing in, pass
 --local-only.`,
 	Args: cobra.ArbitraryArgs,
 	RunE: runInstall,
@@ -53,7 +61,21 @@ var installLocalOnly bool
 // into the editor (Cursor) during install.
 var installNoExtension bool
 
+// installNoMCP skips registering the PromptConduit MCP server with the tool
+// (and stops the post-upgrade reconcile from adding it later).
+var installNoMCP bool
+
+// allowExperimental opts into the experimental tools (shared by install and
+// init). Without it, "all", the pickers and init's defaults cover only the
+// supported tools, and naming an experimental tool is an error.
+var allowExperimental bool
+
+const experimentalFlagHelp = "Also offer experimental tools (Gemini CLI, Codex, Copilot, Grok Build)"
+
 func init() {
+	installCmd.Flags().BoolVar(&allowExperimental, "experimental", false, experimentalFlagHelp)
+	installCmd.Flags().BoolVar(&installNoMCP, "no-mcp", false,
+		"Don't register the PromptConduit MCP server (Claude Code, Cursor, Gemini CLI)")
 	installCmd.Flags().BoolVar(&installLocalOnly, "local-only", false,
 		"Free / local-only mode: capture events locally, never send to the cloud")
 	installCmd.Flags().BoolVar(&installNoExtension, "no-extension", false,
@@ -72,7 +94,7 @@ func installCostExtension(e extension.Editor) {
 	switch {
 	case err != nil:
 		fmt.Printf("• Couldn't auto-install the cost extension into %s: %v\n", e.Name, err)
-		fmt.Printf("  Install it later with `promptconduit install cursor`, or use `promptconduit cost watch`.\n")
+		fmt.Printf("  Install it later with `promptconduit install cursor`, or run `promptconduit cost` for the current session.\n")
 		fmt.Println()
 	case res.Installed:
 		fmt.Printf("✓ Installed the cost status-bar extension into %s (v%s)\n", e.Name, res.Version)
@@ -85,14 +107,52 @@ func installCostExtension(e extension.Editor) {
 	}
 }
 
+type installableTool struct {
+	name, label string
+	// experimental tools install real hooks, but nothing verifies their
+	// payloads end to end (no platform adapter for codex/copilot, no live
+	// test for any of them), so they stay opt-in behind --experimental.
+	experimental bool
+}
+
 // installableTools is the ordered set offered in the interactive picker.
-var installableTools = []struct{ name, label string }{
-	{"claude-code", "Claude Code"},
-	{"cursor", "Cursor"},
-	{"gemini-cli", "Gemini CLI"},
-	{"codex", "OpenAI Codex"},
-	{"copilot", "GitHub Copilot"},
-	{"grok", "Grok Build"},
+// Supported tools come first so their picker numbers stay stable.
+var installableTools = []installableTool{
+	{"claude-code", "Claude Code", false},
+	{"cursor", "Cursor", false},
+	{"gemini-cli", "Gemini CLI", true},
+	{"codex", "OpenAI Codex", true},
+	{"copilot", "GitHub Copilot", true},
+	{"grok", "Grok Build", true},
+}
+
+// offeredTools is installableTools minus the experimental ones unless
+// --experimental is set.
+func offeredTools() []installableTool {
+	var out []installableTool
+	for _, t := range installableTools {
+		if !t.experimental || allowExperimental {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func isExperimentalTool(name string) bool {
+	for _, t := range installableTools {
+		if t.name == name {
+			return t.experimental
+		}
+	}
+	return false
+}
+
+// checkExperimental rejects an experimental tool unless --experimental is set.
+func checkExperimental(name string) error {
+	if isExperimentalTool(name) && !allowExperimental {
+		return fmt.Errorf("%s is experimental: its hooks install and capture events, but cost tracking and the dashboard aren't verified for it yet. Re-run with --experimental to install it anyway", name)
+	}
+	return nil
 }
 
 func runInstall(cmd *cobra.Command, args []string) error {
@@ -135,8 +195,8 @@ func runInstall(cmd *cobra.Command, args []string) error {
 }
 
 // persistLocalOnly writes the local_only flag into the config file so the Free
-// tier survives across hook invocations. Mirrors how `config set --local-only`
-// persists the same setting.
+// tier survives across hook invocations. Like `config set --local-only`, it
+// also clears per-env copies so the global value applies in every profile.
 func persistLocalOnly(v bool) error {
 	fc, err := client.LoadFileConfig()
 	if err != nil {
@@ -146,6 +206,7 @@ func persistLocalOnly(v bool) error {
 		fc = &client.FileConfig{}
 	}
 	fc.LocalOnly = v
+	forEachEnv(fc, func(c *client.Config) { c.LocalOnly = false })
 	return client.SaveFileConfig(fc)
 }
 
@@ -157,6 +218,14 @@ func stableExecutablePath(exePath string) (string, error) {
 
 // installTool dispatches to the per-tool installer.
 func installTool(name, exePath string) error {
+	if err := installToolHooks(name, exePath); err != nil {
+		return err
+	}
+	registerMCPForInstall(normalizeToolName(name), exePath, installNoMCP)
+	return nil
+}
+
+func installToolHooks(name, exePath string) error {
 	switch name {
 	case "claude-code":
 		return installClaudeCode(exePath)
@@ -180,7 +249,7 @@ func installTool(name, exePath string) error {
 // every supported tool.
 func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 	if len(args) == 0 {
-		if !outbound.IsTerminal(os.Stdin) {
+		if !canPrompt() {
 			return nil, fmt.Errorf("name one or more tools (e.g. `install cursor claude-code` or `install all`), or run in a terminal to choose interactively.\nSupported: %s", strings.Join(toolNames(), ", "))
 		}
 		return selectToolsInteractive(cmd)
@@ -195,6 +264,9 @@ func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 		if !envelope.IsValidTool(t) {
 			return nil, fmt.Errorf("unknown tool: %s. Supported: %s (or 'all')", tok, strings.Join(toolNames(), ", "))
 		}
+		if err := checkExperimental(t); err != nil {
+			return nil, err
+		}
 		if !seen[t] {
 			seen[t] = true
 			out = append(out, t)
@@ -207,8 +279,8 @@ func resolveInstallTools(cmd *cobra.Command, args []string) ([]string, error) {
 func selectToolsInteractive(cmd *cobra.Command) ([]string, error) {
 	out := cmd.OutOrStdout()
 	_, _ = fmt.Fprintln(out, "Which AI tools should PromptConduit set up?")
-	for i, t := range installableTools {
-		_, _ = fmt.Fprintf(out, "  %d) %s\n", i+1, t.label)
+	for i, t := range offeredTools() {
+		_, _ = fmt.Fprintf(out, "  %d) %s\n", i+1, toolLabel(t))
 	}
 	_, _ = fmt.Fprint(out, "Enter numbers (e.g. 1,2), names, or 'all': ")
 
@@ -238,14 +310,18 @@ func parseToolSelection(input string) ([]string, error) {
 		}
 		var name string
 		if n, err := strconv.Atoi(tok); err == nil {
-			if n < 1 || n > len(installableTools) {
-				return nil, fmt.Errorf("invalid choice: %s (pick 1-%d)", tok, len(installableTools))
+			offered := offeredTools()
+			if n < 1 || n > len(offered) {
+				return nil, fmt.Errorf("invalid choice: %s (pick 1-%d)", tok, len(offered))
 			}
-			name = installableTools[n-1].name
+			name = offered[n-1].name
 		} else {
 			name = normalizeToolName(tok)
 			if !envelope.IsValidTool(name) {
 				return nil, fmt.Errorf("unknown tool: %s", tok)
+			}
+			if err := checkExperimental(name); err != nil {
+				return nil, err
 			}
 		}
 		if !seen[name] {
@@ -266,12 +342,22 @@ func normalizeToolName(s string) string {
 	return s
 }
 
+// toolNames lists the offered tools: what "all" expands to and what the
+// pickers default to.
 func toolNames() []string {
-	names := make([]string, len(installableTools))
-	for i, t := range installableTools {
+	offered := offeredTools()
+	names := make([]string, len(offered))
+	for i, t := range offered {
 		names[i] = t.name
 	}
 	return names
+}
+
+func toolLabel(t installableTool) string {
+	if t.experimental {
+		return t.label + " (experimental)"
+	}
+	return t.label
 }
 
 func installClaudeCode(exePath string) error {
@@ -294,23 +380,10 @@ func installClaudeCode(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildClaudeCodeHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -329,12 +402,13 @@ func installClaudeCode(exePath string) error {
 	fmt.Println("✓ Installed PromptConduit hooks for Claude Code")
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
-	fmt.Println("Realtime token-cost tracking works for Claude Code too (from local transcripts):")
-	fmt.Println("  Live spend:    promptconduit cost watch      (or install the editor extension)")
+	fmt.Println("Token-cost tracking works for Claude Code too (computed locally on each Stop):")
 	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println("  Recent days:   promptconduit cost history")
+	fmt.Println("  Live spend:    the editor extension (https://promptconduit.dev/docs/editor-extension)")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -438,23 +512,10 @@ func installCursor(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildCursorHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -478,11 +539,12 @@ func installCursor(exePath string) error {
 	installCostExtension(extension.Cursor)
 
 	fmt.Println("Realtime token-cost tracking is now ON for Cursor — computed 100% locally.")
-	fmt.Println("  Live spend:    promptconduit cost watch")
 	fmt.Println("  This session:  promptconduit cost")
+	fmt.Println("  Recent days:   promptconduit cost history")
+	fmt.Println("  Live spend:    the PromptConduit status bar in Cursor")
 	fmt.Println()
 	fmt.Println("Optional — also sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -561,23 +623,10 @@ func installGemini(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook", exePath)
 	hooks := buildGeminiHooks(hookCmd)
 
-	// Strip any of OUR previously-installed hook entries first so events we
-	// no longer ship (e.g. WorktreeCreate, which we used to register but now
-	// deliberately skip) get cleaned up rather than lingering forever. Any
-	// hook whose value doesn't reference "promptconduit" is left alone —
-	// that's the user's own configuration.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	// Write settings back
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
@@ -597,7 +646,7 @@ func installGemini(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -689,21 +738,10 @@ func installCodex(exePath string) error {
 	hookCmd := fmt.Sprintf("%s hook --tool codex", exePath)
 	hooks := buildCodexHooks(hookCmd)
 
-	// Strip any of OUR previously-installed entries first so removed events
-	// (or stale --tool flags from earlier versions) self-heal on re-install.
-	// User-owned hook entries are left alone.
-	if existingHooks, ok := settings["hooks"].(map[string]interface{}); ok {
-		for name, config := range existingHooks {
-			if containsPromptConduit(config) {
-				delete(existingHooks, name)
-			}
-		}
-		for name, config := range hooks {
-			existingHooks[name] = config
-		}
-	} else {
-		settings["hooks"] = hooks
-	}
+	// Merge, never overwrite: strip only OUR previously-installed handlers
+	// (so events we no longer ship, e.g. WorktreeCreate, get cleaned up),
+	// keep every user-owned hook on the same events, then append ours.
+	mergePromptConduitHooks(settings, hooks)
 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
 		return fmt.Errorf("failed to create settings directory: %w", err)
@@ -722,7 +760,7 @@ func installCodex(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -823,7 +861,7 @@ func installCopilot(exePath string) error {
 	fmt.Printf("  %s\n", settingsPath)
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }
@@ -932,7 +970,7 @@ func installGrok(exePath string) error {
 	fmt.Println("are skipped so only this native hook is captured.")
 	fmt.Println()
 	fmt.Println("Optional — sync events to the PromptConduit platform:")
-	fmt.Println("  promptconduit config set --api-key=\"your-api-key\"")
+	fmt.Println("  promptconduit login")
 
 	return nil
 }

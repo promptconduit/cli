@@ -61,11 +61,12 @@ var costSessionCmd = &cobra.Command{
 }
 
 var costHistoryCmd = &cobra.Command{
-	Use:           "history",
-	Short:         "Aggregate cost over recent days from the local store",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostHistory,
+	Use:          "history",
+	Short:        "Daily cost over recent days, from the local event log",
+	SilenceUsage: true,
+	// Errors are printed (main exits silently), so a bad --days or an
+	// unreadable log says why instead of just exiting 1.
+	RunE: runCostHistory,
 }
 
 // litellmPricingURL is the public, maintained model-price table the optional
@@ -101,9 +102,11 @@ func init() {
 
 	costHistoryCmd.Flags().IntVar(&costDays, "days", 7, "number of days to include")
 	costHistoryCmd.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a table")
+	costRepriceCmd.Flags().BoolVar(&costRepriceDryRun, "dry-run", false, "show what would change without writing")
 
 	costCmd.AddCommand(costSessionCmd)
 	costCmd.AddCommand(costHistoryCmd)
+	costCmd.AddCommand(costRepriceCmd)
 	costCmd.AddCommand(costRefreshPricingCmd)
 	costCmd.AddCommand(costRefreshCardCmd)
 }
@@ -186,24 +189,42 @@ func resolveCwd() string {
 	return ""
 }
 
-func runCostSession(cmd *cobra.Command, args []string) error {
+// latestSessionCost prices the newest AI session for a workspace from local
+// transcripts and Cursor feeds. ok is false when nothing is recorded yet.
+func latestSessionCost(cwd string) (cost.SessionSummary, bool, error) {
+	return sessionCostIn(cwd, false)
+}
+
+// newestSessionCostAnywhere prices the newest session across every workspace.
+func newestSessionCostAnywhere() (cost.SessionSummary, bool, error) {
+	return sessionCostIn("", true)
+}
+
+func sessionCostIn(cwd string, all bool) (summary cost.SessionSummary, ok bool, err error) {
 	table, err := cost.LoadPriceTable()
 	if err != nil {
-		return fmt.Errorf("load pricing table: %w", err)
+		return summary, false, fmt.Errorf("load pricing table: %w", err)
 	}
-	cwd := resolveCwd()
-	dirs, err := cost.ResolveDirs(cwd, false)
+	dirs, err := cost.ResolveDirs(cwd, all)
 	if err != nil {
-		return fmt.Errorf("resolve transcript directories: %w", err)
+		return summary, false, fmt.Errorf("resolve transcript directories: %w", err)
 	}
 
 	// We read the summary directly rather than stream it, so the watcher's emit
 	// sink is discarded.
 	w := cost.NewWatcher(table, nil, io.Discard, false)
 	w.SeedNewest(dirs)
-	w.SeedCursorFeeds(cost.CursorFeedPaths(cwd, false))
+	w.SeedCursorFeeds(cost.CursorFeedPaths(cwd, all))
 
-	summary, ok := w.LatestSummary()
+	summary, ok = w.LatestSummary()
+	return summary, ok, nil
+}
+
+func runCostSession(cmd *cobra.Command, args []string) error {
+	summary, ok, err := latestSessionCost(resolveCwd())
+	if err != nil {
+		return err
+	}
 	out := cmd.OutOrStdout()
 	if !ok {
 		_, _ = fmt.Fprintln(out, "No AI session cost recorded yet for this workspace.")
@@ -219,6 +240,7 @@ func runCostSession(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 	renderSessionHuman(out, summary)
+	maybeTeamNudge(out)
 	return nil
 }
 
@@ -277,70 +299,4 @@ func formatToolBreakdown(byName map[string]int) string {
 		parts[i] = fmt.Sprintf("%s ×%d", t.name, t.count)
 	}
 	return "  (" + strings.Join(parts, ", ") + ")"
-}
-
-func runCostHistory(cmd *cobra.Command, args []string) error {
-	events, err := cost.ReadEvents()
-	if err != nil {
-		return fmt.Errorf("read cost history: %w", err)
-	}
-
-	// Group by calendar day (the YYYY-MM-DD prefix of the RFC3339 timestamp).
-	type dayTotal struct {
-		day  string
-		cost float64
-		in   int64
-		out  int64
-	}
-	byDay := map[string]*dayTotal{}
-	for _, e := range events {
-		day := e.Timestamp
-		if len(day) >= 10 {
-			day = day[:10]
-		}
-		dt := byDay[day]
-		if dt == nil {
-			dt = &dayTotal{day: day}
-			byDay[day] = dt
-		}
-		dt.cost += e.Cost.Total
-		dt.in += e.Tokens.Input
-		dt.out += e.Tokens.Output
-	}
-
-	days := make([]*dayTotal, 0, len(byDay))
-	for _, dt := range byDay {
-		days = append(days, dt)
-	}
-	sort.Slice(days, func(i, j int) bool { return days[i].day > days[j].day })
-	if costDays > 0 && len(days) > costDays {
-		days = days[:costDays]
-	}
-
-	out := cmd.OutOrStdout()
-	if costJSON {
-		_, _ = fmt.Fprint(out, "[")
-		for i, dt := range days {
-			if i > 0 {
-				_, _ = fmt.Fprint(out, ",")
-			}
-			_, _ = fmt.Fprintf(out, `{"day":%q,"cost_total":%.6f,"input":%d,"output":%d,"currency":%q}`,
-				dt.day, dt.cost, dt.in, dt.out, cost.Currency)
-		}
-		_, _ = fmt.Fprintln(out, "]")
-		return nil
-	}
-
-	if len(days) == 0 {
-		_, _ = fmt.Fprintln(out, "No cost history yet. Run `promptconduit cost watch` during a session.")
-		return nil
-	}
-	_, _ = fmt.Fprintf(out, "%-12s %12s %12s %12s\n", "DAY", "COST (USD)", "INPUT", "OUTPUT")
-	var total float64
-	for _, dt := range days {
-		_, _ = fmt.Fprintf(out, "%-12s %12.4f %12d %12d\n", dt.day, dt.cost, dt.in, dt.out)
-		total += dt.cost
-	}
-	_, _ = fmt.Fprintf(out, "%-12s %12.4f\n", "TOTAL", total)
-	return nil
 }

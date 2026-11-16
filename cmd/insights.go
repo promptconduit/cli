@@ -70,7 +70,7 @@ func init() {
 func runInsights(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -80,7 +80,7 @@ func runInsights(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -90,7 +90,7 @@ func runInsights(cmd *cobra.Command, args []string) error {
 func runInsightsTools(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -100,7 +100,7 @@ func runInsightsTools(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get tool insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -110,7 +110,7 @@ func runInsightsTools(cmd *cobra.Command, args []string) error {
 func runInsightsErrors(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -120,7 +120,7 @@ func runInsightsErrors(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get error insights: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 
@@ -130,7 +130,7 @@ func runInsightsErrors(cmd *cobra.Command, args []string) error {
 func runInsightsSessions(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -140,7 +140,7 @@ func runInsightsSessions(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get sessions: %s", resp.Error)
 	}
 
-	if insightsFormat == "json" {
+	if insightsWantJSON() {
 		return outputJSON(resp.Data)
 	}
 

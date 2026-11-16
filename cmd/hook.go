@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +26,8 @@ import (
 
 var (
 	sendEvent bool
+	// flushSpool runs the detached batch flusher (see client.FlushSpool).
+	flushSpool bool
 	// toolOverride is set by the install command (`--tool codex`,
 	// `--tool copilot`) when the host AI tool's hook payload can't be
 	// reliably distinguished from other tools by inspecting fields
@@ -41,6 +46,7 @@ var hookCmd = &cobra.Command{
 
 func init() {
 	hookCmd.Flags().BoolVar(&sendEvent, "send-event", false, "Send event data from stdin (internal use)")
+	hookCmd.Flags().BoolVar(&flushSpool, "flush-spool", false, "Upload spooled events in batches (internal use)")
 	hookCmd.Flags().StringVar(&toolOverride, "tool", "", "Override tool name (codex, copilot, etc.); set by the install command")
 }
 
@@ -48,24 +54,31 @@ func runHook(cmd *cobra.Command, args []string) error {
 	if sendEvent {
 		return sendEnvelopeFromStdin()
 	}
+	if flushSpool {
+		return flushSpoolDetached()
+	}
 	return processHookEvent()
 }
 
 // processHookEvent is the main hook entry point - wraps native event in envelope
 func processHookEvent() error {
-	defer outputContinueResponse()
-
 	// Load config first so we can set the debug flag for the logger and the
 	// enabled flag for the local event log before emitting any lines.
 	cfg := client.LoadConfig()
+
+	// Anonymous daily usage ping. Deferred before the response so it runs
+	// after the hook's reply is written: one small state-file read, and the
+	// send itself happens in a detached child once the notice was shown.
+	defer maybeSpawnTelemetry(cfg)
+	defer outputContinueResponse()
+
 	logger.SetDebug(cfg.Debug)
 	eventlog.SetEnabled(cfg.EventLogEnabled())
 
 	// Opportunistically enforce local hook-history retention. Runs after the
-	// event is captured (deferred); cheap on the hot path — a couple of stats
-	// unless the log has grown past its size ceiling, in which case expired
-	// records (older than the retention window) are trimmed oldest-first.
-	defer eventlog.MaybePrune(cfg.RetentionDays())
+	// event is captured (deferred); the hot path only stats files — the rewrite
+	// itself runs in a detached subprocess.
+	defer maybeSpawnPrune(cfg.RetentionDays())
 
 	logger.Debug("Hook started")
 
@@ -233,13 +246,58 @@ func processHookEvent() error {
 		return nil
 	}
 
-	// Send async
-	if err := client.NewClient(cfg, Version).SendEnvelopeAsync(env); err != nil {
+	apiClient := client.NewClient(cfg, Version)
+	if cfg.BatchUploadEnabled() {
+		// Batched path: spool the envelope; a detached flusher uploads the
+		// spool in groups once it's due, or right away at the end of a turn
+		// or session so nothing lingers after the agent goes quiet.
+		if err := apiClient.QueueEnvelope(env, isFlushPointEvent(hookEvent)); err != nil {
+			debugLog("Failed to queue envelope: %v", err)
+			logger.Error("Failed to queue envelope (event=%s, tool=%s): %v", hookEvent, tool, err)
+		}
+		logger.Debug("Envelope spooled for batched upload")
+		return nil
+	}
+
+	// Legacy per-event path (batch_upload=false).
+	if err := apiClient.SendEnvelopeAsync(env); err != nil {
 		debugLog("Failed to send envelope async: %v", err)
 		logger.Error("Failed to spawn async sender (event=%s, tool=%s): %v", hookEvent, tool, err)
 	}
+	// Envelopes spooled before batching was turned off still need sending.
+	apiClient.MaybeTriggerFlush(false)
 
 	logger.Debug("Envelope queued for async send")
+	return nil
+}
+
+// isFlushPointEvent reports whether hookEvent ends a turn or a session, so
+// the spool should be flushed now rather than waiting until it's due:
+// Claude Code / Codex / Gemini Stop, StopFailure and SessionEnd, Cursor
+// stop and sessionEnd, Grok stop / session_end.
+func isFlushPointEvent(hookEvent string) bool {
+	switch strings.ToLower(strings.ReplaceAll(hookEvent, "_", "")) {
+	case "stop", "stopfailure", "sessionend":
+		return true
+	}
+	return false
+}
+
+// flushSpoolDetached is the `hook --flush-spool` worker a hook spawns once
+// the upload spool is due. The flush lock collapses concurrent spawns into a
+// single flusher.
+func flushSpoolDetached() error {
+	cfg := client.LoadConfig()
+	logger.SetDebug(cfg.Debug)
+	eventlog.SetEnabled(cfg.EventLogEnabled())
+	if !cfg.ShouldSend() || !cfg.EventLogEnabled() {
+		return nil
+	}
+	rep := client.NewClient(cfg, Version).FlushSpool(context.Background())
+	if rep.Tried > 0 || rep.Expired > 0 {
+		logger.Debug("spool flush: %d batch(es), %d delivered, %d rejected, %d remaining, stopped=%v",
+			rep.Batches, rep.Delivered, rep.Rejected, rep.Remaining, rep.Stopped)
+	}
 	return nil
 }
 
@@ -482,6 +540,13 @@ func debugLog(format string, args ...interface{}) {
 func triggerAutoSync(sessionID string) {
 	logger.Debug("Auto-sync: triggered for session %s", sessionID)
 
+	// A sync for this session is already scheduled to start after this event
+	// (and so will include it): nothing to do, not even the transcript search.
+	if sync.AutoSyncPending(client.ConfigDir(), sessionID, time.Now()) {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return
+	}
+
 	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
@@ -491,29 +556,79 @@ func triggerAutoSync(sessionID string) {
 
 	logger.Debug("Auto-sync: found transcript at %s", transcriptPath)
 
-	// Spawn async subprocess to sync this file
-	// Use --delay flag so the subprocess waits for transcript to be fully flushed
-	exe, err := os.Executable()
-	if err != nil {
-		logger.Debug("Auto-sync: failed to get executable path: %v", err)
+	exe, started := scheduleAutoSync(client.ConfigDir(), sessionID, transcriptPath, time.Now())
+	if !started {
 		return
 	}
-
-	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", "1")
-	if err := cmd.Start(); err != nil {
-		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
-		return
-	}
-
-	// Release the process so it runs independently
-	if cmd.Process != nil {
-		_ = cmd.Process.Release()
-	}
-
 	logger.Debug("Auto-sync: sync subprocess started for session %s", sessionID)
 
 	// Also retry any previously failed syncs (spawn as separate subprocess)
 	go retryFailedSyncs(exe)
+}
+
+// scheduleAutoSync applies the per-session debounce (trailing edge: at most
+// one sync per session per sync.AutoSyncInterval, and a Stop inside the
+// interval schedules one follow-up for when it ends) and starts the planned
+// sync. If the subprocess can't be started the plan is rolled back, so later
+// Stops aren't suppressed waiting for a sync that never runs.
+func scheduleAutoSync(baseDir, sessionID, transcriptPath string, now time.Time) (exe string, started bool) {
+	delay, spawn, undo := sync.PlanAutoSync(baseDir, sessionID, now)
+	if !spawn {
+		logger.Debug("Auto-sync: sync already scheduled for session %s", sessionID)
+		return "", false
+	}
+	exe, err := startAutoSyncProcess(transcriptPath, delay)
+	if err != nil {
+		logger.Debug("Auto-sync: failed to start sync subprocess: %v", err)
+		undo()
+		return "", false
+	}
+	return exe, true
+}
+
+// startAutoSyncProcess spawns the detached `sync --file` child. The --delay
+// makes it wait for the transcript flush (and, for a trailing follow-up, the
+// end of the debounce window). A var so tests can simulate spawn failure.
+var startAutoSyncProcess = func(transcriptPath string, delay int) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(exe, "sync", "--file", transcriptPath, "--delay", strconv.Itoa(delay))
+	// Own session: the (possibly ~60s delayed) trailing sync must survive the
+	// agent or terminal exiting.
+	detachProcess(cmd)
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	// Release the process so it runs independently
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
+	return exe, nil
+}
+
+// maybeSpawnPrune hands retention enforcement to a detached `prune-auto`
+// subprocess once a local log is over its size ceiling. Rewriting a 500 MB log
+// inline would stall every hook (and, with many agents running, stack up
+// concurrent rewrites); here the hook pays a few stats and moves on.
+func maybeSpawnPrune(retentionDays int) {
+	if !eventlog.NeedsPrune(retentionDays) {
+		return
+	}
+	// Claim the throttle window before spawning so sibling hooks firing in the
+	// same instant don't each start a pruner.
+	eventlog.MarkPruneAttempt()
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	cmd := exec.Command(exe, "prune-auto")
+	if err := cmd.Start(); err != nil {
+		logger.Debug("prune: spawn failed: %v", err)
+		return
+	}
+	_ = cmd.Process.Release()
 }
 
 // retryFailedSyncs attempts to sync any previously failed transcripts
@@ -539,6 +654,7 @@ func retryFailedSyncs(exe string) {
 		}
 
 		cmd := exec.Command(exe, "sync", "--file", failed.FilePath)
+		detachProcess(cmd)
 		if err := cmd.Start(); err != nil {
 			logger.Debug("Auto-sync retry: failed to start sync for %s: %v", failed.SessionID, err)
 			continue
@@ -566,28 +682,24 @@ func writeLocalEvent(hookEvent, cwd, sessionID string) {
 		return
 	}
 
-	home, err := os.UserHomeDir()
+	line, err := hookEventLine(hookEvent, cwd, sessionID, time.Now())
 	if err != nil {
 		return
 	}
+	// Appended through eventlog so it shares the append lock with the pruner,
+	// which also rewrites this file (eventlog.HookEventsPath).
+	eventlog.AppendHookEvent(line)
+}
 
-	eventsPath := filepath.Join(home, ".promptconduit", "hook-events")
-
-	// Ensure directory exists
-	dir := filepath.Dir(eventsPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-
-	// Build event JSON
-	event := fmt.Sprintf(`{"event":"%s","cwd":"%s","session_id":"%s","timestamp":"%s"}`,
-		hookEvent, cwd, sessionID, time.Now().Format(time.RFC3339))
-
-	// Append to file
-	f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-	_, _ = f.WriteString(event + "\n")
+// hookEventLine renders one hook-events record. json.Marshal (not string
+// formatting) so a cwd with backslashes or quotes — every Windows path —
+// still yields valid JSON; an invalid line has no parseable timestamp, is
+// never pruned, and would keep the trace over its ceiling forever.
+func hookEventLine(hookEvent, cwd, sessionID string, at time.Time) ([]byte, error) {
+	return json.Marshal(struct {
+		Event     string `json:"event"`
+		Cwd       string `json:"cwd"`
+		SessionID string `json:"session_id"`
+		Timestamp string `json:"timestamp"`
+	}{hookEvent, cwd, sessionID, at.Format(time.RFC3339)})
 }

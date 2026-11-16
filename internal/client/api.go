@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/promptconduit/cli/internal/envelope"
@@ -28,7 +33,7 @@ const eventsEndpoint = "/v1/events/raw"
 // errors.log on failure) after an outbound event send. The payload itself was
 // already captured to events.jsonl at hook time; full HTTP diagnostics live in
 // outbound.ndjson. Best-effort and gated by config; never blocks the send.
-func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, sendErr error) {
+func recordEventSend(envJSON []byte, status int, latency time.Duration, attempts int, sendErr error) {
 	var probe struct {
 		EventID   string `json:"event_id"`
 		HookEvent string `json:"hook_event"`
@@ -36,7 +41,7 @@ func recordEventSend(envJSON []byte, status int, latency time.Duration, _ int, s
 	// Best-effort: a payload we couldn't parse still gets its outcome recorded,
 	// just without the identifiers.
 	_ = json.Unmarshal(envJSON, &probe)
-	eventlog.RecordSendOutcome(probe.EventID, probe.HookEvent, status, latency.Milliseconds(), sendErr)
+	eventlog.RecordSendOutcome(probe.EventID, probe.HookEvent, status, latency.Milliseconds(), attempts, sendErr)
 }
 
 // APIResponse represents a response from the API
@@ -345,93 +350,245 @@ func openLogForStderr() *os.File {
 	return f
 }
 
-// sendEnvelopeBlocking sends the envelope synchronously. This is the single
-// chokepoint every event send funnels through — the async subprocess
-// (SendEnvelopeDirect) and the in-process fallback in sendAsync{Unix,Windows}
-// both land here — so it's where we record the full outgoing payload and the
-// HTTP outcome to the local event log.
+// sendEnvelopeBlocking sends the envelope once, synchronously. It backs the
+// in-process fallbacks in startDetachedSender, which run inside the hook, so
+// it never retries (backoff would block the AI tool).
 func (c *Client) sendEnvelopeBlocking(envJSON []byte) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
+	return c.sendEnvelope(envJSON, nil)
+}
+
+// sendEnvelopeWithRetry backs SendEnvelopeDirect, the detached subprocess that
+// carries nearly every event send; nothing waits on it, so it retries
+// transient failures (see retryableSend). The server dedupes on event_id, so a
+// resend after an ambiguous failure is safe.
+func (c *Client) sendEnvelopeWithRetry(envJSON []byte) error {
+	return c.sendEnvelope(envJSON, sendRetryDelays)
+}
+
+// sendRetryDelays are the waits before each retry (so len+1 attempts total),
+// jittered by up to +50%. A var so tests can shrink it.
+var sendRetryDelays = []time.Duration{500 * time.Millisecond, 2 * time.Second}
+
+const (
+	// maxRetryAfter caps how long we honor a server Retry-After. A longer ask
+	// means the server is genuinely down; give up rather than keep a process
+	// alive.
+	maxRetryAfter = 10 * time.Second
+	// slowFailure: a failed attempt that took this long signals overload, so
+	// it is not retried (retries are for fast, isolated failures).
+	slowFailure = 5 * time.Second
+	// retryWindow bounds the time spent across failed attempts and waits
+	// before a retry may start, independent of the per-request timeout. With
+	// slowFailure it caps a detached sender's extra lifetime at roughly this
+	// window plus one request.
+	retryWindow = 10 * time.Second
+)
+
+// sendEnvelope POSTs the envelope, retrying fast transient failures with the
+// given delays. Exactly one outcome is recorded: the final attempt's status
+// and latency, with "(after N attempts)" on failures that were retried.
+func (c *Client) sendEnvelope(envJSON []byte, delays []time.Duration) error {
+	start := time.Now()
+	for attempt := 0; ; attempt++ {
+		attemptStart := time.Now()
+		status, retryAfter, err := c.attemptEventSend(envJSON)
+		latency := time.Since(attemptStart)
+
+		var wait time.Duration
+		retry := err != nil && attempt < len(delays) && retryableSend(status, err) &&
+			latency < slowFailure && retryAfter <= maxRetryAfter
+		if retry {
+			wait = delays[attempt] + time.Duration(rand.Int63n(int64(delays[attempt])/2+1))
+			if retryAfter > wait {
+				wait = retryAfter
+			}
+			retry = time.Since(start)+wait <= retryWindow
+		}
+		if !retry {
+			if attempt > 0 {
+				if err != nil {
+					err = fmt.Errorf("%w (after %d attempts)", err, attempt+1)
+				} else {
+					logger.Debug("event send succeeded after %d attempts", attempt+1)
+				}
+			}
+			recordEventSend(envJSON, status, latency, attempt+1, err)
+			switch {
+			case err != nil && replayable(status):
+				// Gave up on a failure that may clear: queue it for a later replay.
+				eventlog.AppendOutbox(c.config.APIURL, envJSON)
+			case err == nil && delays != nil:
+				// The server is reachable again. From the detached sender only
+				// (nothing waits on it), replay anything queued earlier.
+				c.flushOutbox()
+			}
+			return err
+		}
+		logger.Debug("event send attempt %d failed (status=%d): %v; retrying in %s", attempt+1, status, err, wait)
+		time.Sleep(wait)
+	}
+}
+
+const (
+	// outboxReplayBatch and outboxReplayBudget bound one replay pass so a
+	// long-queued backlog drains over several sends instead of keeping one
+	// detached sender alive for minutes.
+	outboxReplayBatch  = 500
+	outboxReplayBudget = 20 * time.Second
+)
+
+// replayable reports whether a send that finally failed should be queued for
+// a later replay: anything that may clear — no response, 401/403 (auth can be
+// fixed), 408, 429, or any 5xx. Other 4xx mean the server rejected this
+// envelope permanently and are never queued. Mirrors replayOutcome.
+func replayable(status int) bool {
+	switch status {
+	case 0, http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	}
+	return status >= 500
+}
+
+// flushOutbox replays envelopes queued for this client's API URL (see
+// eventlog.FlushOutbox), one attempt each, straight through attemptEventSend
+// so a replay is never re-queued or double-counted.
+func (c *Client) flushOutbox() {
+	// The pass deadline also caps each request, so a slow server can't hold a
+	// replay past the budget.
+	ctx, cancel := context.WithTimeout(context.Background(), outboxReplayBudget)
+	defer cancel()
+	n := eventlog.FlushOutbox(c.config.APIURL, outboxReplayBatch, c.replayer(ctx, nil))
+	if n > 0 {
+		logger.Debug("replayed %d queued event(s) from the outbox", n)
+	}
+}
+
+// DrainOutbox replays everything queued for this client's API URL right now
+// (see eventlog.DrainOutbox): no cooldown, one pass over the whole queue.
+// ctx bounds the whole drain (e.g. Ctrl-C); each request still has the
+// configured timeout. When the drain ends on a server-level failure, stopErr
+// is the error that stopped it. onSend sees the running stats after each send.
+func (c *Client) DrainOutbox(ctx context.Context, onSend func(st eventlog.FlushStats)) (res eventlog.DrainResult, stopErr error) {
+	res = eventlog.DrainOutbox(c.config.APIURL, c.replayer(ctx, &stopErr), onSend)
+	if !res.Stopped {
+		stopErr = nil
+	}
+	return res, stopErr
+}
+
+// replayer returns the per-envelope replay callback: one attempt each,
+// straight through attemptEventSendCtx. When stopErr is non-nil it receives
+// the error behind a ReplayStop.
+func (c *Client) replayer(ctx context.Context, stopErr *error) func([]byte) eventlog.ReplayResult {
+	return func(envJSON []byte) eventlog.ReplayResult {
+		if err := ctx.Err(); err != nil {
+			setErr(stopErr, err)
+			return eventlog.ReplayStop
+		}
+		status, _, err := c.attemptEventSendCtx(ctx, envJSON)
+		if ctx.Err() != nil {
+			setErr(stopErr, ctx.Err())
+			return eventlog.ReplayStop // ran out of time mid-request: keep it
+		}
+		out := replayOutcome(status, err)
+		if out == eventlog.ReplayStop {
+			setErr(stopErr, err)
+		}
+		return out
+	}
+}
+
+func setErr(dst *error, err error) {
+	if dst != nil {
+		*dst = err
+	}
+}
+
+// replayOutcome classifies one replay attempt:
+//   - 401/403/408/429, no response, 503, 504: the server or credentials are
+//     the problem, not this envelope — keep it and stop the pass;
+//   - any other 4xx (400, 404, 409, 410, 413, 422, …): permanent for this
+//     envelope — remove it;
+//   - other 5xx (500, 502, …): this envelope failed but the server is up —
+//     rotate it to the back and continue.
+func replayOutcome(status int, err error) eventlog.ReplayResult {
+	switch {
+	case err == nil:
+		return eventlog.ReplayDelivered
+	case status == 0, status == http.StatusUnauthorized, status == http.StatusForbidden,
+		status == http.StatusRequestTimeout, status == http.StatusTooManyRequests,
+		status == http.StatusServiceUnavailable, status == http.StatusGatewayTimeout:
+		return eventlog.ReplayStop
+	case status >= 400 && status < 500:
+		return eventlog.ReplayRejected
+	default:
+		return eventlog.ReplaySkip
+	}
+}
+
+// retryableSend reports whether a failed send is worth retrying: 429/500/502/
+// 503, or a connection that was refused, reset, or closed mid-response.
+// Timeouts, including 504 Gateway Timeout, are not retried (overload; more
+// attempts make it worse), nor are permanent failures like DNS, TLS, or a
+// malformed URL.
+func retryableSend(status int, err error) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable:
+		return true
+	case 0:
+		return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+			errors.Is(err, syscall.EPIPE) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+	}
+	return false
+}
+
+// parseRetryAfter reads a Retry-After header given in seconds (the form the
+// API sends). Zero when absent or not in seconds.
+func parseRetryAfter(v string) time.Duration {
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs < 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// attemptEventSend makes one POST of the envelope. status is 0 when no HTTP
+// response was received; retryAfter is the server's Retry-After, if any.
+func (c *Client) attemptEventSend(envJSON []byte) (status int, retryAfter time.Duration, err error) {
+	return c.attemptEventSendCtx(context.Background(), envJSON)
+}
+
+// attemptEventSendCtx is attemptEventSend bounded additionally by parent's
+// deadline (the request timeout still applies).
+func (c *Client) attemptEventSendCtx(parent context.Context, envJSON []byte) (status int, retryAfter time.Duration, err error) {
+	ctx, cancel := context.WithTimeout(parent, time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+eventsEndpoint, bytes.NewReader(envJSON))
 	if err != nil {
-		recordEventSend(envJSON, 0, 0, 1, err)
-		return err
+		return 0, 0, err
 	}
-
 	c.setHeaders(req)
 
-	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		recordEventSend(envJSON, 0, time.Since(start), 1, err)
-		return err
+		return 0, 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		apiErr := fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
-		recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, apiErr)
-		return apiErr
+		return resp.StatusCode, parseRetryAfter(resp.Header.Get("Retry-After")),
+			fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
 	}
-
-	recordEventSend(envJSON, resp.StatusCode, time.Since(start), 1, nil)
-	return nil
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode, 0, nil
 }
 
 // sendRequest performs an HTTP request to the API
 func (c *Client) sendRequest(path string, payload interface{}) *APIResponse {
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to marshal payload: %v", err),
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.config.APIURL+path, bytes.NewReader(jsonData))
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("failed to create request: %v", err),
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return &APIResponse{
-			Success: false,
-			Error:   fmt.Sprintf("request failed: %v", err),
-		}
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	result := &APIResponse{
-		StatusCode: resp.StatusCode,
-		Success:    resp.StatusCode >= 200 && resp.StatusCode < 300,
-	}
-
-	if len(body) > 0 {
-		var data map[string]interface{}
-		if err := json.Unmarshal(body, &data); err == nil {
-			result.Data = data
-		}
-	}
-
-	if !result.Success {
-		result.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	return result
+	return c.jsonRequest("POST", path, payload)
 }
 
 // setHeaders sets common HTTP headers
@@ -441,9 +598,10 @@ func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("User-Agent", fmt.Sprintf("PromptConduit-CLI/%s", c.version))
 }
 
-// SendEnvelopeDirect sends an envelope directly (used by async subprocess)
+// SendEnvelopeDirect sends an envelope directly (used by the detached async
+// subprocess), retrying transient failures; nothing waits on this process.
 func (c *Client) SendEnvelopeDirect(envJSON []byte) error {
-	return c.sendEnvelopeBlocking(envJSON)
+	return c.sendEnvelopeWithRetry(envJSON)
 }
 
 // TestConnection sends a test request to verify API connectivity
@@ -750,16 +908,16 @@ func (c *Client) Get(path string, query map[string]string) *APIResponse {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	url := c.config.APIURL + path
+	reqURL := c.config.APIURL + path
 	if len(query) > 0 {
-		params := make([]string, 0, len(query))
+		params := neturl.Values{}
 		for k, v := range query {
-			params = append(params, k+"="+v)
+			params.Set(k, v)
 		}
-		url += "?" + strings.Join(params, "&")
+		reqURL += "?" + params.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return &APIResponse{
 			Success: false,
@@ -1011,6 +1169,11 @@ func (c *Client) deleteRequest(path string) *APIResponse {
 
 // patchRequest sends a PATCH request with a JSON payload
 func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
+	return c.jsonRequest("PATCH", path, payload)
+}
+
+// jsonRequest sends a request with a JSON payload and parses a JSON reply.
+func (c *Client) jsonRequest(method, path string, payload interface{}) *APIResponse {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to marshal payload: %v", err)}
@@ -1019,7 +1182,7 @@ func (c *Client) patchRequest(path string, payload interface{}) *APIResponse {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.config.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "PATCH", c.config.APIURL+path, bytes.NewReader(jsonData))
+	req, err := http.NewRequestWithContext(ctx, method, c.config.APIURL+path, bytes.NewReader(jsonData))
 	if err != nil {
 		return &APIResponse{Success: false, Error: fmt.Sprintf("failed to create request: %v", err)}
 	}

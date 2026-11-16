@@ -21,12 +21,12 @@ to what's POSTed to `/v1/events/raw` and stored in the platform bucket.
 
 Well-known slugs: `env` (host/os/os_version/arch/cwd, every event) · `trace`
 (W3C correlation, every event) · `vcs` (normalized provider/repo/branch/PR,
-git repos) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
+git repos; tool-level events reuse a ≤5s per-cwd snapshot, see `vcsctx.go`) · `prompt` (count/shape, UserPromptSubmit) · `cost` (priced
 requests, Stop / cursor stop) · `tools` (normalized tool-call list,
 PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
-Stop/SessionEnd) · `subagent` (Start/Stop join with duration + per-agent
+Stop/SessionEnd / cursor stop+sessionEnd) · `subagent` (Start/Stop join with duration + per-agent
 tokens/USD from the agent transcript, SubagentStart/Stop) · `turn`
-(prompt→Stop wall-clock, Stop/StopFailure) · `permission`
+(prompt→Stop wall-clock, Stop/StopFailure / cursor stop) · `permission`
 (requested/denied + tool name, PermissionRequest/Denied). `prompt` also
 carries `is_interrupt` (turn-open rule computed at the source).
 
@@ -160,11 +160,45 @@ esbuild output is deterministic, so the **Refresh graph bundle** workflow
 (`.github/workflows/refresh-graph.yml`) byte-diffs the rebuilt page and opens a
 PR when it changed — no version bookkeeping needed (unlike the `.vsix` refresh).
 
+## Agent surfaces: `team` and the MCP server (`promptconduit mcp`)
+
+The product is meant to be usable without the dashboard. `promptconduit team`
+(`cmd/team.go`) covers the web team page (spend, savings, budgets, client tags,
+CSV, create/invite/join) with `--json` everywhere. `promptconduit mcp` serves
+the same data plus local cost/sessions as MCP tools and prompts over stdio.
+
+- `internal/mcp/` is a hand-rolled MCP server (JSON-RPC 2.0, newline-delimited;
+  protocol 2025-06-18 with 2025-03-26 / 2024-11-05 fallback). The official Go
+  SDK needs a newer Go than this module's 1.21.
+- **stdout is protocol only.** `mcp` is in `skipUpdateCheckFor`, so it never
+  shows update or telemetry banners. Diagnostics go to stderr (`PROMPTCONDUIT_DEBUG`).
+- Tools (`cmd/mcp_tools.go`) reuse the CLI's code paths (`latestSessionCost`,
+  `loadCostHistory`, `sessions.ReadRecent`, the team client), so the agent and
+  the terminal agree. Every tool sets annotations: writes are not read-only,
+  and `team_remove_budget` is destructive.
+- Registration (`cmd/mcp_register.go`): Claude Code goes through
+  `claude mcp add --scope user`. We never write `~/.claude.json` (Claude Code
+  owns it); we only read it to detect registration. Cursor
+  (`~/.cursor/mcp.json`) and Gemini (`~/.gemini/settings.json`) get a merge of
+  `mcpServers.promptconduit`. `install` registers, and `uninstall` removes.
+  After a CLI upgrade, `reconcileMCP` registers once for tools whose hooks are
+  installed, unless the user opted out (`mcp uninstall` / `install --no-mcp`
+  set `disabled` in `~/.config/promptconduit/mcp.json`).
+
 ## Key Design Decisions
 
 - **Server-side adapters**: The CLI sends raw events; all transformation happens in platform adapters
 - **Config file over env vars**: Prefer `~/.config/promptconduit/config.json` for multi-environment setups
-- **Async sending**: Events are sent asynchronously to avoid blocking the AI tool
+- **Async, batched sending**: the hook appends each envelope to a per-target
+  upload spool (`eventlog.AppendSpool` → `~/.promptconduit/spool-<hash>.jsonl`)
+  and a detached `hook --flush-spool` process ships it to
+  `POST /v1/events/raw/batch` (≤100 events / ~900 KB per request) once it's due
+  (20 events or 5s old) or at Stop/SessionEnd (`internal/client/batch.go`,
+  `internal/eventlog/spool.go`). Entries are removed only after accept/permanent
+  reject; 404/405 falls back to `/v1/events/raw` for 1h (state in
+  `.spool-<hash>.state.json`). Attachments keep the multipart single path;
+  `batch_upload=false` / `PROMPTCONDUIT_BATCH_UPLOAD=0` or a disabled event log
+  restore the legacy per-event detached sender.
 - **Capture is decoupled from sending**: `processHookEvent` always builds the
   envelope and writes it to the local capture log (`eventlog.RecordCapture` →
   `~/.promptconduit/events.jsonl`) *before* deciding whether to send. The single

@@ -40,9 +40,6 @@ func TestDetectWorktree(t *testing.T) {
 	git(t, main, "commit", "-q", "-m", "init")
 
 	// Main checkout: not a worktree.
-	if detectWorktree(main) {
-		t.Errorf("main checkout reported as worktree")
-	}
 	if ctx := ExtractContext(main); ctx == nil || ctx.IsWorktree {
 		t.Errorf("ExtractContext(main).IsWorktree = true, want false")
 	}
@@ -51,9 +48,6 @@ func TestDetectWorktree(t *testing.T) {
 	wt := filepath.Join(root, "wt")
 	git(t, main, "worktree", "add", "-q", "-b", "feat", wt)
 
-	if !detectWorktree(wt) {
-		t.Fatalf("linked worktree not detected")
-	}
 	ctx := ExtractContext(wt)
 	if ctx == nil || !ctx.IsWorktree {
 		t.Fatalf("ExtractContext(wt).IsWorktree = false, want true")

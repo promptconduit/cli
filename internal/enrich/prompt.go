@@ -37,14 +37,21 @@ func (promptEnricher) Enrich(ctx *Context) (any, error) {
 	count := 1
 	isInterrupt := false
 	if ctx.SessionID != "" {
-		st := loadState(ctx.SessionID)
-		st.PromptCount++
-		count = st.PromptCount
-		// A still-open turn (no Stop since the last prompt) means this prompt
-		// interrupted it. Read before opening the new turn.
-		isInterrupt = st.TurnStartedAt != ""
-		st.TurnStartedAt = time.Now().UTC().Format(time.RFC3339)
-		saveState(ctx.SessionID, st)
+		updated := updateState(ctx.SessionID, func(st *sessionState) bool {
+			st.PromptCount++
+			count = st.PromptCount
+			// A still-open turn (no Stop since the last prompt) means this
+			// prompt interrupted it. Read before opening the new turn.
+			isInterrupt = st.TurnStartedAt != ""
+			st.TurnStartedAt = time.Now().UTC().Format(time.RFC3339)
+			return true
+		})
+		if !updated {
+			// Lock busy: report from a read-only view, don't write unlocked.
+			st := loadState(ctx.SessionID)
+			count = st.PromptCount + 1
+			isInterrupt = st.TurnStartedAt != ""
+		}
 	}
 
 	// Attachments are signalled differently per tool; the pasted-content

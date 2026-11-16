@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -118,9 +119,25 @@ func debugEnabled() bool {
 	return debugSet && debugOn
 }
 
+// echo, when set, receives a copy of every log line (the global --debug
+// flag points it at stderr). Never set it from the hook: a hook's stderr
+// belongs to the AI tool that ran it.
+var echo io.Writer
+
+// SetEcho copies each subsequent log line to w (nil turns it off).
+func SetEcho(w io.Writer) {
+	writeMu.Lock()
+	echo = w
+	writeMu.Unlock()
+}
+
 func write(level, format string, args ...interface{}) {
 	writeMu.Lock()
 	defer writeMu.Unlock()
+
+	if echo != nil {
+		_, _ = fmt.Fprintf(echo, "[%s] %s\n", strings.ToLower(level), fmt.Sprintf(format, args...))
+	}
 
 	dir := Dir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

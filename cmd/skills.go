@@ -86,8 +86,9 @@ var skillsSyncCmd = &cobra.Command{
 Each skill becomes a .md file in ~/.claude/commands/ (or --dir).
 After syncing, invoke skills with /skill-name inside Claude Code.
 
-Skills are only synced if they have been approved in the PromptConduit
-dashboard or via the API. Pending skills are not installed.`,
+Only approved skills are synced. Approve one with 'promptconduit skills
+approve <name>', or ask your agent (the skills_approve MCP tool). New
+skills are not installed until you do.`,
 	RunE: runSkillsSync,
 }
 
@@ -153,7 +154,7 @@ func init() {
 func runSkillsList(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// --filter mirrors the web UI tabs and takes precedence over --approved.
@@ -230,7 +231,7 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Auto-detect repo from working directory only when --repo was not explicitly set.
@@ -270,7 +271,7 @@ func runSkillsGenerate(cmd *cobra.Command, args []string) error {
 func runSkillsSync(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Determine the global commands directory (~/.claude/commands/ or --dir override)
@@ -301,7 +302,7 @@ func runSkillsSync(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 		fmt.Println("To get started:")
 		fmt.Println("  1. Run 'promptconduit skills generate' to detect skills from your usage")
-		fmt.Println("  2. Approve skills in the PromptConduit dashboard")
+		fmt.Println("  2. Approve the ones you want: promptconduit skills approve <name>")
 		fmt.Println("  3. Run 'promptconduit skills sync' again")
 		return nil
 	}
@@ -398,7 +399,7 @@ func detectGitRoot(dir string) string {
 func runSkillsPatterns(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return fmt.Errorf("API key not configured. Run: promptconduit config set --api-key=\"your-key\"")
+		return fmt.Errorf("API key not configured. Run: promptconduit login")
 	}
 
 	// Auto-detect repo from working directory only when --repo was not explicitly set.
@@ -495,7 +496,7 @@ func outputSkillsList(data map[string]interface{}) error {
 		fmt.Printf("Showing %d of %.0f skills\n", len(skills), total)
 	}
 
-	fmt.Println("Approve skills in the PromptConduit dashboard, then run 'promptconduit skills sync' to install.")
+	fmt.Println("Approve with 'promptconduit skills approve <name>', then 'promptconduit skills install <name>' (or ask your agent).")
 	return nil
 }
 

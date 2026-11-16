@@ -22,6 +22,7 @@ const (
 	EnvEventLog                  = "PROMPTCONDUIT_EVENT_LOG"                // "0"/"false" disables the local ~/.promptconduit event log
 	EnvEventLogRetentionDays     = "PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS" // days of local hook history to keep; -1 keeps forever
 	EnvLocalOnly                 = "PROMPTCONDUIT_LOCAL_ONLY"               // "1"/"true" forces Free / local-only mode (never send to the cloud)
+	EnvBatchUpload               = "PROMPTCONDUIT_BATCH_UPLOAD"             // "0"/"false" sends each event on its own instead of in batches
 	EnvXDGConfigHome             = "XDG_CONFIG_HOME"
 	ConfigDirName                = "promptconduit" // ~/.config/promptconduit/
 	ConfigFileName               = "config.json"
@@ -36,6 +37,9 @@ type Config struct {
 	// DisableAutoUpdate opts out of the background "check + self-upgrade"
 	// behaviour. Zero value (false) leaves auto-update enabled.
 	DisableAutoUpdate bool `json:"disable_auto_update,omitempty"`
+	// DisableTelemetry opts out of the anonymous daily usage ping (see
+	// internal/telemetry). Zero value (false) leaves it enabled.
+	DisableTelemetry bool `json:"disable_telemetry,omitempty"`
 	// DisableEventLog opts out of the local full-fidelity event log written
 	// to ~/.promptconduit/ (events.ndjson, errors.log, status.json). Zero
 	// value (false) leaves the event log enabled — it's on by default.
@@ -49,6 +53,11 @@ type Config struct {
 	// (DefaultEventLogRetentionDays); a negative value keeps history forever
 	// (never prune). Resolve via RetentionDays(), not this field directly.
 	EventLogRetentionDays int `json:"event_log_retention_days,omitempty"`
+	// BatchUpload controls batched event upload: hooks spool envelopes
+	// locally and a background flusher sends them to /v1/events/raw/batch in
+	// groups. Unset (nil) means enabled; false restores the legacy
+	// one-request-per-event path. Resolve via BatchUploadEnabled().
+	BatchUpload *bool `json:"batch_upload,omitempty"`
 }
 
 // FileConfig represents the config file structure with environment support
@@ -65,9 +74,11 @@ type FileConfig struct {
 	Debug                 bool   `json:"debug,omitempty"`
 	Timeout               int    `json:"timeout_seconds,omitempty"`
 	DisableAutoUpdate     bool   `json:"disable_auto_update,omitempty"`
+	DisableTelemetry      bool   `json:"disable_telemetry,omitempty"`
 	DisableEventLog       bool   `json:"disable_event_log,omitempty"`
 	LocalOnly             bool   `json:"local_only,omitempty"`
 	EventLogRetentionDays int    `json:"event_log_retention_days,omitempty"`
+	BatchUpload           *bool  `json:"batch_upload,omitempty"`
 }
 
 // EventLogEnabled reports whether the local ~/.promptconduit event log should
@@ -75,6 +86,12 @@ type FileConfig struct {
 // config (disable_event_log) or PROMPTCONDUIT_EVENT_LOG=0.
 func (c *Config) EventLogEnabled() bool {
 	return !c.DisableEventLog
+}
+
+// BatchUploadEnabled reports whether events are uploaded in batches (the
+// default) rather than one request per event.
+func (c *Config) BatchUploadEnabled() bool {
+	return c.BatchUpload == nil || *c.BatchUpload
 }
 
 // RetentionDays resolves the effective local hook-history retention window in
@@ -179,6 +196,16 @@ func SaveFileConfig(fc *FileConfig) error {
 	return os.WriteFile(ConfigPath(), data, 0600)
 }
 
+// ActiveEnv returns the stored profile for current_env, or nil when the file
+// uses the legacy flat config. Unlike GetCurrentConfig it is not a copy:
+// callers write per-env settings (api key, api url, debug) through it.
+func (fc *FileConfig) ActiveEnv() *Config {
+	if fc == nil || fc.CurrentEnv == "" || fc.Environments == nil {
+		return nil
+	}
+	return fc.Environments[fc.CurrentEnv]
+}
+
 // GetCurrentConfig returns the active config from the file (based on current_env)
 func (fc *FileConfig) GetCurrentConfig() *Config {
 	if fc == nil {
@@ -189,33 +216,40 @@ func (fc *FileConfig) GetCurrentConfig() *Config {
 	// flags act as GLOBAL DEFAULTS across all environments — that's where
 	// `config set --disable-auto-update/--disable-event-log/--local-only` writes
 	// them (see cmd/config.go), so OR them into the active env's config. A per-env
-	// true still wins. We return a copy so the loaded Environments map isn't
+	// true still wins; `config set` clears per-env copies so the global applies.
+	// We return a copy so the loaded Environments map isn't
 	// mutated (and the global isn't accidentally persisted into one env).
 	if fc.CurrentEnv != "" && fc.Environments != nil {
 		if cfg, ok := fc.Environments[fc.CurrentEnv]; ok && cfg != nil {
 			merged := *cfg
 			merged.DisableAutoUpdate = merged.DisableAutoUpdate || fc.DisableAutoUpdate
+			merged.DisableTelemetry = merged.DisableTelemetry || fc.DisableTelemetry
 			merged.DisableEventLog = merged.DisableEventLog || fc.DisableEventLog
 			merged.LocalOnly = merged.LocalOnly || fc.LocalOnly
 			// Retention is a global default too: use it when the env didn't set one.
 			if merged.EventLogRetentionDays == 0 {
 				merged.EventLogRetentionDays = fc.EventLogRetentionDays
 			}
+			if merged.BatchUpload == nil {
+				merged.BatchUpload = fc.BatchUpload
+			}
 			return &merged
 		}
 	}
 
 	// Fall back to legacy flat config
-	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 {
+	if fc.APIKey != "" || fc.APIURL != "" || fc.DisableAutoUpdate || fc.DisableTelemetry || fc.DisableEventLog || fc.LocalOnly || fc.EventLogRetentionDays != 0 || fc.BatchUpload != nil {
 		return &Config{
 			APIKey:                fc.APIKey,
 			APIURL:                fc.APIURL,
 			Debug:                 fc.Debug,
 			TimeoutSeconds:        fc.Timeout,
 			DisableAutoUpdate:     fc.DisableAutoUpdate,
+			DisableTelemetry:      fc.DisableTelemetry,
 			DisableEventLog:       fc.DisableEventLog,
 			LocalOnly:             fc.LocalOnly,
 			EventLogRetentionDays: fc.EventLogRetentionDays,
+			BatchUpload:           fc.BatchUpload,
 		}
 	}
 
@@ -250,6 +284,9 @@ func LoadConfig() *Config {
 			if fileCfg.DisableAutoUpdate {
 				cfg.DisableAutoUpdate = true
 			}
+			if fileCfg.DisableTelemetry {
+				cfg.DisableTelemetry = true
+			}
 			if fileCfg.DisableEventLog {
 				cfg.DisableEventLog = true
 			}
@@ -259,6 +296,7 @@ func LoadConfig() *Config {
 			if fileCfg.EventLogRetentionDays != 0 {
 				cfg.EventLogRetentionDays = fileCfg.EventLogRetentionDays
 			}
+			cfg.BatchUpload = fileCfg.BatchUpload
 		}
 	}
 
@@ -278,6 +316,17 @@ func LoadConfig() *Config {
 	// anything else (or unset) leaves whatever the file config decided.
 	if v := os.Getenv(EnvLocalOnly); v == "1" || v == "true" || v == "yes" {
 		cfg.LocalOnly = true
+	}
+
+	// PROMPTCONDUIT_BATCH_UPLOAD=0/false/no forces the per-event upload path,
+	// 1/true/yes forces batching; anything else leaves the file config.
+	switch os.Getenv(EnvBatchUpload) {
+	case "0", "false", "no":
+		off := false
+		cfg.BatchUpload = &off
+	case "1", "true", "yes":
+		on := true
+		cfg.BatchUpload = &on
 	}
 
 	// PROMPTCONDUIT_EVENT_LOG_RETENTION_DAYS overrides the local hook-history

@@ -30,6 +30,13 @@ type SubagentEnrichment struct {
 	Model    string       `json:"model,omitempty"`
 	Tokens   *cost.Tokens `json:"tokens,omitempty"`
 	USD      *cost.Cost   `json:"usd,omitempty"`
+	// ModelPriced (stop only, set whenever Requests > 0) is false when at
+	// least one request used a model missing from the rate table: its tokens
+	// are counted but its USD is zero-because-unknown, not free.
+	// UnpricedRequests counts those requests and UnpricedModel names one.
+	ModelPriced      *bool  `json:"model_priced,omitempty"`
+	UnpricedRequests int    `json:"unpriced_requests,omitempty"`
+	UnpricedModel    string `json:"unpriced_model,omitempty"`
 }
 
 type subagentEnricher struct{}
@@ -61,16 +68,24 @@ func subagentStart(ctx *Context, agentID string) *SubagentEnrichment {
 
 	concurrent := 1
 	if ctx.SessionID != "" {
-		st := loadState(ctx.SessionID)
-		if st.Subagents == nil {
-			st.Subagents = map[string]subagentInfo{}
+		updated := updateState(ctx.SessionID, func(st *sessionState) bool {
+			if st.Subagents == nil {
+				st.Subagents = map[string]subagentInfo{}
+			}
+			st.Subagents[agentID] = subagentInfo{
+				Type:      agentType,
+				StartedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			concurrent = len(st.Subagents)
+			return true
+		})
+		if !updated { // lock busy: read-only estimate, no unlocked write
+			st := loadState(ctx.SessionID)
+			concurrent = len(st.Subagents)
+			if _, ok := st.Subagents[agentID]; !ok {
+				concurrent++
+			}
 		}
-		st.Subagents[agentID] = subagentInfo{
-			Type:      agentType,
-			StartedAt: time.Now().UTC().Format(time.RFC3339),
-		}
-		concurrent = len(st.Subagents)
-		saveState(ctx.SessionID, st)
 	}
 
 	return &SubagentEnrichment{
@@ -90,16 +105,27 @@ func subagentStop(ctx *Context, agentID string) *SubagentEnrichment {
 	// whatever the raw payload carries.
 	out.AgentType, _ = ctx.RawEvent["agent_type"].(string)
 	if ctx.SessionID != "" {
-		st := loadState(ctx.SessionID)
-		if info, ok := st.Subagents[agentID]; ok {
+		apply := func(info subagentInfo) {
 			if info.Type != "" {
 				out.AgentType = info.Type
 			}
 			if started, err := time.Parse(time.RFC3339, info.StartedAt); err == nil {
 				out.DurationMs = time.Since(started).Milliseconds()
 			}
+		}
+		updated := updateState(ctx.SessionID, func(st *sessionState) bool {
+			info, ok := st.Subagents[agentID]
+			if !ok {
+				return false
+			}
+			apply(info)
 			delete(st.Subagents, agentID)
-			saveState(ctx.SessionID, st)
+			return true
+		})
+		if !updated { // lock busy: read the join data, leave the entry
+			if info, ok := loadState(ctx.SessionID).Subagents[agentID]; ok {
+				apply(info)
+			}
 		}
 	}
 
@@ -151,10 +177,16 @@ func sumAgentTranscript(path string, out *SubagentEnrichment) {
 		usd.CacheWrite += ev.Cost.CacheWrite
 		usd.Total += ev.Cost.Total
 		modelCost[ev.Model] += ev.Cost.Total
+		if !ev.ModelPriced {
+			out.UnpricedRequests++
+			out.UnpricedModel = ev.Model
+		}
 	}
 	if out.Requests == 0 {
 		return
 	}
+	priced := out.UnpricedRequests == 0
+	out.ModelPriced = &priced
 	best, bestCost := "", -1.0
 	for m, c := range modelCost {
 		if c > bestCost {

@@ -34,7 +34,8 @@ warn() {
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    # stderr, so a failure inside $(...) is still visible to the user
+    echo -e "${RED}[ERROR]${NC} $1" >&2
     exit 1
 }
 
@@ -60,11 +61,22 @@ detect_platform() {
 
 # Get the latest version from GitHub
 get_latest_version() {
-    local version
-    version=$(curl -sS "${GITHUB_API}/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
+    local version url
+    # Follow the github.com/.../releases/latest redirect to .../tag/vX.Y.Z.
+    # Unlike api.github.com this is not rate-limited per IP (60/h), which
+    # breaks installs from shared IPs (CI runners, office NAT).
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)
+    case "$url" in
+        */tag/v*) version="${url##*/tag/v}" ;;
+    esac
+
+    # Fallback: the REST API (rate-limited, but works where redirects are blocked).
+    if [ -z "$version" ]; then
+        version=$(curl -fsS "${GITHUB_API}/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/' || true)
+    fi
 
     if [ -z "$version" ]; then
-        error "Failed to get latest version from GitHub"
+        error "Failed to get latest version from GitHub (set PROMPTCONDUIT_VERSION to install a specific version)"
     fi
 
     echo "$version"
@@ -171,6 +183,20 @@ run_init_wizard() {
     fi
 }
 
+# warn_if_shadowed: typed commands run the first promptconduit on PATH. If that
+# isn't the binary just installed (e.g. an older root-owned copy in another
+# directory), the user keeps running stale code without knowing.
+warn_if_shadowed() {
+    local installed="$1"
+    local resolved
+    resolved=$(command -v "$BINARY_NAME" 2>/dev/null || true)
+    if [ -n "$resolved" ] && ! [ "$resolved" -ef "$installed" ]; then
+        warn "Another ${BINARY_NAME} at ${resolved} comes first on your PATH,"
+        warn "so typed commands will run it instead of the version just installed."
+        warn "Remove it (e.g. sudo rm ${resolved}) or put $(dirname "$installed") earlier on PATH."
+    fi
+}
+
 main() {
     local api_key="${1:-}"
     local version="${PROMPTCONDUIT_VERSION:-}"
@@ -201,6 +227,11 @@ main() {
 
     # Install
     install_binary "$version" "$platform" "$install_dir"
+    local installed_bin="${install_dir}/${BINARY_NAME}"
+    if [[ "$platform" == windows_* ]]; then
+        installed_bin="${installed_bin}.exe" # matches install_binary's name
+    fi
+    warn_if_shadowed "$installed_bin"
 
     # Configure API key if provided
     configure_api_key "$api_key"

@@ -3,7 +3,7 @@ package transcript
 import (
 	"encoding/base64"
 	"fmt"
-	"time"
+	"os"
 )
 
 // AttachmentExtractor defines the interface for tool-specific attachment extraction
@@ -44,16 +44,29 @@ func (e *ClaudeCodeExtractor) ExtractAttachments(nativeEvent map[string]interfac
 	}
 
 	// Get the prompt text from the native event to match against transcript
-	// This is needed because the transcript may not be written yet when UserPromptSubmit fires
 	promptText, _ := nativeEvent["prompt"].(string)
+	if promptText == "" {
+		return nil, "", nil
+	}
 
-	// Use polling to wait for the transcript to contain the current message
-	// This handles the timing issue where the hook fires before transcript is updated
-	attachments, _, err := ExtractLatestAttachmentsWithWait(transcriptPath, promptText, 5000*time.Millisecond)
+	// One look, no waiting. This runs inside UserPromptSubmit, which Claude
+	// Code waits on before sending the prompt to the model, so any wait here
+	// delays every prompt. It used to poll the transcript for up to 5s for the
+	// current message to appear; in practice it almost never matched (text-only
+	// prompts are stored as a string, and the message may not be written yet
+	// when the hook fires), so nearly every prompt paid the full 5s. Nor do we
+	// fall back to "the last user message": when the current prompt isn't there
+	// yet, that is an EARLIER prompt, whose attachments would be sent again.
+	if _, err := os.Stat(transcriptPath); err != nil {
+		return nil, promptText, nil // no transcript yet: nothing to attach
+	}
+	found, attachments, err := extractAttachmentsForPrompt(transcriptPath, promptText)
 	if err != nil {
 		return nil, "", err
 	}
-
+	if !found {
+		return nil, promptText, nil
+	}
 	return attachments, promptText, nil
 }
 

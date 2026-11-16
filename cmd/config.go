@@ -11,13 +11,14 @@ import (
 var configCmd = &cobra.Command{
 	Use:   "config",
 	Short: "Manage PromptConduit configuration",
-	Long: `Manage PromptConduit configuration stored in ~/.promptconduit/config.json.
+	Long: `Manage PromptConduit configuration stored in ~/.config/promptconduit/config.json
+(or $XDG_CONFIG_HOME/promptconduit/config.json when XDG_CONFIG_HOME is set).
 
 This config file is used by hooks when environment variables are not set,
 making it ideal for use with tools like Claude Code that spawn subprocesses.
 
 Quick start:
-  promptconduit config set --api-key=sk_xxx
+  promptconduit login
 
 Priority order: environment variables > config file > defaults`,
 }
@@ -44,6 +45,11 @@ var configShowCmd = &cobra.Command{
 			autoUpdate = "disabled"
 		}
 		cmd.Printf("Auto-update: %s\n", autoUpdate)
+		usagePing := "disabled"
+		if telemetryEnabled(cfg) {
+			usagePing = "enabled (anonymous, daily)"
+		}
+		cmd.Printf("Usage ping:  %s\n", usagePing)
 		eventLog := "enabled"
 		if cfg.DisableEventLog {
 			eventLog = "disabled"
@@ -61,6 +67,11 @@ var configShowCmd = &cobra.Command{
 			mode = "local-only (Free)"
 		}
 		cmd.Printf("Mode:        %s\n", mode)
+		batch := "batched (spooled, sent in groups)"
+		if !cfg.BatchUploadEnabled() {
+			batch = "one request per event"
+		}
+		cmd.Printf("Upload:      %s\n", batch)
 		if cfg.LocalOnly {
 			cmd.Printf("Local-only:  on\n")
 		}
@@ -89,25 +100,41 @@ var (
 	setAPIURL                string
 	setDebug                 bool
 	setDisableAutoUpdate     bool
+	setDisableTelemetry      bool
 	setDisableEventLog       bool
 	setLocalOnly             bool
 	setEventLogRetentionDays int
+	setBatchUpload           bool
 )
+
+// forEachEnv applies fn to every stored environment profile.
+func forEachEnv(fc *client.FileConfig, fn func(*client.Config)) {
+	for _, c := range fc.Environments {
+		if c != nil {
+			fn(c)
+		}
+	}
+}
 
 var configSetCmd = &cobra.Command{
 	Use:   "set",
 	Short: "Set configuration values",
-	Long: `Set configuration values in ~/.promptconduit/config.json.
+	Long: `Set configuration values in ~/.config/promptconduit/config.json
+(or $XDG_CONFIG_HOME/promptconduit/config.json when XDG_CONFIG_HOME is set).
+
+When an environment is active (see "config env use"), --api-key, --api-url and
+--debug-mode apply to that environment's profile. The other flags are global and
+replace any value set inside an individual environment.
 
 Examples:
   # Basic setup (most users)
-  promptconduit config set --api-key=sk_xxx
+  pbpaste | promptconduit config set --api-key-stdin
 
   # With custom API URL
-  promptconduit config set --api-key=sk_xxx --api-url=http://localhost:8787
+  promptconduit config set --api-key-stdin --api-url=http://localhost:8787 < key.txt
 
   # Enable debug mode
-  promptconduit config set --debug
+  promptconduit config set --debug-mode
 
   # Opt out of automatic background upgrades
   promptconduit config set --disable-auto-update=true
@@ -115,7 +142,10 @@ Examples:
   # Re-enable automatic background upgrades
   promptconduit config set --disable-auto-update=false
 
-  # Opt out of the local event log (~/.promptconduit/events.ndjson)
+  # Opt out of the anonymous daily usage ping
+  promptconduit config set --disable-telemetry=true
+
+  # Opt out of the local event log (~/.promptconduit/events.jsonl)
   promptconduit config set --disable-event-log=true
 
   # Free / local-only mode: capture events locally, never send to the cloud
@@ -128,7 +158,10 @@ Examples:
   promptconduit config set --event-log-retention-days=90
 
   # Never prune local hook history
-  promptconduit config set --event-log-retention-days=-1`,
+  promptconduit config set --event-log-retention-days=-1
+
+  # Send each event in its own request instead of batching (default: batched)
+  promptconduit config set --batch-upload=false`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fc, err := client.LoadFileConfig()
 		if err != nil {
@@ -139,39 +172,76 @@ Examples:
 			fc = &client.FileConfig{}
 		}
 
+		// Connection settings (api key, api url, debug) are per-environment:
+		// when an environment profile is active, GetCurrentConfig reads them
+		// from that profile and ignores the top-level fields, so write them
+		// there. The opt-out flags below stay top-level global defaults.
+		conn := &client.Config{APIKey: fc.APIKey, APIURL: fc.APIURL, Debug: fc.Debug}
+		active := fc.ActiveEnv()
+		if active != nil {
+			conn = active
+		}
+
 		// Update values if provided
 		changed := false
 		if setAPIKey != "" {
-			fc.APIKey = setAPIKey
+			conn.APIKey = setAPIKey
 			changed = true
 		}
 		if cmd.Flags().Changed("api-url") {
-			fc.APIURL = setAPIURL
+			conn.APIURL = setAPIURL
 			changed = true
 		}
-		if cmd.Flags().Changed("debug") {
-			fc.Debug = setDebug
+		if cmd.Flags().Changed("debug-mode") {
+			conn.Debug = setDebug
 			changed = true
 		}
+		if active == nil {
+			fc.APIKey, fc.APIURL, fc.Debug = conn.APIKey, conn.APIURL, conn.Debug
+		}
+		// The remaining flags are global defaults. GetCurrentConfig lets a
+		// per-env value win over them (true ORs in, a non-zero retention
+		// overrides), so clear each env's copy when setting the global one:
+		// otherwise --local-only=false would report "saved" and change nothing.
 		if cmd.Flags().Changed("disable-auto-update") {
 			fc.DisableAutoUpdate = setDisableAutoUpdate
+			forEachEnv(fc, func(c *client.Config) { c.DisableAutoUpdate = false })
+			changed = true
+		}
+		if cmd.Flags().Changed("disable-telemetry") {
+			fc.DisableTelemetry = setDisableTelemetry
+			forEachEnv(fc, func(c *client.Config) { c.DisableTelemetry = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("disable-event-log") {
 			fc.DisableEventLog = setDisableEventLog
+			forEachEnv(fc, func(c *client.Config) { c.DisableEventLog = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("local-only") {
 			fc.LocalOnly = setLocalOnly
+			forEachEnv(fc, func(c *client.Config) { c.LocalOnly = false })
 			changed = true
 		}
 		if cmd.Flags().Changed("event-log-retention-days") {
 			fc.EventLogRetentionDays = setEventLogRetentionDays
+			forEachEnv(fc, func(c *client.Config) { c.EventLogRetentionDays = 0 })
+			changed = true
+		}
+		if cmd.Flags().Changed("batch-upload") {
+			v := setBatchUpload
+			fc.BatchUpload = &v
+			forEachEnv(fc, func(c *client.Config) { c.BatchUpload = nil })
 			changed = true
 		}
 
 		if !changed {
-			return fmt.Errorf("no values provided. Use --api-key, --api-url, --debug, --disable-auto-update, --disable-event-log, --local-only, or --event-log-retention-days")
+			if flagDebug {
+				// --debug is the global "debug output for this run" flag;
+				// saving debug mode moved to --debug-mode.
+				return usageError{fmt.Errorf("--debug only prints debug output for this run. To save debug mode, use: promptconduit config set --debug-mode")}
+			}
+			return fmt.Errorf("no values provided. Use --api-key-stdin, --api-key, --api-url, --debug-mode, --disable-auto-update, --disable-telemetry, --disable-event-log, --local-only, --event-log-retention-days, or --batch-upload")
 		}
 
 		if err := client.SaveFileConfig(fc); err != nil {
@@ -179,14 +249,17 @@ Examples:
 		}
 
 		cmd.Println("Configuration saved")
-		if fc.APIKey != "" {
-			cmd.Printf("  API Key:     %s\n", client.MaskAPIKey(fc.APIKey))
+		if active != nil {
+			cmd.Printf("  Environment: %s\n", fc.CurrentEnv)
 		}
-		if fc.APIURL != "" {
-			cmd.Printf("  API URL:     %s\n", fc.APIURL)
+		if conn.APIKey != "" {
+			cmd.Printf("  API Key:     %s\n", client.MaskAPIKey(conn.APIKey))
 		}
-		if fc.Debug {
-			cmd.Printf("  Debug:       %v\n", fc.Debug)
+		if conn.APIURL != "" {
+			cmd.Printf("  API URL:     %s\n", conn.APIURL)
+		}
+		if cmd.Flags().Changed("debug-mode") || conn.Debug {
+			cmd.Printf("  Debug:       %v\n", conn.Debug)
 		}
 		if cmd.Flags().Changed("disable-auto-update") {
 			state := "enabled"
@@ -194,6 +267,13 @@ Examples:
 				state = "disabled"
 			}
 			cmd.Printf("  Auto-update: %s\n", state)
+		}
+		if cmd.Flags().Changed("disable-telemetry") {
+			state := "enabled"
+			if fc.DisableTelemetry {
+				state = "disabled"
+			}
+			cmd.Printf("  Usage ping:  %s\n", state)
 		}
 		if cmd.Flags().Changed("disable-event-log") {
 			state := "enabled"
@@ -216,6 +296,13 @@ Examples:
 				cmd.Printf("  Retention:   %d days of local hook history\n", (&client.Config{EventLogRetentionDays: fc.EventLogRetentionDays}).RetentionDays())
 			}
 		}
+		if cmd.Flags().Changed("batch-upload") {
+			if setBatchUpload {
+				cmd.Printf("  Upload:      batched (spooled, sent in groups)\n")
+			} else {
+				cmd.Printf("  Upload:      one request per event\n")
+			}
+		}
 
 		return nil
 	},
@@ -236,7 +323,7 @@ var configEnvCmd = &cobra.Command{
 	Long: `Manage multiple environment configurations for switching between
 local development, staging, and production.
 
-Most users don't need this - just use 'promptconduit config set --api-key=...'`,
+Most users don't need this - just use 'promptconduit login'`,
 }
 
 var configEnvListCmd = &cobra.Command{
@@ -250,7 +337,7 @@ var configEnvListCmd = &cobra.Command{
 
 		if fc == nil || len(fc.Environments) == 0 {
 			cmd.Println("No environments configured.")
-			cmd.Println("Add one with: promptconduit config env add <name> --api-key=...")
+			cmd.Println("Add one with: promptconduit config env add <name> --api-key-stdin")
 			return nil
 		}
 
@@ -278,14 +365,17 @@ var configEnvAddCmd = &cobra.Command{
 	Long: `Add or update a named environment configuration.
 
 Examples:
-  promptconduit config env add local --api-key=sk_xxx --api-url=http://localhost:8787
-  promptconduit config env add prod --api-key=sk_xxx`,
+  promptconduit config env add local --api-key-stdin --api-url=http://localhost:8787 < key.txt
+  pbpaste | promptconduit config env add prod --api-key-stdin`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		envName := args[0]
+		if flagDebug && !cmd.Flags().Changed("debug-mode") {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "note: --debug only prints debug output for this run; to save debug mode for this environment, add --debug-mode")
+		}
 
 		if envAPIKey == "" {
-			return fmt.Errorf("--api-key is required")
+			return fmt.Errorf("an API key is required: pass --api-key-stdin (recommended) or --api-key")
 		}
 
 		fc, err := client.LoadFileConfig()
@@ -432,13 +522,16 @@ func init() {
 	configCmd.AddCommand(configSetEnvCmd) // Shortcut for env use
 
 	// config set flags
-	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", "API key")
+	configSetCmd.Flags().StringVar(&setAPIKey, "api-key", "", apiKeyFlagHelp)
+	addAPIKeyStdinFlag(configSetCmd, &setAPIKey)
 	configSetCmd.Flags().StringVar(&setAPIURL, "api-url", "", "API URL (default: https://api.promptconduit.dev)")
-	configSetCmd.Flags().BoolVar(&setDebug, "debug", false, "Enable debug mode")
+	configSetCmd.Flags().BoolVar(&setDebug, "debug-mode", false, "Save debug mode: hooks write debug lines to the CLI log")
 	configSetCmd.Flags().BoolVar(&setDisableAutoUpdate, "disable-auto-update", false, "Disable the background self-upgrade check")
+	configSetCmd.Flags().BoolVar(&setDisableTelemetry, "disable-telemetry", false, "Disable the anonymous daily usage ping")
 	configSetCmd.Flags().BoolVar(&setDisableEventLog, "disable-event-log", false, "Disable the local event log written to ~/.promptconduit/")
 	configSetCmd.Flags().BoolVar(&setLocalOnly, "local-only", false, "Free / local-only mode: capture events locally, never send to the cloud")
 	configSetCmd.Flags().IntVar(&setEventLogRetentionDays, "event-log-retention-days", 0, "Days of local hook history to keep (default 30; -1 = keep forever)")
+	configSetCmd.Flags().BoolVar(&setBatchUpload, "batch-upload", true, "Upload events in batches (default true); false sends one request per event")
 
 	// Environment subcommands
 	configEnvCmd.AddCommand(configEnvListCmd)
@@ -447,7 +540,8 @@ func init() {
 	configEnvCmd.AddCommand(configEnvRemoveCmd)
 
 	// config env add flags
-	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", "API key (required)")
+	configEnvAddCmd.Flags().StringVar(&envAPIKey, "api-key", "", apiKeyFlagHelp+" (this or --api-key-stdin is required)")
+	addAPIKeyStdinFlag(configEnvAddCmd, &envAPIKey)
 	configEnvAddCmd.Flags().StringVar(&envAPIURL, "api-url", "", "API URL")
-	configEnvAddCmd.Flags().BoolVar(&envDebug, "debug", false, "Enable debug mode")
+	configEnvAddCmd.Flags().BoolVar(&envDebug, "debug-mode", false, "Save debug mode for this environment")
 }

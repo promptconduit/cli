@@ -119,7 +119,12 @@ func canReplaceSelf() error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(exe)
+	return dirWritable(filepath.Dir(exe))
+}
+
+// dirWritable returns nil when the current user can create files in dir
+// (what replacing a binary there requires).
+func dirWritable(dir string) error {
 	probe, err := os.CreateTemp(dir, ".promptconduit-write-probe-*")
 	if err != nil {
 		return fmt.Errorf("%s is not writable: %w", dir, err)

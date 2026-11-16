@@ -124,7 +124,7 @@ Examples:
 func runSkillsDelete(cmd *cobra.Command, args []string) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 	apiClient := client.NewClient(cfg, Version)
 
@@ -142,7 +142,7 @@ func runSkillsDelete(cmd *cobra.Command, args []string) error {
 		if !stdinIsTerminal() {
 			return fmt.Errorf("refusing to delete %s without --yes (non-interactive stdin)", name)
 		}
-		if !confirm(fmt.Sprintf("Soft-delete skill %s (%s)?", name, id)) {
+		if !confirmDefaultNo(fmt.Sprintf("Soft-delete skill %s (%s)?", name, id)) {
 			cmd.Println("Aborted.")
 			return nil
 		}
@@ -170,7 +170,7 @@ func runSkillsInstall(cmd *cobra.Command, args []string) error {
 
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 
 	apiClient := client.NewClient(cfg, Version)
@@ -248,27 +248,58 @@ var (
 	errAbortLocalChanges = errors.New("local modifications present")
 )
 
+// installOptions says where and how a skill is written. The CLI fills it
+// from flags and may prompt; the MCP tools fill it from their arguments and
+// never prompt, so a drifted file is reported instead of overwritten.
+type installOptions struct {
+	cwd   string // working directory for scope detection (default os.Getwd)
+	scope string // "", "project" or "global"
+	force bool   // overwrite local edits without asking
+	// askOverwrite is consulted when !force and the file on disk was edited
+	// since install. nil means refuse.
+	askOverwrite func(name string) bool
+	out          io.Writer // progress line per skill; nil for none
+}
+
 func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspkg.Manifest, skill map[string]interface{}) error {
+	_, err := installSkill(apiClient, manifest, skill, installOptions{
+		scope: skillsInstallScope,
+		force: skillsInstallForce,
+		askOverwrite: func(name string) bool {
+			return confirm(fmt.Sprintf("%s has local modifications — overwrite?", name))
+		},
+		out: cmd.OutOrStderr(),
+	})
+	return err
+}
+
+// installSkill writes one skill's SKILL.md and records it in the manifest.
+// It returns the path written. errAlreadyCurrent and errAbortLocalChanges
+// are the two non-fatal outcomes.
+func installSkill(apiClient *client.Client, manifest *skillspkg.Manifest, skill map[string]interface{}, opts installOptions) (string, error) {
 	id, _ := skill["id"].(string)
 	name, _ := skill["name"].(string)
 	repoName, _ := skill["repo_name"].(string)
 	if id == "" || name == "" {
-		return errors.New("skill record missing id or name")
+		return "", errors.New("skill record missing id or name")
 	}
 	if err := skillspkg.ValidateName(name); err != nil {
-		return err
+		return "", err
 	}
 
-	cwd, _ := os.Getwd()
-	scope, base, err := skillspkg.ResolveScope(repoName, skillsInstallScope, cwd)
+	cwd := opts.cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	scope, base, err := skillspkg.ResolveScope(repoName, opts.scope, cwd)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Fetch the canonical SKILL.md body from the platform.
 	content, err := apiClient.GetSkillCommandFile(id)
 	if err != nil {
-		return fmt.Errorf("download: %w", err)
+		return "", fmt.Errorf("download: %w", err)
 	}
 	platformSHA := skillspkg.HashContent([]byte(content))
 
@@ -276,26 +307,27 @@ func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspk
 
 	// Idempotency check: if we already track this skill at the same sha,
 	// the file on disk almost certainly hasn't drifted — fast no-op.
-	if existing := manifest.Find(name); existing != nil {
-		if existing.PlatformSHA256 == platformSHA && fileExistsAtSha(target, platformSHA) {
-			return errAlreadyCurrent
-		}
-		// Drifted. Refuse unless --force.
-		if !skillsInstallForce && fileExists(target) {
-			diskSHA, _ := skillspkg.HashFile(target)
-			if diskSHA != "" && diskSHA != existing.PlatformSHA256 {
-				if !confirm(fmt.Sprintf("%s has local modifications — overwrite?", name)) {
-					return errAbortLocalChanges
-				}
+	existing := manifest.Find(name)
+	if existing != nil && existing.PlatformSHA256 == platformSHA && fileExistsAtSha(target, platformSHA) {
+		return target, errAlreadyCurrent
+	}
+	// A file we didn't write (hand-made, or edited since install) is never
+	// replaced silently: refuse unless forced or the caller can ask.
+	if !opts.force && fileExists(target) {
+		diskSHA, _ := skillspkg.HashFile(target)
+		known := diskSHA == platformSHA || (existing != nil && diskSHA == existing.PlatformSHA256)
+		if diskSHA != "" && !known {
+			if opts.askOverwrite == nil || !opts.askOverwrite(name) {
+				return target, errAbortLocalChanges
 			}
 		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return fmt.Errorf("create skill dir: %w", err)
+		return "", fmt.Errorf("create skill dir: %w", err)
 	}
 	if err := writeAtomic(target, []byte(content)); err != nil {
-		return fmt.Errorf("write SKILL.md: %w", err)
+		return "", fmt.Errorf("write SKILL.md: %w", err)
 	}
 
 	manifest.Add(skillspkg.Entry{
@@ -309,8 +341,10 @@ func installOne(cmd *cobra.Command, apiClient *client.Client, manifest *skillspk
 		},
 	})
 
-	cmd.Printf("  [OK]   %s → %s\n", name, target)
-	return nil
+	if opts.out != nil {
+		_, _ = fmt.Fprintf(opts.out, "  [OK]   %s → %s\n", name, target)
+	}
+	return target, nil
 }
 
 func runSkillsUninstall(cmd *cobra.Command, args []string) error {
@@ -398,7 +432,7 @@ func uninstallOne(cmd *cobra.Command, manifest *skillspkg.Manifest, name string)
 func runApproveOrReject(identifier string, approve bool) error {
 	cfg := client.LoadConfig()
 	if !cfg.IsConfigured() {
-		return errors.New(`API key not configured. Run: promptconduit config set --api-key="your-key"`)
+		return errors.New(`API key not configured. Run: promptconduit login`)
 	}
 	apiClient := client.NewClient(cfg, Version)
 	skill, err := resolveSkill(apiClient, identifier)
@@ -584,30 +618,37 @@ func removeEmptyDir(dir string) error {
 // input) it returns false so the install/uninstall is treated as
 // "needs --force" rather than silently overwriting.
 func confirm(prompt string) bool {
+	return ask(prompt, true)
+}
+
+// confirmDefaultNo is confirm for destructive actions: Enter means no.
+func confirmDefaultNo(prompt string) bool {
+	return ask(prompt, false)
+}
+
+func ask(prompt string, defaultYes bool) bool {
 	if !stdinIsTerminal() {
 		return false
 	}
-	fmt.Printf("%s [Y/n] ", prompt)
+	choices := "[y/N]"
+	if defaultYes {
+		choices = "[Y/n]"
+	}
+	// The question goes to stderr so stdout stays clean when piped.
+	fmt.Fprintf(os.Stderr, "%s %s ", prompt, choices)
 	reader := bufio.NewReader(os.Stdin)
 	line, err := reader.ReadString('\n')
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return false
-		}
+	if err != nil && !errors.Is(err, io.EOF) {
 		return false
 	}
 	answer := strings.TrimSpace(strings.ToLower(line))
-	return answer == "" || answer == "y" || answer == "yes"
+	if answer == "" {
+		return defaultYes && err == nil
+	}
+	return answer == "y" || answer == "yes"
 }
 
-// stdinIsTerminal reports whether stdin is a character device (e.g. a tty).
-// Stdlib-only check that avoids dragging in golang.org/x/term and its
-// Go-toolchain floor. Declared as a var so tests can override the result
-// without trying to fake a real terminal handle.
-var stdinIsTerminal = func() bool {
-	fi, err := os.Stdin.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
-}
+// stdinIsTerminal reports whether we may prompt: stdin is a terminal and
+// --no-input is not set (see canPrompt). Declared as a var so tests can
+// override the result without trying to fake a real terminal handle.
+var stdinIsTerminal = canPrompt

@@ -60,7 +60,7 @@ func TestShouldSend(t *testing.T) {
 func withIsolatedConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	keys := []string{EnvXDGConfigHome, EnvAPIKey, EnvAPIURL, EnvLocalOnly, EnvEventLog, EnvAutoUpdate, EnvDebug, EnvTimeout}
+	keys := []string{EnvXDGConfigHome, EnvAPIKey, EnvAPIURL, EnvLocalOnly, EnvEventLog, EnvAutoUpdate, EnvDebug, EnvTimeout, EnvBatchUpload}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
 		saved[k] = os.Getenv(k)
