@@ -514,7 +514,7 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Anthropic API request failed: %w", err)
+		return "", fmt.Errorf("anthropic API request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -524,7 +524,7 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 	}
 
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("Anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
+		return "", fmt.Errorf("anthropic API HTTP %d: %s", resp.StatusCode, string(respBody[:min(200, len(respBody))]))
 	}
 	var result struct {
 		Content []struct {
@@ -540,14 +540,14 @@ func doAnthropicRequest(apiKey string, body interface{}) (string, error) {
 		return "", fmt.Errorf("failed to parse Anthropic response: %w", err)
 	}
 	if result.Error != nil {
-		return "", fmt.Errorf("Anthropic API error (%s): %s", result.Error.Type, result.Error.Message)
+		return "", fmt.Errorf("anthropic API error (%s): %s", result.Error.Type, result.Error.Message)
 	}
 	for _, c := range result.Content {
 		if c.Type == "text" {
 			return c.Text, nil
 		}
 	}
-	return "", fmt.Errorf("Anthropic API returned no text content")
+	return "", fmt.Errorf("anthropic API returned no text content")
 }
 
 // callViaOpenAI calls the OpenAI Chat Completions API.

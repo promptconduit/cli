@@ -33,7 +33,7 @@ type Server struct {
 // New builds a Server and starts the tail (bound to ctx).
 func New(ctx context.Context, opts Options) (*Server, error) {
 	if opts.Addr == "" {
-		return nil, errors.New("Addr is required")
+		return nil, errors.New("addr is required")
 	}
 	hub := NewHub(ctx, opts.EventsPath, opts.Backfill)
 

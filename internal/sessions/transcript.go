@@ -62,7 +62,7 @@ func launchCwdFromTranscript(path string) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), launchDirMaxLineBytes)
