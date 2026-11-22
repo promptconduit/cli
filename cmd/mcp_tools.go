@@ -15,6 +15,7 @@ import (
 	"github.com/promptconduit/cli/internal/eventlog"
 	"github.com/promptconduit/cli/internal/mcp"
 	"github.com/promptconduit/cli/internal/sessions"
+	"github.com/promptconduit/cli/internal/transcriptcheck"
 )
 
 // The MCP tools reuse the same code paths as `promptconduit cost`,
@@ -150,7 +151,7 @@ func mcpTools() []*mcp.Tool {
 		{
 			Name:        "setup_status",
 			Title:       "PromptConduit setup status",
-			Description: "Which AI tools have PromptConduit hooks and the MCP server installed, whether you are signed in, and whether events sync or stay local.",
+			Description: "Which AI tools have PromptConduit hooks and the MCP server installed, whether you are signed in, whether events sync or stay local, and warnings about Claude Code sessions that save no transcript (so their cost is missing).",
 			InputSchema: objectSchema(schemaProps{}),
 			Annotations: readOnly("Setup status"),
 			Handler:     toolSetupStatus,
@@ -444,6 +445,21 @@ func toolSetupStatus(_ context.Context, raw json.RawMessage) (interface{}, error
 	}
 	if !cfg.IsConfigured() {
 		out["next_step"] = "Run `promptconduit login` to use the team tools."
+	}
+	if missing := transcriptcheck.List(client.ConfigDir(), time.Now()); len(missing) > 0 {
+		list := make([]interface{}, len(missing))
+		warnings := make([]string, len(missing))
+		for i, e := range missing {
+			list[i] = map[string]interface{}{
+				"session_id":      e.SessionID,
+				"cwd":             e.Cwd,
+				"transcript_path": e.TranscriptPath,
+				"first_seen":      e.FirstSeen.Format(time.RFC3339),
+			}
+			warnings[i] = e.Message()
+		}
+		out["sessions_without_transcript"] = list
+		out["warnings"] = warnings
 	}
 	return out, nil
 }
