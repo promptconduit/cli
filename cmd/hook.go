@@ -21,6 +21,7 @@ import (
 	"github.com/promptconduit/cli/internal/logger"
 	"github.com/promptconduit/cli/internal/sync"
 	"github.com/promptconduit/cli/internal/transcript"
+	"github.com/promptconduit/cli/internal/transcriptcheck"
 	"github.com/spf13/cobra"
 )
 
@@ -151,6 +152,14 @@ func processHookEvent() error {
 	// Write to local events file for macOS app
 	writeLocalEvent(hookEvent, cwd, sessionID)
 
+	// Claude Code saves no transcript in an inherited child session, which
+	// silently zeroes that session's cost and sync. Record it on Stop (in both
+	// local-only and cloud mode) so status and setup_status can warn about it.
+	transcriptPath, _ := nativeEvent["transcript_path"].(string)
+	if tool == "claude-code" && hookEvent == "Stop" {
+		checkTranscript(client.ConfigDir(), sessionID, transcriptPath, cwd, time.Now())
+	}
+
 	// Trigger auto-sync on SessionEnd or Stop events
 	// SessionEnd: Fires when user explicitly ends session (rare - users often just close terminal)
 	// Stop: Fires after each Claude response - gives us incremental sync opportunities
@@ -166,7 +175,6 @@ func processHookEvent() error {
 
 	// Compute the enrichments map — every slug is best-effort and isolated,
 	// so a failing enricher can never block the hook or drop the event.
-	transcriptPath, _ := nativeEvent["transcript_path"].(string)
 	enrichments := enrich.Run(&enrich.Context{
 		Tool:           tool,
 		HookEvent:      hookEvent,
@@ -534,6 +542,15 @@ func debugLog(format string, args ...interface{}) {
 	}
 }
 
+// checkTranscript records (or clears) a Claude Code session whose transcript
+// file is missing at Stop. The first time a session is recorded it is logged
+// at error level, so it shows up in `promptconduit logs` without debug mode.
+func checkTranscript(baseDir, sessionID, transcriptPath, cwd string, now time.Time) {
+	if _, first := transcriptcheck.Observe(baseDir, sessionID, transcriptPath, cwd, now); first {
+		logger.Error("%s (transcript_path=%q)", transcriptcheck.Message(sessionID), transcriptPath)
+	}
+}
+
 // triggerAutoSync triggers automatic transcript sync after SessionEnd or Stop events
 // Spawns a subprocess immediately to avoid being killed when the main process exits
 // Uses hash-based deduplication so frequent triggers are efficient (only syncs if file changed)
@@ -550,6 +567,7 @@ func triggerAutoSync(sessionID string) {
 	// Find transcript file for this session (fast operation, do synchronously)
 	transcriptPath, err := sync.FindTranscriptBySessionID(sessionID)
 	if err != nil {
+		// Missing transcripts are recorded and logged by checkTranscript.
 		logger.Debug("Auto-sync: could not find transcript for session %s: %v", sessionID, err)
 		return
 	}

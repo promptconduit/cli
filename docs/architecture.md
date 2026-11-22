@@ -27,8 +27,21 @@ PostToolUse/Failure/Batch) · `diff` (working-tree shortstat vs HEAD,
 Stop/SessionEnd / cursor stop+sessionEnd) · `subagent` (Start/Stop join with duration + per-agent
 tokens/USD from the agent transcript, SubagentStart/Stop) · `turn`
 (prompt→Stop wall-clock, Stop/StopFailure / cursor stop) · `permission`
-(requested/denied + tool name, PermissionRequest/Denied). `prompt` also
+(requested/denied + tool name, PermissionRequest/Denied) · `transcript`
+(`{saved:false, path, warning}`, Claude Code Stop, present ONLY when the
+transcript file is missing). `prompt` also
 carries `is_interrupt` (turn-open rule computed at the source).
+
+**Sessions without a transcript.** Claude Code saves no transcript when a
+session inherits `CLAUDE_CODE_CHILD_SESSION` ("Transcript saving is off").
+Hooks still fire, but cost, cost history and sync read the transcript, so
+that session's spend would go missing silently. On every Claude Code Stop the
+hook checks `transcript_path` (`internal/transcriptcheck`): a missing file is
+recorded under `~/.config/promptconduit/transcript-missing/<session>.json`
+(cleared if the file appears, pruned after 7 days), logged once at error
+level, and carried on the event as the `transcript` slug. `promptconduit
+status` (and `status --json`) and the `setup_status` MCP tool then warn and
+name the fix: restart with `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`.
 
 **Adding an enrichment** = one new file in `internal/enrich/` implementing
 `Enricher` (Slug/Applies/Enrich) plus `Register()` in its `init()`. Rules:

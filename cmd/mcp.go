@@ -226,7 +226,7 @@ func buildMCPServer() *mcp.Server {
 
 const mcpInstructions = `PromptConduit measures what AI coding costs: per session, per day, and for a whole team by member, repo, client, model and pull request. Use these tools whenever the user asks about AI or token cost, spend, budgets, or which sessions or repos are expensive.
 
-- Local tools need no account and read only this machine: session_cost (the current session), cost_history (daily totals), recent_sessions (resumable sessions), setup_status (what is installed and signed in).
+- Local tools need no account and read only this machine: session_cost (the current session), cost_history (daily totals), recent_sessions (resumable sessions), setup_status (what is installed and signed in, plus warnings such as Claude Code sessions saving no transcript, whose cost is then missing).
 - team_* tools cover the paid team product. If one fails with "not signed in", tell the user to run ` + "`promptconduit login`" + `. If they aren't on a team, team_create starts one (free for up to 3 people).
 - If the user belongs to several teams, pass org (id, slug or name); the error lists the choices.
 - All amounts are USD. Periods are 7d, 30d or 90d.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptconduit/cli/internal/client"
 	"github.com/promptconduit/cli/internal/eventlog"
+	"github.com/promptconduit/cli/internal/transcriptcheck"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,9 @@ type statusReport struct {
 	EventLog         eventLogReport      `json:"event_log"`
 	Tools            []toolInstallStatus `json:"tools"`
 	MCP              mcpStatusReport     `json:"mcp"`
+	// SessionsWithoutTranscript lists recent Claude Code sessions that saved
+	// no transcript, so their cost is missing from every cost readout.
+	SessionsWithoutTranscript []transcriptcheck.Entry `json:"sessions_without_transcript,omitempty"`
 	// Ready is true when at least one tool has hooks installed.
 	Ready bool `json:"ready"`
 }
@@ -110,6 +114,8 @@ func buildStatusReport() statusReport {
 		},
 		Tools: inspectToolInstalls(home),
 		MCP:   buildMCPStatus(home, loadMCPState()),
+
+		SessionsWithoutTranscript: transcriptcheck.List(client.ConfigDir(), time.Now()),
 	}
 	if cfg.ShouldSend() {
 		r.Mode = "cloud"
@@ -177,6 +183,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 	// Local event log health (sent/failed/dropped counters)
 	printEventLogStatus(cfg)
+	printMissingTranscripts(os.Stdout, transcriptcheck.List(client.ConfigDir(), time.Now()))
 
 	// Check tool installations
 	fmt.Println("Tool Installations:")
@@ -484,4 +491,22 @@ func containsPromptConduitString(v interface{}) bool {
 		}
 	}
 	return false
+}
+
+// printMissingTranscripts warns about recent Claude Code sessions that saved
+// no transcript (an inherited CLAUDE_CODE_CHILD_SESSION turns saving off), so
+// their cost is missing from session_cost, cost history and team spend.
+func printMissingTranscripts(w io.Writer, entries []transcriptcheck.Entry) {
+	if len(entries) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Warning: %d Claude Code session(s) are not saving a transcript, so their cost is missing:\n", len(entries))
+	for _, e := range entries {
+		where := ""
+		if e.Cwd != "" {
+			where = " in " + e.Cwd
+		}
+		_, _ = fmt.Fprintf(w, "  %s%s (since %s)\n", e.SessionID, where, localTime(e.FirstSeen.Format(time.RFC3339)))
+	}
+	_, _ = fmt.Fprintf(w, "  Fix: %s.\n\n", transcriptcheck.Fix)
 }
