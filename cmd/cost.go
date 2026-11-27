@@ -17,9 +17,12 @@ import (
 )
 
 var (
-	costCwd  string
-	costJSON bool
-	costDays int
+	costCwd     string
+	costJSON    bool
+	costDays    int
+	costSession string
+	costFrom    string
+	costTo      string
 )
 
 var costCmd = &cobra.Command{
@@ -47,17 +50,23 @@ Cost tracking is part of the standard setup: 'promptconduit install cursor'
 wires the hooks that capture Cursor's exact token usage, and Claude Code cost
 comes from its local transcripts automatically. Models not in the rate table are
 reported with exact tokens but flagged unpriced rather than guessed.`,
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostSession, // bare 'promptconduit cost' shows the current session
+	SilenceUsage: true,
+	// Errors are printed (main exits silently), so a bad --session or window
+	// says why instead of just exiting 1.
+	RunE: runCostSession, // bare 'promptconduit cost' shows the current session
 }
 
 var costSessionCmd = &cobra.Command{
-	Use:           "session",
-	Short:         "Print the current session's cost summary",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	RunE:          runCostSession,
+	Use:   "session",
+	Short: "Print the current session's cost summary",
+	Long: `Print a session's cost summary.
+
+By default it prices the newest session in the workspace (--cwd, or the
+current directory). With --session <id> it prices that Claude Code session
+wherever its transcript lives, subagents included, and --from/--to (RFC3339)
+keep only the requests stamped inside that window, both ends inclusive.`,
+	SilenceUsage: true,
+	RunE:         runCostSession,
 }
 
 var costHistoryCmd = &cobra.Command{
@@ -98,6 +107,9 @@ func init() {
 	for _, c := range []*cobra.Command{costCmd, costSessionCmd} {
 		c.Flags().StringVar(&costCwd, "cwd", "", "workspace directory to scope to (default: current directory)")
 		c.Flags().BoolVar(&costJSON, "json", false, "emit JSON instead of a human-readable summary")
+		c.Flags().StringVar(&costSession, "session", "", "price this Claude Code session id instead of the newest one")
+		c.Flags().StringVar(&costFrom, "from", "", "with --session: only requests at or after this RFC3339 time")
+		c.Flags().StringVar(&costTo, "to", "", "with --session: only requests at or before this RFC3339 time")
 	}
 
 	costHistoryCmd.Flags().IntVar(&costDays, "days", 7, "number of days to include")
@@ -220,10 +232,84 @@ func sessionCostIn(cwd string, all bool) (summary cost.SessionSummary, ok bool, 
 	return summary, ok, nil
 }
 
-func runCostSession(cmd *cobra.Command, args []string) error {
-	summary, ok, err := latestSessionCost(resolveCwd())
+// parseWindowBound parses an optional --from/--to value.
+func parseWindowBound(flag, v string) (time.Time, error) {
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, v)
 	if err != nil {
-		return err
+		return time.Time{}, fmt.Errorf("--%s %q is not an RFC3339 time (e.g. 2026-11-26T15:16:28Z)", flag, v)
+	}
+	return t, nil
+}
+
+// sessionCostByID prices one Claude Code session found by id in any project
+// folder, keeping only requests in [from, to]. found is false when no
+// transcript exists for the id. A session with no request in the window
+// returns a zero summary (requests: 0), not an error.
+func sessionCostByID(sessionID string, from, to time.Time) (summary cost.SessionSummary, found bool, err error) {
+	path, found, err := cost.FindTranscript(sessionID)
+	if err != nil || !found {
+		return summary, found, err
+	}
+	table, err := cost.LoadPriceTable()
+	if err != nil {
+		return summary, true, fmt.Errorf("load pricing table: %w", err)
+	}
+	w := cost.NewWatcher(table, nil, io.Discard, false)
+	w.SetWindow(from, to)
+	w.SeedSession(path)
+	summary, ok := w.SummaryFor(sessionID)
+	if !ok {
+		summary = cost.SessionSummary{
+			V:         cost.SchemaVersion,
+			Kind:      "session_summary",
+			SessionID: sessionID,
+			Tool:      cost.ToolClaudeCode,
+			Source:    cost.SourceExact,
+			Totals:    cost.SessionTotal{Currency: cost.Currency},
+			ByModel:   []cost.ModelTotal{},
+		}
+	}
+	return summary, true, nil
+}
+
+func runCostSession(cmd *cobra.Command, args []string) error {
+	var (
+		summary cost.SessionSummary
+		ok      bool
+		err     error
+	)
+	if costSession != "" {
+		from, err := parseWindowBound("from", costFrom)
+		if err != nil {
+			return err
+		}
+		to, err := parseWindowBound("to", costTo)
+		if err != nil {
+			return err
+		}
+		if !from.IsZero() && !to.IsZero() && to.Before(from) {
+			return fmt.Errorf("--to is before --from")
+		}
+		var found bool
+		summary, found, err = sessionCostByID(costSession, from, to)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return fmt.Errorf("no Claude Code transcript found for session %s under ~/.claude/projects", costSession)
+		}
+		ok = true
+	} else {
+		if costFrom != "" || costTo != "" {
+			return fmt.Errorf("--from/--to need --session")
+		}
+		summary, ok, err = latestSessionCost(resolveCwd())
+		if err != nil {
+			return err
+		}
 	}
 	out := cmd.OutOrStdout()
 	if !ok {

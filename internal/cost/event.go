@@ -344,7 +344,10 @@ type SessionSummary struct {
 	StartedAt string       `json:"started_at"`
 	UpdatedAt string       `json:"updated_at"`
 	Totals    SessionTotal `json:"totals"`
-	ByModel   []ModelTotal `json:"by_model"`
+	// Requests counts the priced API requests (deduped by request id) in the
+	// summary, subagents included.
+	Requests int          `json:"requests"`
+	ByModel  []ModelTotal `json:"by_model"`
 	// Tools is the session's running tool-call total, summed across its cost
 	// events (names only; schema v2+). Empty for Cursor sessions, whose cost
 	// events don't carry tool names — see cursor.go.

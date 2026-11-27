@@ -8,6 +8,8 @@
 //   - Payloads are plain JSON-serializable values.
 //   - Failure is isolated: an error or panic drops that slug only, never the
 //     event and never the hook. Enrichers must be best-effort by construction.
+//     A slug whose absence would be misread (cost) implements failureReporter
+//     to carry an explicit error instead.
 //   - Keep it fast: the hook is latency-sensitive. Anything slow (network,
 //     API lookups) must be cached on disk and refreshed out-of-band — see
 //     vcs.go's detached PR refresh for the pattern.
@@ -17,6 +19,7 @@ package enrich
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -127,8 +130,14 @@ func Run(ctx *Context) map[string]json.RawMessage {
 // runAndMarshal runs one enricher (isolated, bounded) and serializes its
 // payload. nil means the slug is omitted.
 func runAndMarshal(e Enricher, ctx *Context) json.RawMessage {
-	payload, ok := runOne(e, ctx)
-	if !ok || payload == nil {
+	payload, failure := runOne(e, ctx)
+	if failure != "" {
+		payload = nil
+		if fr, ok := e.(failureReporter); ok {
+			payload = fr.failurePayload(ctx, failure)
+		}
+	}
+	if payload == nil {
 		return nil
 	}
 	data, err := json.Marshal(payload)
@@ -139,35 +148,45 @@ func runAndMarshal(e Enricher, ctx *Context) json.RawMessage {
 	return data
 }
 
+// failureReporter is an optional Enricher extension for slugs whose absence
+// would be misread (cost: a missing slug looks like a free turn). When Enrich
+// errors, panics or times out, Run asks it for a payload that names the
+// failure instead of dropping the slug; returning nil still drops it.
+type failureReporter interface {
+	failurePayload(ctx *Context, reason string) any
+}
+
 // runOne executes a single enricher with panic recovery and a timeout. A
 // timed-out enricher's goroutine is abandoned (the hook process is short-lived,
-// so nothing leaks for long).
-func runOne(e Enricher, ctx *Context) (payload any, ok bool) {
+// so nothing leaks for long). failure is non-empty, and payload nil, when the
+// enricher errored, panicked or timed out.
+func runOne(e Enricher, ctx *Context) (payload any, failure string) {
 	type result struct {
 		payload any
-		err     error
+		failure string
 	}
 	ch := make(chan result, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Debug("enrich: %s panicked: %v", e.Slug(), r)
-				ch <- result{nil, nil}
+				ch <- result{nil, fmt.Sprintf("enricher panicked: %v", r)}
 			}
 		}()
 		p, err := e.Enrich(ctx)
-		ch <- result{p, err}
+		if err != nil {
+			logger.Debug("enrich: %s failed: %v", e.Slug(), err)
+			ch <- result{nil, err.Error()}
+			return
+		}
+		ch <- result{p, ""}
 	}()
 
 	select {
 	case r := <-ch:
-		if r.err != nil {
-			logger.Debug("enrich: %s failed: %v", e.Slug(), r.err)
-			return nil, false
-		}
-		return r.payload, true
+		return r.payload, r.failure
 	case <-time.After(enricherTimeout):
 		logger.Debug("enrich: %s timed out after %s", e.Slug(), enricherTimeout)
-		return nil, false
+		return nil, fmt.Sprintf("enricher timed out after %s", enricherTimeout)
 	}
 }
