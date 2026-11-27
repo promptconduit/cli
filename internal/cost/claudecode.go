@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -192,6 +193,7 @@ type ccLine struct {
 // and only for tool_use blocks.
 type ccContentBlock struct {
 	Type string `json:"type"`
+	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
@@ -244,11 +246,24 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 	// Collect the names of any tool_use blocks in this assistant turn. The
 	// transcript is the same source the cost event already parses, so no extra
 	// I/O or join is needed. Names only — inputs are never read.
+	//
+	// Claude Code writes one transcript line per content block, and every line
+	// of a turn shares one requestId, so these are only this line's share of
+	// the turn's tool calls. Each call is keyed (tool_use id, falling back to
+	// line uuid + block index) so callers that dedup lines by requestId can
+	// still count the later lines' calls once each via ToolCounter.
 	var toolNames []string
-	for _, b := range l.Message.Content {
-		if b.Type == "tool_use" {
-			toolNames = append(toolNames, b.Name)
+	var calls []toolCall
+	for i, b := range l.Message.Content {
+		if b.Type != "tool_use" || b.Name == "" {
+			continue
 		}
+		toolNames = append(toolNames, b.Name)
+		key := b.ID
+		if key == "" {
+			key = dedupKey + "/" + l.UUID + "/" + strconv.Itoa(i)
+		}
+		calls = append(calls, toolCall{key: key, name: b.Name})
 	}
 
 	tokens := Tokens{
@@ -274,6 +289,7 @@ func parseClaudeCodeLine(line []byte, table *PriceTable, sessionFallback string)
 		CwdBase:     filepath.Base(l.Cwd),
 		Tools:       tools,
 		Signals:     computeSignals(tokens, c, l.Message.Model, priced, tools.Total),
+		toolCalls:   calls,
 	}
 	return ev, dedupKey, true
 }
