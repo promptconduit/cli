@@ -34,6 +34,7 @@ type Watcher struct {
 
 	mu       sync.Mutex
 	seen     map[string]bool
+	tools    ToolCounter // counts each tool_use once across a request's lines
 	sessions map[string]*sessionState
 }
 
@@ -313,8 +314,14 @@ func (w *Watcher) streamLine(line []byte, sessionFallback string) {
 	if !ok {
 		return
 	}
-	if !w.apply(ev) {
-		return // duplicate
+	fresh, toolsAdded := w.applyLine(ev)
+	if !fresh {
+		// A later line of an already-counted request: no new tokens or
+		// cost, but it may carry more of the request's tool calls.
+		if toolsAdded {
+			w.emitSummary(ev.SessionID)
+		}
+		return
 	}
 	if w.store != nil {
 		_ = w.store.AppendEvent(ev)
@@ -328,12 +335,24 @@ func (w *Watcher) streamLine(line []byte, sessionFallback string) {
 // apply folds an event into the session aggregate. Returns false if the event
 // was already seen (deduped by request id).
 func (w *Watcher) apply(ev CostEvent) bool {
+	fresh, _ := w.applyLine(ev)
+	return fresh
+}
+
+// applyLine is apply that also reports whether a duplicate line added tool
+// calls. Claude Code writes one transcript line per content block, all sharing
+// the request's requestId: tokens and cost count once (first line), while
+// each line's tool_use blocks are counted once each by id.
+func (w *Watcher) applyLine(ev CostEvent) (fresh, toolsAdded bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	if ev.RequestID != "" {
 		if w.seen[ev.RequestID] {
-			return false
+			if st := w.sessions[ev.SessionID]; st != nil {
+				toolsAdded = w.tools.Fold(&st.summary.Tools, ev) > 0
+			}
+			return false, toolsAdded
 		}
 		w.seen[ev.RequestID] = true
 	}
@@ -369,7 +388,11 @@ func (w *Watcher) apply(ev CostEvent) bool {
 	st.cost.CacheWrite += ev.Cost.CacheWrite
 	st.cost.Total += ev.Cost.Total
 
-	st.summary.Tools.add(ev.Tools)
+	if ev.toolCalls != nil {
+		w.tools.Fold(&st.summary.Tools, ev) // transcript line: keyed calls
+	} else {
+		st.summary.Tools.add(ev.Tools) // pre-summarized (Cursor feed)
+	}
 
 	mt := st.byModel[ev.Model]
 	if mt == nil {
@@ -395,7 +418,7 @@ func (w *Watcher) apply(ev CostEvent) bool {
 		}
 	}
 	st.summary.Source = worstSource(st.summary.Source, ev.Source)
-	return true
+	return true, false
 }
 
 // emitAllSessions emits a snapshot summary for every known session.

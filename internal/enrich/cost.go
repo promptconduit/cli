@@ -165,25 +165,47 @@ func priceTranscriptFrom(ctx *Context, table *cost.PriceTable, offset int64) ([]
 		return nil, 0, err
 	}
 
-	var requests []CostRequest
-	seen := map[string]bool{}
+	// Claude Code writes one line per content block, all sharing the request's
+	// requestId. Tokens and cost come from the first line; every line's
+	// tool_use blocks are folded into that request (each once, by id).
+	var order []*CostRequest
+	byKey := map[string]*CostRequest{}
+	var counter cost.ToolCounter
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 32*1024*1024)
 	for scanner.Scan() {
 		lineLen := int64(len(scanner.Bytes())) + 1 // + newline
 		ev, dedupKey, ok := cost.ParseTranscriptLine(scanner.Bytes(), table, ctx.SessionID)
 		offset += lineLen
-		if !ok || seen[dedupKey] {
+		if !ok {
 			continue
 		}
-		seen[dedupKey] = true
-		requests = append(requests, toRequest(ev))
-		if len(requests) > maxRequestsPerEvent {
-			requests = requests[1:] // keep the newest; oldest backfill drops
+		req := byKey[dedupKey]
+		if req == nil {
+			r := toRequest(ev)
+			r.Tools = nil // rebuilt below via the counter
+			req = &r
+			byKey[dedupKey] = req
+			order = append(order, req)
+		}
+		var tools cost.ToolSummary
+		if req.Tools != nil {
+			tools = *req.Tools
+		}
+		if counter.Fold(&tools, ev) > 0 {
+			req.Tools = &tools
+			req.Signals.ToolCalls = tools.Total
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, 0, err
+	}
+	if len(order) > maxRequestsPerEvent {
+		order = order[len(order)-maxRequestsPerEvent:] // keep the newest; oldest backfill drops
+	}
+	requests := make([]CostRequest, len(order))
+	for i, r := range order {
+		requests[i] = *r
 	}
 	return requests, offset, nil
 }

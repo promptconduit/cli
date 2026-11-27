@@ -247,6 +247,44 @@ type CostEvent struct {
 	CwdBase     string      `json:"cwd_base"` // basename only — never the full path or prompt
 	Tools       ToolSummary `json:"tools"`    // names-only tool-call summary (schema v2+)
 	Signals     Signals     `json:"signals"`  // derived cost-reduction signals, numbers only (schema v2+)
+
+	// toolCalls keys each tool call in Tools (never serialized) so ToolCounter
+	// can union calls across the several transcript lines of one request.
+	toolCalls []toolCall
+}
+
+// toolCall is one tool_use block: a dedup key (its tool_use id) and its name.
+// Names only, never inputs.
+type toolCall struct {
+	key  string
+	name string
+}
+
+// ToolCounter counts each tool call once across transcript lines. Claude Code
+// splits one request over several lines (one per content block) that share a
+// requestId. Callers keep the first line for tokens and cost, and pass every
+// line, duplicates included, through Fold so the later lines' tool calls
+// still count. The zero value is ready to use.
+type ToolCounter struct {
+	seen map[string]bool
+}
+
+// Fold adds ev's not-yet-seen tool calls to dst and returns how many it added.
+// Re-reading the same line adds nothing.
+func (c *ToolCounter) Fold(dst *ToolSummary, ev CostEvent) int {
+	added := 0
+	for _, tc := range ev.toolCalls {
+		if c.seen == nil {
+			c.seen = make(map[string]bool)
+		}
+		if c.seen[tc.key] {
+			continue
+		}
+		c.seen[tc.key] = true
+		dst.add(ToolSummary{Total: 1, ByName: map[string]int{tc.name: 1}})
+		added++
+	}
+	return added
 }
 
 // summarizeToolNames builds a ToolSummary from a flat list of tool-call names
