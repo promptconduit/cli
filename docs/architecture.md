@@ -45,7 +45,8 @@ name the fix: restart with `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`.
 
 **Adding an enrichment** = one new file in `internal/enrich/` implementing
 `Enricher` (Slug/Applies/Enrich) plus `Register()` in its `init()`. Rules:
-JSON-serializable payload; failure/panic drops the slug, never the event; keep
+JSON-serializable payload; failure/panic drops the slug, never the event
+(except `cost` on a Claude Code Stop, which carries `{"error": ...}`); keep
 the hook fast — anything slow (network) must be disk-cached and refreshed by a
 detached subprocess (see `vcscache.go` / `cmd/vcsrefresh.go` for the pattern).
 Readers (editor extension, platform) ignore unknown slugs, so a new slug needs
@@ -58,6 +59,23 @@ feed: Claude Code Stop events price the transcript lines appended since the
 last Stop (per-session offset state under `~/.config/promptconduit/enrich/`),
 Cursor stop/afterAgentResponse events price their own payload. The editor
 extension reads it from events.jsonl.
+
+Every request in a Claude Code transcript lands in exactly one event's
+`cost.requests`:
+- The offset advances only over complete, newline-terminated lines, so a line
+  still being written waits for the next read.
+- One event lists every new request, with no cap.
+- Interactive Claude Code flushes the turn's last assistant line a moment after
+  Stop fires, so Stop waits (at most 2s) until the transcript holds the payload's
+  `last_assistant_message`.
+- SessionEnd prices anything that still arrived after the last Stop.
+
+A Stop always carries the slug: an empty `requests` list for a turn with no API
+request, or `error` naming why it couldn't price (no transcript saved, state
+lock busy, pricing failed or timed out). Summing `cost.totals.usd` over a
+session's events (plus SubagentStop `subagent` totals) equals
+`promptconduit cost session --session <id>`, which prices one session by id from
+its transcript in any project folder, optionally limited to `--from/--to`.
 
 ## Auto-update
 

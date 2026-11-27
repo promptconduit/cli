@@ -44,7 +44,7 @@ No dev server and no e2e suite: this is a CLI.
 - Feature branch + PR only (`feat/`, `fix/`, `chore/`, ...); never commit to `main`.
 - Public repo: talk to the service only through its public API-key `/v1` routes. No secrets, no private-service internals, no unreleased plans in code, commits or PR text.
 - All event transformation happens server-side; the CLI wraps raw tool events in an envelope and forwards them. Capture to `~/.promptconduit/events.jsonl` happens before (and regardless of) sending.
-- Envelope v2 and enrichment slug shapes are mirrored in the editor extension and the service: additive-only changes. A failing enrichment drops its slug, never the event; keep the hook fast.
+- Envelope v2 and enrichment slug shapes are mirrored in the editor extension and the service: additive-only changes. A failing enrichment drops its slug, never the event (except `cost` on a Claude Code Stop, which carries `{"error": ...}` so a gap is never silent); keep the hook fast.
 - Prefer `~/.config/promptconduit/config.json` over env vars for config.
 - Embedded artifacts (`internal/extension/embedded/*.vsix`, `internal/graph/ui/graph.html`) are committed; refresh with `make refresh-extension` / `make refresh-graph`. Keep them out of `dist/` (gitignored).
 - `sync` is manual only; hooks are real-time.

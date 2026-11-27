@@ -36,6 +36,12 @@ type Watcher struct {
 	seen     map[string]bool
 	tools    ToolCounter // counts each tool_use once across a request's lines
 	sessions map[string]*sessionState
+
+	// from/to bound which requests count (zero = unbounded). A request is in
+	// or out by its first line's timestamp; excluded remembers the ones left
+	// out so their later lines (which repeat the usage) are skipped too.
+	from, to time.Time
+	excluded map[string]bool
 }
 
 type sessionState struct {
@@ -57,8 +63,37 @@ func NewWatcher(table *PriceTable, store *Store, out io.Writer, emitEvents bool)
 		out:      out,
 		emit:     emitEvents,
 		seen:     make(map[string]bool),
+		excluded: make(map[string]bool),
 		sessions: make(map[string]*sessionState),
 	}
+}
+
+// SetWindow limits the watcher to requests whose timestamp falls in
+// [from, to] (both inclusive; a zero bound is open). A request without a
+// parseable timestamp is excluded once either bound is set, since it can't be
+// placed in the window. Call before seeding.
+func (w *Watcher) SetWindow(from, to time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.from, w.to = from, to
+}
+
+// inWindow reports whether a request stamped ts falls in the window.
+func (w *Watcher) inWindow(ts string) bool {
+	if w.from.IsZero() && w.to.IsZero() {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return false
+	}
+	if !w.from.IsZero() && t.Before(w.from) {
+		return false
+	}
+	if !w.to.IsZero() && t.After(w.to) {
+		return false
+	}
+	return true
 }
 
 // Run watches two kinds of sources: Claude Code transcript directories (parsed
@@ -202,6 +237,15 @@ func (w *Watcher) SeedNewest(dirs []string) {
 		for _, sub := range SubagentTranscripts(newest) {
 			w.seedFile(sub)
 		}
+	}
+}
+
+// SeedSession seeds one session's transcript (and its subagent transcripts)
+// by path, for `cost session --session <id>`.
+func (w *Watcher) SeedSession(path string) {
+	w.seedFile(path)
+	for _, sub := range SubagentTranscripts(path) {
+		w.seedFile(sub)
 	}
 }
 
@@ -349,12 +393,21 @@ func (w *Watcher) applyLine(ev CostEvent) (fresh, toolsAdded bool) {
 
 	if ev.RequestID != "" {
 		if w.seen[ev.RequestID] {
+			if w.excluded[ev.RequestID] {
+				return false, false
+			}
 			if st := w.sessions[ev.SessionID]; st != nil {
 				toolsAdded = w.tools.Fold(&st.summary.Tools, ev) > 0
 			}
 			return false, toolsAdded
 		}
 		w.seen[ev.RequestID] = true
+	}
+	if !w.inWindow(ev.Timestamp) {
+		if ev.RequestID != "" {
+			w.excluded[ev.RequestID] = true
+		}
+		return false, false
 	}
 
 	st := w.sessions[ev.SessionID]
@@ -372,6 +425,7 @@ func (w *Watcher) applyLine(ev CostEvent) (fresh, toolsAdded bool) {
 		w.sessions[ev.SessionID] = st
 	}
 
+	st.summary.Requests++
 	t := &st.summary.Totals
 	t.Input += ev.Tokens.Input
 	t.Output += ev.Tokens.Output
@@ -450,7 +504,24 @@ func (w *Watcher) LatestSummary() (SessionSummary, bool) {
 	if latestID == "" {
 		return SessionSummary{}, false
 	}
-	st := w.sessions[latestID]
+	return w.summaryLocked(latestID), true
+}
+
+// SummaryFor returns one session's summary (by-model breakdown populated and
+// sorted). ok is false when no request of that session was applied, e.g.
+// because none fell in the window.
+func (w *Watcher) SummaryFor(sessionID string) (SessionSummary, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.sessions[sessionID] == nil {
+		return SessionSummary{}, false
+	}
+	return w.summaryLocked(sessionID), true
+}
+
+// summaryLocked snapshots a known session's summary. Caller holds w.mu.
+func (w *Watcher) summaryLocked(id string) SessionSummary {
+	st := w.sessions[id]
 	summary := st.summary
 	summary.ByModel = make([]ModelTotal, 0, len(st.byModel))
 	for _, mt := range st.byModel {
@@ -460,7 +531,7 @@ func (w *Watcher) LatestSummary() (SessionSummary, bool) {
 		return summary.ByModel[i].CostTotal > summary.ByModel[j].CostTotal
 	})
 	summary.Signals = sessionSignals(summary, st.cost)
-	return summary, true
+	return summary
 }
 
 // sessionSignals derives the session-level Signals from accumulated totals (not

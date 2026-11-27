@@ -41,6 +41,26 @@ func ResolveDirs(cwd string, all bool) ([]string, error) {
 	return []string{projectDirForCwd(home, cwd)}, nil
 }
 
+// FindTranscript returns the Claude Code transcript for sessionID, looking in
+// every project folder (a session's folder is named after its cwd, which the
+// caller may not know). ok is false when no folder holds <sessionID>.jsonl.
+func FindTranscript(sessionID string) (string, bool, error) {
+	if sessionID == "" || strings.ContainsAny(sessionID, `/\`) || strings.Contains(sessionID, "..") {
+		return "", false, nil
+	}
+	dirs, err := ResolveDirs("", true)
+	if err != nil {
+		return "", false, err
+	}
+	for _, dir := range dirs {
+		p := filepath.Join(dir, sessionID+".jsonl")
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			return p, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // encodeProjectPath mirrors Claude Code's project-folder naming: every
 // non-alphanumeric character in the absolute cwd becomes a dash. e.g.
 // /Users/x/GitHub/tolken -> -Users-x-GitHub-tolken. Used to scope the watcher

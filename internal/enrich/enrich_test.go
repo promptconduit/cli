@@ -140,13 +140,14 @@ func TestCostEnricher_ClaudeCodeOffsets(t *testing.T) {
 		t.Errorf("total usd = %f, want > 0 for a priced model", ce.Totals.USD)
 	}
 
-	// Second Stop with no new lines: offset consumed, no cost slug.
+	// Second Stop with no new lines: offset consumed, an explicit empty cost
+	// (priced, nothing new), never a missing slug.
 	payload, err = e.Enrich(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if payload != nil {
-		t.Errorf("expected nil on no-new-lines, got %+v", payload)
+	if ce := payload.(*CostEnrichment); len(ce.Requests) != 0 || ce.Error != "" || ce.Totals.USD != 0 {
+		t.Errorf("expected an empty, error-free cost on no-new-lines, got %+v", ce)
 	}
 
 	// A new turn appends a new request; only it is picked up.

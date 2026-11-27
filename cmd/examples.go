@@ -21,7 +21,8 @@ func init() {
   promptconduit cost history --days 30`,
 
 		&costSessionCmd.Example: `  promptconduit cost session
-  promptconduit cost session --cwd ~/code/my-repo --json`,
+  promptconduit cost session --cwd ~/code/my-repo --json
+  promptconduit cost session --session <id> --from 2026-11-26T15:16:28Z --to 2026-11-26T15:48:22Z --json`,
 
 		&costHistoryCmd.Example: `  promptconduit cost history
   promptconduit cost history --days 30 --json`,
