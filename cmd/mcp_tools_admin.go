@@ -115,7 +115,7 @@ func adminMCPTools() []*mcp.Tool {
 			Name:  "my_spend",
 			Title: "Your synced AI spend",
 			Description: "Your own AI coding spend across every machine synced to your account: total, change vs the previous period, " +
-				"cache savings, and breakdowns by model, day and branch. Requires `promptconduit login`; for this machine only use cost_history.",
+				"cache savings, and breakdowns by model, day and branch; the ci block is GitHub Actions spend matched to you. Requires `promptconduit login`; for this machine only use cost_history.",
 			InputSchema: objectSchema(schemaProps{"period": strProp("Time window (default 7d).", "7d", "30d", "90d")}),
 			Annotations: readOnly("Your synced AI spend"),
 			Handler:     toolMySpend,

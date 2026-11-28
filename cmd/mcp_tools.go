@@ -117,7 +117,8 @@ func mcpTools() []*mcp.Tool {
 			Title: "Current session cost",
 			Description: "What the newest AI coding session in a workspace has cost so far: total USD, tokens, and a per-model breakdown, " +
 				"priced locally from Claude Code transcripts (subagents included) and Cursor hook data. Models missing from the rate table are listed in unpriced_models. " +
-				"No account needed; nothing leaves the machine.",
+				"token_usd is the session's token cost; when signed in, ci_usd is the GitHub Actions cost of the session's commits (after `promptconduit ci sync`). " +
+				"No account needed for token cost.",
 			InputSchema: objectSchema(schemaProps{
 				"cwd": strProp("Absolute workspace directory. Default: the directory the agent runs in, falling back to the newest session on the machine."),
 			}),
@@ -170,6 +171,7 @@ func mcpTools() []*mcp.Tool {
 			Name:  "team_spend",
 			Title: "Team AI spend",
 			Description: "Team AI coding spend for a period: totals, cache savings and breakdowns by member, repo, client, model, branch, pull request and day. " +
+				"usd is token spend; ciUsd is GitHub Actions (CI) spend on the same row. " +
 				"Pass breakdown to get just one list. Lists are sorted by spend (days newest first) and capped at limit.",
 			InputSchema: objectSchema(schemaProps{
 				"org":       orgProp,
@@ -179,6 +181,16 @@ func mcpTools() []*mcp.Tool {
 			}),
 			Annotations: readOnly("Team AI spend"),
 			Handler:     toolTeamSpend,
+		},
+		{
+			Name:  "team_ci",
+			Title: "Team CI cost and waste",
+			Description: "GitHub Actions (CI) spend for a team over a period: total, CI waste (re-tests after merge, bursts of agent PRs, push storms, " +
+				"superseded runs, slow jobs) with the $ and fix for each, and the agent sessions that caused it with CI $ next to token $. " +
+				"An estimate from GitHub's rate card. For a repo you haven't synced, run `promptconduit ci audit` instead.",
+			InputSchema: objectSchema(schemaProps{"org": orgProp, "period": periodProp}),
+			Annotations: readOnly("Team CI cost and waste"),
+			Handler:     toolTeamCI,
 		},
 		{
 			Name:  "team_savings",
@@ -309,7 +321,7 @@ func toolSessionCost(_ context.Context, raw json.RawMessage) (interface{}, error
 		return nil, err
 	}
 	if ok {
-		return withUnpriced(map[string]interface{}{"workspace": cwd, "session": summary}, summary), nil
+		return withCI(withUnpriced(map[string]interface{}{"workspace": cwd, "session": summary}, summary), summary), nil
 	}
 	if !explicit {
 		// Not started in a project with sessions: report the newest session
@@ -318,15 +330,48 @@ func toolSessionCost(_ context.Context, raw json.RawMessage) (interface{}, error
 			return nil, err
 		}
 		if ok {
-			return withUnpriced(map[string]interface{}{
+			return withCI(withUnpriced(map[string]interface{}{
 				"workspace": "newest session on this machine",
 				"note":      fmt.Sprintf("No session found for %s; pass cwd to pick a workspace.", cwd),
 				"session":   summary,
-			}, summary), nil
+			}, summary), summary), nil
 		}
 	}
 	return fmt.Sprintf("No AI session cost recorded yet for %s. Claude Code sessions are priced from their transcripts; "+
 		"for Cursor run `promptconduit install cursor`.", cwd), nil
+}
+
+// sessionCI looks up the CI (GitHub Actions) cost attributed to a session.
+// A variable so tests can stub it; best effort: ok is false when signed out,
+// offline, or the service has nothing for the session.
+var sessionCI = func(sessionID string) (map[string]interface{}, bool) {
+	cfg := client.LoadConfig()
+	if !cfg.IsConfigured() || sessionID == "" {
+		return nil, false
+	}
+	resp := client.NewClient(cfg, Version).GetSessionCI(sessionID)
+	if !resp.Success || resp.Data == nil {
+		return nil, false
+	}
+	return resp.Data, true
+}
+
+// withCI puts ci_usd (GitHub Actions jobs matched to this session's commits,
+// from `promptconduit ci sync` or the GitHub webhook) next to token_usd when
+// the user is signed in. Token cost stays the session total.
+func withCI(out map[string]interface{}, s cost.SessionSummary) map[string]interface{} {
+	out["token_usd"] = s.Totals.CostTotal
+	data, ok := sessionCI(s.SessionID)
+	if !ok {
+		return out
+	}
+	ci, _ := data["ciUsd"].(float64)
+	out["ci_usd"] = ci
+	if m, ok := data["ciMinutes"].(float64); ok {
+		out["ci_minutes"] = m
+	}
+	out["total_usd"] = s.Totals.CostTotal + ci
+	return out
 }
 
 // withUnpriced names the session's unpriced models at the top level so an
@@ -518,6 +563,23 @@ func toolTeamSpend(_ context.Context, raw json.RawMessage) (interface{}, error) 
 			return nil, teamAPIError("failed to get team spend", resp)
 		}
 		return withOrg(trimSpend(resp.Data, a.Breakdown, a.Limit), o), nil
+	})
+}
+
+func toolTeamCI(_ context.Context, raw json.RawMessage) (interface{}, error) {
+	var a struct {
+		Org    string `json:"org"`
+		Period string `json:"period"`
+	}
+	if err := decodeArgs(raw, &a); err != nil {
+		return nil, err
+	}
+	period, err := checkPeriod(a.Period)
+	if err != nil {
+		return nil, err
+	}
+	return teamCall(a.Org, func(c *client.Client, o teamOrgInfo) (interface{}, error) {
+		return teamData("failed to get team CI cost", c.GetTeamCI(o.ID, period), o)
 	})
 }
 
