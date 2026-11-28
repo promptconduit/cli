@@ -50,6 +50,10 @@ func fakeTeamAPI(t *testing.T) (*httptest.Server, *[]string) {
 			_, _ = io.WriteString(w, `{"members":[{"user":{"id":"u9","email":"Dev@Example.com"}}]}`)
 		case "/v1/organizations/o1/budgets":
 			_, _ = io.WriteString(w, `{"budgets":[],"canManage":true}`)
+		case "/v1/organizations/o1/ci":
+			_, _ = io.WriteString(w, `{"period":"30d","usd":22.61,"waste":[{"signal":"retest_after_merge","usd":9.04}],"sessions":[]}`)
+		case "/v1/me/ci/sessions/s-1":
+			_, _ = io.WriteString(w, `{"sessionId":"s-1","ciUsd":4.49,"ciJobs":41,"ciMinutes":748}`)
 		default:
 			w.WriteHeader(404)
 			_, _ = io.WriteString(w, `{"detail":"not found"}`)
@@ -98,7 +102,7 @@ func TestMCPToolDefinitions(t *testing.T) {
 	destructive := map[string]bool{"team_remove_budget": true, "team_set_member_role": true,
 		"team_remove_member": true, "team_disconnect_slack": true, "skills_delete": true}
 	tools := buildMCPServer().Tools()
-	if len(tools) != 33 {
+	if len(tools) != 34 {
 		t.Errorf("tool count = %d", len(tools))
 	}
 	for _, tool := range tools {
