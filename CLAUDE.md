@@ -35,7 +35,7 @@ No dev server and no e2e suite: this is a CLI.
 ## Deploy & release
 
 - PRs run `.github/workflows/test.yml` (`make test`, `make build`).
-- Releases are tagged and built by GoReleaser via `release.yml`; manual, never from an agent.
+- Releases are built by GoReleaser via `release.yml` on a `v*` tag push. Per the workspace merge/deploy rule (owner, 2026-11-24), an agent tags a release itself once its PR is merged and green, then checks the GitHub release and `promptconduit upgrade` on this machine.
 - The binary auto-updates from GitHub Releases (opt out with config or `PROMPTCONDUIT_AUTO_UPDATE=0`).
 - `refresh-extension.yml` / `refresh-graph.yml` open PRs that refresh the embedded `.vsix` and graph page.
 
