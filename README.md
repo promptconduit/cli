@@ -253,6 +253,31 @@ promptconduit team tag acme/api --clear
 If you belong to more than one team, pass `--org <id|slug|name>` or set
 `PROMPTCONDUIT_ORG`. Budgets, tags and invites need an owner or admin.
 
+### CI cost audit: what your GitHub Actions minutes cost
+
+Agents push and merge far more often than people, and every push runs CI.
+`ci audit` adds up a repo's GitHub Actions spend from GitHub's rate card,
+flags the waste and matches each run to the agent session whose commit
+triggered it. It runs entirely on your machine with your own GitHub token
+(`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`), reads only Actions
+metadata (runs and jobs: no logs, artifacts or code), and never writes to
+the repo. No account needed.
+
+```bash
+promptconduit ci audit                       # this repo, last 30 days
+promptconduit ci audit acme/api --since 2026-11-01 --until 2026-11-30
+promptconduit ci audit --json -o audit.json  # for an agent or a spreadsheet
+promptconduit ci sync --since 2026-11-01     # signed in: CI $ next to token $ for your team
+```
+
+The report shows the month's total; the waste it found with the $ next to
+each fix (re-tests after merge, repo-wide bursts, per-PR push storms,
+superseded runs a `concurrency` group would cancel, slow-job outliers, spike
+days); the top PRs and workflows; and, from your local event log, CI $ next
+to token $ per agent session. It is an estimate: each job is rounded up to
+the minute like GitHub does, standard runners are free on public repos, and
+your plan's included minutes are not subtracted.
+
 ### MCP server: ask your agent
 
 The CLI includes a [Model Context Protocol](https://modelcontextprotocol.io)
